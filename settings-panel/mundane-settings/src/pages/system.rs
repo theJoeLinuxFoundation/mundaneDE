@@ -2,13 +2,12 @@
 
 use crate::pages::{Page, PageState};
 use crate::theme;
-use crate::widgets::prompt;
-use argentum_settings_core::{
+use mundane_settings_core::{
     os_release::{self, OsRelease},
     system::{self as sys, LogLine},
 };
 use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    Context, InteractiveElement, IntoElement, ParentElement, Render,
     StatefulInteractiveElement, Styled, Window, div, px, rgb,
 };
 
@@ -22,8 +21,6 @@ pub struct SystemPage {
     state: PageState<SystemData>,
     log: Vec<LogLine>,
     upgrading: bool,
-    hostname_pending: bool,
-    hostname_error: Option<String>,
 }
 
 impl SystemPage {
@@ -32,71 +29,9 @@ impl SystemPage {
             state: PageState::Empty,
             log: Vec::new(),
             upgrading: false,
-            hostname_pending: false,
-            hostname_error: None,
         };
         s.spawn_refresh(cx);
         s
-    }
-
-    fn start_hostname_edit(&mut self, cx: &mut Context<Self>) {
-        if self.hostname_pending {
-            return;
-        }
-        let current = match &self.state {
-            PageState::Loaded { data, .. } => data.hostname.clone(),
-            _ => String::new(),
-        };
-        self.hostname_pending = true;
-        self.hostname_error = None;
-        cx.notify();
-        cx.spawn(async move |weak, async_cx| {
-            let new_name = match prompt::text(
-                "Change hostname",
-                "New hostname",
-                &current,
-            )
-            .await
-            {
-                Ok(Some(s)) if !s.is_empty() && s != current => s,
-                Ok(_) => {
-                    weak.update(async_cx, |this, cx| {
-                        this.hostname_pending = false;
-                        cx.notify();
-                    })
-                    .ok();
-                    return;
-                }
-                Err(e) => {
-                    weak.update(async_cx, |this, cx| {
-                        this.hostname_pending = false;
-                        this.hostname_error = Some(e.to_string());
-                        cx.notify();
-                    })
-                    .ok();
-                    return;
-                }
-            };
-            let result = os_release::set_hostname(&new_name).await;
-            weak.update(async_cx, |this, cx| {
-                this.hostname_pending = false;
-                match result {
-                    Ok(()) => {
-                        if let PageState::Loaded { data, .. } = &mut this.state {
-                            data.hostname = new_name;
-                        }
-                        this.hostname_error = None;
-                        this.spawn_refresh(cx);
-                    }
-                    Err(e) => {
-                        this.hostname_error = Some(e.to_string());
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
     }
 
     fn spawn_refresh(&self, cx: &mut Context<Self>) {
@@ -171,17 +106,8 @@ impl Render for SystemPage {
             }))
             .child(if upgrading { "Updating…" } else { "Check for Updates" }.to_string());
 
-        let hostname_pending = self.hostname_pending;
-        let hostname_error = self.hostname_error.clone();
         let body = match &self.state {
-            PageState::Loaded { data, .. } => loaded_view(
-                data,
-                &self.log,
-                upgrade_button,
-                hostname_pending,
-                hostname_error.as_deref(),
-                cx,
-            ),
+            PageState::Loaded { data, .. } => loaded_view(data, &self.log, upgrade_button),
             _ => skeleton(),
         };
         div()
@@ -202,19 +128,10 @@ fn loaded_view(
     d: &SystemData,
     log: &[LogLine],
     upgrade_button: impl IntoElement,
-    hostname_pending: bool,
-    hostname_error: Option<&str>,
-    cx: &mut Context<SystemPage>,
 ) -> gpui::Div {
-    let pretty = d.os.pretty_name.clone().unwrap_or_else(|| "argentumOS".into());
+    let pretty = d.os.pretty_name.clone().unwrap_or_else(|| "mundaneDE".into());
     let version = d.os.version.clone().unwrap_or_default();
-    let hostname_value: SharedString = if hostname_pending {
-        "Updating…".to_string().into()
-    } else {
-        d.hostname.clone().into()
-    };
     let hostname_row = div()
-        .id("hostname-row")
         .flex()
         .flex_row()
         .items_center()
@@ -223,20 +140,9 @@ fn loaded_view(
         .py_3()
         .bg(rgb(theme::SURFACE))
         .rounded(px(10.))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(theme::SIDEBAR)))
-        .on_click(cx.listener(|this, _e, _w, cx| this.start_hostname_edit(cx)))
         .child(div().text_color(rgb(theme::TEXT_MUTED)).child("Hostname"))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_3()
-                .child(div().text_color(rgb(theme::TEXT)).child(hostname_value))
-                .child(div().text_color(rgb(theme::ACCENT)).child("Edit")),
-        );
-    let mut col = div()
+        .child(div().text_color(rgb(theme::TEXT)).child(d.hostname.clone()));
+    div()
         .flex()
         .flex_col()
         .gap_3()
@@ -252,17 +158,9 @@ fn loaded_view(
                 .child(div().text_color(rgb(theme::TEXT)).child(pretty))
                 .child(div().text_color(rgb(theme::TEXT_MUTED)).child(version)),
         )
-        .child(hostname_row);
-    if let Some(err) = hostname_error {
-        col = col.child(
-            div()
-                .px_4()
-                .py_2()
-                .text_color(rgb(theme::TEXT_MUTED))
-                .child(format!("Couldn't update hostname: {err}")),
-        );
-    }
-    col.child(upgrade_button).child(log_view(log))
+        .child(hostname_row)
+        .child(upgrade_button)
+        .child(log_view(log))
 }
 
 fn log_view(log: &[LogLine]) -> gpui::Div {

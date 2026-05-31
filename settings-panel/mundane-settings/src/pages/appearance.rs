@@ -1,10 +1,15 @@
 //! Appearance page. Click a value row to expand a list of options below it —
-//! selecting an item calls gsettings and updates immediately. The single-open
-//! pattern keeps the layout tight; clicking the same row again collapses.
+//! selecting an item updates immediately. The single-open pattern keeps the
+//! layout tight; clicking the same row again collapses.
+//!
+//! GTK theme and icon theme write through gsettings (they affect every GTK app
+//! on the system regardless of compositor). The wallpaper row writes through
+//! to mundaneDE's TOML config so the compositor's hot-reload picks it up and
+//! crossfades.
 
 use crate::pages::{Page, PageState};
 use crate::theme;
-use argentum_settings_core::theme_scan;
+use mundane_settings_core::{compositor as mundane_cfg, theme_scan};
 use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, div, px, rgb,
@@ -49,14 +54,22 @@ impl AppearancePage {
         cx.spawn(async move |weak, async_cx| {
             let themes = theme_scan::list_gtk_themes().await.unwrap_or_default();
             let icons = theme_scan::list_icon_themes().await.unwrap_or_default();
-            let wallpapers = argentum_settings_core::wallpaper_scan::list_wallpapers()
+            let wallpapers = mundane_settings_core::wallpaper_scan::list_wallpapers()
                 .await
                 .unwrap_or_default();
             let gtk_theme = theme_scan::gsettings_get("org.cinnamon.desktop.interface", "gtk-theme").await.unwrap_or_default();
             let icon_theme = theme_scan::gsettings_get("org.cinnamon.desktop.interface", "icon-theme").await.unwrap_or_default();
             let interface_font = theme_scan::gsettings_get("org.cinnamon.desktop.interface", "font-name").await.unwrap_or_default();
             let monospace_font = theme_scan::gsettings_get("org.gnome.desktop.interface", "monospace-font-name").await.unwrap_or_default();
-            let wallpaper_uri = theme_scan::gsettings_get("org.cinnamon.desktop.background", "picture-uri").await.unwrap_or_default();
+            // mundaneDE wallpaper lives in ~/.config/mundane/config.toml as a plain path;
+            // we show it in the same "file://…" form used for the equality check below.
+            let wallpaper_uri = match mundane_cfg::load().await {
+                Ok(file) => file
+                    .wallpaper_path()
+                    .map(|p| format!("file://{p}"))
+                    .unwrap_or_default(),
+                Err(_) => String::new(),
+            };
 
             let data = AppearanceData {
                 gtk_theme, icon_theme, interface_font, monospace_font, wallpaper_uri,
@@ -98,15 +111,30 @@ impl AppearancePage {
     }
 
     fn pick_wallpaper(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        // Optimistic local update first.
         let uri = format!("file://{}", path.display());
-        self.set_gsettings(
-            "wallpaper",
-            "org.cinnamon.desktop.background",
-            "picture-uri",
-            uri,
-            |d, v| d.wallpaper_uri = v,
-            cx,
-        );
+        if let PageState::Loaded { data, .. } = &mut self.state {
+            data.wallpaper_uri = uri;
+        }
+        self.in_flight.insert("wallpaper");
+        self.open = None;
+        cx.notify();
+
+        let path_str = path.to_string_lossy().into_owned();
+        cx.spawn(async move |weak, async_cx| {
+            let _ = mundane_cfg::update(move |f| {
+                let mode = f.wallpaper_mode();
+                f.set_wallpaper(&path_str, &mode);
+            })
+            .await;
+            weak.update(async_cx, |this, cx| {
+                this.in_flight.remove("wallpaper");
+                cx.notify();
+                this.spawn_refresh(cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn set_gsettings(

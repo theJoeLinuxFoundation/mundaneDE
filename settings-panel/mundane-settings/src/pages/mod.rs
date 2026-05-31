@@ -9,6 +9,7 @@ use gpui::{
 use std::time::{Duration, Instant};
 
 pub mod appearance;
+pub mod compositor;
 pub mod datetime;
 pub mod display;
 pub mod network;
@@ -20,19 +21,21 @@ pub mod users;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub enum Page {
-    Appearance = 0,
-    Display = 1,
-    Sound = 2,
-    Network = 3,
-    Users = 4,
-    Software = 5,
-    DateTime = 6,
-    System = 7,
+    Compositor = 0,
+    Appearance = 1,
+    Display = 2,
+    Sound = 3,
+    Network = 4,
+    Users = 5,
+    Software = 6,
+    DateTime = 7,
+    System = 8,
 }
 
 impl Page {
     pub fn label(self) -> &'static str {
         match self {
+            Page::Compositor => "Compositor",
             Page::Appearance => "Appearance",
             Page::Display => "Display",
             Page::Sound => "Sound",
@@ -46,6 +49,7 @@ impl Page {
 
     pub fn icon(self) -> &'static str {
         match self {
+            Page::Compositor => "✺",
             Page::Appearance => "◐",
             Page::Display => "▭",
             Page::Sound => "♪",
@@ -59,6 +63,7 @@ impl Page {
 
     pub fn ttl(self) -> Duration {
         match self {
+            Page::Compositor => Duration::from_secs(60),
             Page::Appearance => Duration::from_secs(5 * 60),
             Page::Display => Duration::from_secs(10),
             Page::Sound => Duration::from_secs(15),
@@ -108,6 +113,7 @@ impl<T> PageState<T> {
 /// Host view: holds every page entity, toggles which is visible.
 pub struct PagesView {
     active: Page,
+    compositor: Entity<compositor::CompositorPage>,
     appearance: Entity<appearance::AppearancePage>,
     display: Entity<display::DisplayPage>,
     sound: Entity<sound::SoundPage>,
@@ -122,6 +128,7 @@ impl PagesView {
     pub fn new(initial: Page, cx: &mut Context<Self>) -> Self {
         Self {
             active: initial,
+            compositor: cx.new(|cx| compositor::CompositorPage::new(cx)),
             appearance: cx.new(|cx| appearance::AppearancePage::new(cx)),
             display: cx.new(|cx| display::DisplayPage::new(cx)),
             sound: cx.new(|cx| sound::SoundPage::new(cx)),
@@ -145,6 +152,7 @@ impl PagesView {
 impl Render for PagesView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let content: AnyElement = match self.active {
+            Page::Compositor => self.compositor.clone().into_any_element(),
             Page::Appearance => self.appearance.clone().into_any_element(),
             Page::Display => self.display.clone().into_any_element(),
             Page::Sound => self.sound.clone().into_any_element(),

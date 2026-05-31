@@ -3,6 +3,7 @@ mod backend;
 mod config;
 mod cursor;
 mod focus;
+mod hot_reload;
 mod render;
 mod shell;
 mod state;

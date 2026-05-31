@@ -116,14 +116,46 @@ impl WindowManager {
             .collect()
     }
 
-    /// Cascade new windows around the centre so multiple opens don't fully overlap.
+    /// Place a new window. First tries the output centre; if a candidate point would
+    /// land inside an existing mapped window's rectangle, walks a 32 px spiral outward
+    /// until it finds a free spot. Falls back to the legacy `32 × (count % 6)` cascade
+    /// if every candidate in the spiral is occupied.
     pub fn initial_placement(
         &self,
         size: Size<i32, Logical>,
         output: Size<i32, Logical>,
+        space: &Space<Window>,
     ) -> Point<i32, Logical> {
         let base_x = (output.w - size.w).max(0) / 2;
         let base_y = (output.h - size.h).max(0) / 2;
+        let occupied: Vec<Rectangle<i32, Logical>> = self
+            .mapped
+            .iter()
+            .filter_map(|m| space.element_geometry(&m.window))
+            .collect();
+
+        let try_point = |x: i32, y: i32| {
+            // Pre-clamp: candidate must fit on the output. If the window's wider than
+            // the output, fall back to the top-left so it at least starts visible.
+            if x < 0 || y < 0 || x + size.w > output.w || y + size.h > output.h {
+                return None;
+            }
+            let cand = Rectangle::new(Point::from((x, y)), size);
+            let collides = occupied.iter().any(|r| rects_overlap(&cand, r));
+            if collides { None } else { Some(Point::from((x, y))) }
+        };
+
+        // Centre first; then a 4-ring 32 px spiral.
+        if let Some(p) = try_point(base_x, base_y) {
+            return p;
+        }
+        for (dx, dy) in spiral_offsets(32, 4) {
+            if let Some(p) = try_point(base_x + dx, base_y + dy) {
+                return p;
+            }
+        }
+
+        // Legacy cascade fallback.
         let cascade = 32 * (self.mapped.len() as i32 % 6);
         Point::from(((base_x + cascade).max(0), (base_y + cascade).max(0)))
     }
@@ -143,4 +175,57 @@ impl Default for WindowManager {
 /// The toplevel surface backing a window, if it is an xdg toplevel.
 fn toplevel_surface(window: &Window) -> Option<WlSurface> {
     window.toplevel().map(|t| t.wl_surface().clone())
+}
+
+/// Yield ring offsets in a square spiral around (0, 0): ring 1 has the 8 cells at radius
+/// `step`, ring 2 the 16 cells at radius `2·step`, etc.
+fn spiral_offsets(step: i32, rings: i32) -> impl Iterator<Item = (i32, i32)> {
+    (1..=rings).flat_map(move |r| {
+        let n = r * step;
+        let mut v = Vec::new();
+        // Top + bottom rows of this ring.
+        for dx in (-n..=n).step_by(step as usize) {
+            v.push((dx, -n));
+            v.push((dx, n));
+        }
+        // Left + right columns (excluding the corners already pushed).
+        for dy in ((-n + step)..=(n - step)).step_by(step as usize) {
+            v.push((-n, dy));
+            v.push((n, dy));
+        }
+        v.into_iter()
+    })
+}
+
+/// True if two axis-aligned rectangles share any interior point.
+fn rects_overlap(a: &Rectangle<i32, Logical>, b: &Rectangle<i32, Logical>) -> bool {
+    let ax2 = a.loc.x + a.size.w;
+    let ay2 = a.loc.y + a.size.h;
+    let bx2 = b.loc.x + b.size.w;
+    let by2 = b.loc.y + b.size.h;
+    a.loc.x < bx2 && b.loc.x < ax2 && a.loc.y < by2 && b.loc.y < ay2
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spiral_offsets_first_ring_has_eight_cells() {
+        let v: Vec<_> = spiral_offsets(32, 1).collect();
+        // 3 cols × 3 rows minus the centre = 8 cells around the origin.
+        assert_eq!(v.len(), 8);
+        assert!(v.contains(&(0, -32)));
+        assert!(v.contains(&(-32, 0)));
+        assert!(v.contains(&(32, 32)));
+    }
+
+    #[test]
+    fn rects_overlap_basic() {
+        let a = Rectangle::new(Point::from((0, 0)), Size::from((100, 100)));
+        let b = Rectangle::new(Point::from((50, 50)), Size::from((100, 100)));
+        let c = Rectangle::new(Point::from((200, 0)), Size::from((50, 50)));
+        assert!(rects_overlap(&a, &b));
+        assert!(!rects_overlap(&a, &c));
+    }
 }

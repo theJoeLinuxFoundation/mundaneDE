@@ -1,4 +1,4 @@
-//! argentumOS palette. Hardcoded, **not** derived from the GTK theme — the
+//! mundaneDE palette. Hardcoded, **not** derived from the GTK theme — the
 //! settings panel keeps its own identity regardless of the system theme the
 //! user picks for everything else.
 //!
@@ -10,8 +10,9 @@ pub const BG: u32 = 0x1C1C1E;
 pub const SIDEBAR: u32 = 0x161618;
 /// Cards, controls, surfaces.
 pub const SURFACE: u32 = 0x2C2C2E;
-/// argentum gold — selection, focus rings, accents.
-pub const ACCENT: u32 = 0xC8A97E;
+/// mundaneDE spring-blue — selection, focus rings, accents. Picked to evoke
+/// the spring-physics theme of the compositor itself.
+pub const ACCENT: u32 = 0x6EA8FE;
 /// Primary text.
 pub const TEXT: u32 = 0xF5F5F5;
 /// Secondary text (labels, hints).

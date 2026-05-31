@@ -35,13 +35,14 @@ pub fn render(selected: Page, app: Entity<App>) -> impl IntoElement {
                 .h(px(HEADER_HEIGHT))
                 .px_4()
                 .text_color(rgb(theme::ACCENT))
-                .child("argentum-settings"),
+                .child("mundaneDE"),
         )
         .child(
             div()
                 .flex()
                 .flex_col()
                 .px(px(8.))
+                .child(row(Page::Compositor, selected, app.clone()))
                 .child(row(Page::Appearance, selected, app.clone()))
                 .child(row(Page::Display, selected, app.clone()))
                 .child(row(Page::Sound, selected, app.clone()))

@@ -1,4 +1,4 @@
-# Development shell for argentum-settings.
+# Development shell for mundane-settings.
 #
 # Drop in with `nix-shell` from this directory. Provides the Rust toolchain,
 # a C linker (`cc`), pkg-config, and every native lib GPUI needs at both
@@ -11,7 +11,7 @@
 { pkgs ? import <nixpkgs> {} }:
 
 pkgs.mkShell {
-  name = "argentum-settings-dev";
+  name = "mundane-settings-dev";
 
   nativeBuildInputs = with pkgs; [
     rustc
@@ -82,9 +82,9 @@ pkgs.mkShell {
   PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig:${pkgs.dbus.dev}/lib/pkgconfig";
 
   shellHook = ''
-    echo "argentum-settings dev shell ready"
-    echo "  cargo check -p argentum-settings-core   # backend lib only, fast"
+    echo "mundane-settings dev shell ready"
+    echo "  cargo check -p mundane-settings-core    # backend lib only, fast"
     echo "  cargo check                              # whole workspace incl. GPUI (slow first time)"
-    echo "  cargo run -p argentum-settings -- --page network"
+    echo "  cargo run -p mundane-settings -- --page compositor"
   '';
 }

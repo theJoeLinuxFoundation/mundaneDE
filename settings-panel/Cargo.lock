@@ -167,33 +167,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "argentum-settings"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argentum-settings-core",
- "clap",
- "gpui",
- "gpui_platform",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "argentum-settings-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "rustix 0.38.44",
- "serde",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "zbus 4.4.0",
-]
-
-[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3378,6 +3351,34 @@ checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
 dependencies = [
  "num-traits",
  "pxfm",
+]
+
+[[package]]
+name = "mundane-settings"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "gpui",
+ "gpui_platform",
+ "mundane-settings-core",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "mundane-settings-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rustix 0.38.44",
+ "serde",
+ "thiserror 1.0.69",
+ "tokio",
+ "toml_edit 0.22.27",
+ "tracing",
+ "zbus 4.4.0",
 ]
 
 [[package]]

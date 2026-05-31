@@ -49,3 +49,8 @@ xkbcommon = "0.8.0"
 # Image decoding for the wallpaper engine. Pure-Rust png/jpeg decoders only —
 # no system libjpeg/libpng linkage, so nothing to add to shell.nix.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# Live-reload of `~/.config/mundane/config.toml`. Linux inotify is enabled by default;
+# `macos_kqueue` is the lightweight option on macOS — we use neither feature for the
+# default Linux build, but pinning explicitly avoids surprise FSEvents bundling.
+notify = { version = "6", default-features = false, features = ["macos_kqueue"] }

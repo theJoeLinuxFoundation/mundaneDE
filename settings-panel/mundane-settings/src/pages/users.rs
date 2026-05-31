@@ -3,7 +3,7 @@
 use crate::pages::{Page, PageState};
 use crate::theme;
 use crate::widgets::prompt;
-use argentum_settings_core::dbus::accounts::{self as backend, AccountType, UserAccount};
+use mundane_settings_core::dbus::accounts::{self as backend, AccountType, UserAccount};
 use gpui::{
     Context, InteractiveElement, IntoElement, ParentElement, Render,
     StatefulInteractiveElement, Styled, Window, div, px, rgb,

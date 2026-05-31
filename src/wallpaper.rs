@@ -111,6 +111,33 @@ impl WallpaperManager {
         self.current = Some(new_layer(pixels, size, self.fade_params, animation));
     }
 
+    /// Current scaling mode (read by tests and the hot-reload diff).
+    #[allow(dead_code)]
+    pub fn mode(&self) -> ScalingMode {
+        self.mode
+    }
+
+    /// Swap the scaling mode in place. The next render picks it up — no texture churn.
+    pub fn set_mode(&mut self, mode: ScalingMode) {
+        self.mode = mode;
+    }
+
+    /// Retune the fade spring's params on every existing layer. Used by the config
+    /// hot-reload path when `[wallpaper].fade_*` changes.
+    pub fn retune_fade(&mut self, params: crate::animation::SpringParams, animation: &mut AnimationEngine) {
+        self.fade_params = params;
+        if let Some(layer) = &self.current {
+            if let Some(s) = animation.spring_mut(layer.fade) {
+                s.params = params;
+            }
+        }
+        if let Some(layer) = &self.previous {
+            if let Some(s) = animation.spring_mut(layer.fade) {
+                s.params = params;
+            }
+        }
+    }
+
     /// Drop the outgoing layer once its fade-out has settled, releasing its spring and texture.
     pub fn cleanup(&mut self, animation: &mut AnimationEngine) {
         let settled = self
@@ -168,7 +195,10 @@ fn new_layer(
     params: crate::animation::SpringParams,
     animation: &mut AnimationEngine,
 ) -> WallpaperLayer {
-    let fade = animation.create_spring(0, 0, params);
+    // Tagged `Fade` so the hot-reload path retunes wallpaper springs from
+    // `[wallpaper].fade_*`, not from `[spring]`.
+    let fade =
+        animation.create_spring_kind(0, 0, params, crate::animation::SpringKind::Fade);
     if let Some(spring) = animation.spring_mut(fade) {
         spring.set_target(100, 0);
     }

@@ -19,10 +19,15 @@ damping = 10.0
 mass = 1.0
 
 # Magnetic window manager. On drop, a window within `attraction_radius` px of an output
-# edge or neighbour snaps flush to it, leaving `gap_size` px of breathing room.
+# edge, a neighbour edge, or any centreline (output centre, neighbour centre) snaps to it.
+# `outer_gap` is the breathing room left between a snapped window and the screen edge;
+# `inner_gap` is the breathing room left between two snapped windows. Set them
+# differently for an Apple-style "windows hug each other but breathe around the screen"
+# look. The legacy `gap_size` key is still accepted and treated as `outer_gap`.
 [wm]
 attraction_radius = 24
-gap_size = 8
+outer_gap = 8
+inner_gap = 8
 
 # Output mode used by the winit backend (the DRM backend reads the real connector instead).
 # `refresh` is in millihertz (60000 = 60 Hz).

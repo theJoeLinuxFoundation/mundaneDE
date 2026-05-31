@@ -1,15 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-    "argentum-settings",
-    "argentum-settings-core",
+    "mundane-settings",
+    "mundane-settings-core",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-authors = ["argentumOS contributors"]
+authors = ["mundaneDE contributors"]
 
 [workspace.dependencies]
 anyhow = "1"
@@ -18,6 +18,7 @@ tracing = "0.1"
 serde = { version = "1", features = ["derive"] }
 zbus = { version = "4", default-features = false, features = ["tokio"] }
 clap = { version = "4", features = ["derive"] }
+toml_edit = "0.22"
 
 # GPUI: pinned to Zed v1.2.7 (released 2026-05-19) — most recent stable, non-pre
 # tagged release at scaffold time. See settings-panel/README.md § "Bumping the
@@ -25,7 +26,7 @@ clap = { version = "4", features = ["derive"] }
 gpui = { git = "https://github.com/zed-industries/zed", rev = "deb48ceb47125223df73902d1c3b72f2f442222b" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "deb48ceb47125223df73902d1c3b72f2f442222b", features = ["font-kit", "wayland", "x11"] }
 
-argentum-settings-core = { path = "argentum-settings-core" }
+mundane-settings-core = { path = "mundane-settings-core" }
 
 [profile.release]
 opt-level = 3

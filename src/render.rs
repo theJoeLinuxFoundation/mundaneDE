@@ -14,12 +14,14 @@ use std::sync::Mutex;
 
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::render_elements;
+use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
 };
 use smithay::backend::renderer::element::texture::TextureRenderElement;
-use smithay::backend::renderer::element::Kind;
+use smithay::backend::renderer::element::{Id, Kind};
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
+use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::renderer::Color32F;
 use smithay::desktop::space::{space_render_elements, SpaceRenderElements};
 use smithay::desktop::Window;
@@ -40,6 +42,8 @@ render_elements! {
     Space = SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>,
     /// A wallpaper layer (one per crossfade slot, tiled into several for tile mode).
     Wallpaper = TextureRenderElement<GlesTexture>,
+    /// Magnetic snap preview ghost (drawn during a drag when a candidate is in range).
+    SnapGhost = SolidColorRenderElement,
 }
 
 /// Collect the full front-to-back element list for the output, plus the clear colour shown
@@ -55,6 +59,28 @@ pub fn collect_elements(
     // The cursor draws on top of everything.
     if draw_cursor {
         elements.extend(cursor_elements(renderer, state));
+    }
+
+    // Snap-preview ghost: shown only during an interactive drag when the snap target
+    // would move the window. Drawn above windows so the user sees where it'll land.
+    // Output scale is 1, so logical and physical coordinates coincide and we can
+    // retype the rectangle directly without a scale-aware conversion.
+    if let Some(rect) = state.move_state.as_ref().and_then(|mv| mv.snap_preview) {
+        let loc = smithay::utils::Point::<i32, smithay::utils::Physical>::from((rect.loc.x, rect.loc.y));
+        let size = smithay::utils::Size::<i32, smithay::utils::Physical>::from((rect.size.w, rect.size.h));
+        let geo = smithay::utils::Rectangle::new(loc, size);
+        // Fresh Id each frame matches the cursor pattern in this module — the
+        // damage tracker damages both the previous frame's ghost (gone) and this
+        // frame's ghost (new), which keeps the preview crisp under any motion.
+        let ghost = SolidColorRenderElement::new(
+            Id::new(),
+            geo,
+            CommitCounter::default(),
+            // Spring-blue at 12% alpha, matching the settings panel ACCENT.
+            Color32F::new(0.43, 0.66, 0.99, 0.12),
+            Kind::Unspecified,
+        );
+        elements.push(MundaneRenderElement::from(ghost));
     }
 
     match space_render_elements::<_, Window, _>(renderer, [&state.space], &state.output, 1.0) {

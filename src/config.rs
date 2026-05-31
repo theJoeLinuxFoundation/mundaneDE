@@ -26,7 +26,14 @@ pub struct SpringSection {
 #[serde(default)]
 pub struct WmSection {
     pub attraction_radius: i32,
-    pub gap_size: i32,
+    /// Margin between a snapped window and the output edge. Accepts the legacy
+    /// `gap_size` key as an alias for backward compatibility.
+    #[serde(alias = "gap_size")]
+    pub outer_gap: i32,
+    /// Margin between two snapped windows. Independent of `outer_gap` so users
+    /// can have generous breathing room from the screen edges while keeping
+    /// windows close together.
+    pub inner_gap: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -94,7 +101,8 @@ impl Default for WmSection {
     fn default() -> Self {
         Self {
             attraction_radius: 24,
-            gap_size: 8,
+            outer_gap: 8,
+            inner_gap: 8,
         }
     }
 }
@@ -167,6 +175,18 @@ impl MundaneConfig {
             Err(_) => Self::default(),
         }
     }
+
+    /// Re-load the config from disk (same path resolution as the initial [`load`]).
+    /// Used by the hot-reload watcher when the file changes.
+    pub fn reload() -> Self {
+        Self::load(None)
+    }
+}
+
+/// Path the compositor watches for hot reloads. None on the rare system where neither
+/// XDG_CONFIG_HOME nor HOME is set.
+pub fn config_file_path() -> Option<std::path::PathBuf> {
+    dirs_path().map(|d| d.join("config.toml"))
 }
 
 fn dirs_path() -> Option<std::path::PathBuf> {
@@ -189,6 +209,22 @@ mod tests {
         assert_eq!(cfg.wallpaper.mode, ScalingMode::Fill);
         assert!(cfg.wallpaper.path.is_some());
         assert_eq!(cfg.output.refresh, 60_000);
+    }
+
+    #[test]
+    fn wm_section_accepts_legacy_gap_size_alias() {
+        let raw = "attraction_radius = 24\ngap_size = 10\n";
+        let wm: WmSection = toml::from_str(raw).unwrap();
+        assert_eq!(wm.outer_gap, 10);
+        assert_eq!(wm.inner_gap, 8); // default
+    }
+
+    #[test]
+    fn wm_section_reads_separate_gaps() {
+        let raw = "attraction_radius = 24\nouter_gap = 12\ninner_gap = 4\n";
+        let wm: WmSection = toml::from_str(raw).unwrap();
+        assert_eq!(wm.outer_gap, 12);
+        assert_eq!(wm.inner_gap, 4);
     }
 
     #[test]
