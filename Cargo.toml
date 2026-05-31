@@ -1,0 +1,51 @@
+[package]
+name = "mundane-de"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80.1"
+
+[dependencies]
+# Compositor framework — pinned to v0.7.0
+smithay = { git = "https://github.com/Smithay/smithay.git", tag = "v0.7.0", default-features = false, features = [
+    "backend_drm",
+    "backend_gbm",
+    "backend_libinput",
+    "backend_udev",
+    "backend_session_libseat",
+    "backend_winit",
+    "renderer_gl",
+    "wayland_frontend",
+    "desktop",
+] }
+
+# DRM helper utilities — used by the DRM backend for connector scanning (`drm_scanner`).
+# default-features disabled on purpose: the `display-info` feature pulls libdisplay-info-sys
+# 0.2 (requires libdisplay-info < 0.3.0), but nixpkgs ships 0.3.0. We avoid it entirely —
+# `drm_scanner` is not feature-gated, and the DRM backend hardcodes make/model instead of
+# parsing EDID, so there is no need for `display-info`.
+smithay-drm-extras = { git = "https://github.com/Smithay/smithay.git", tag = "v0.7.0", default-features = false }
+
+# Event loop — must match Smithay's calloop version
+calloop = "0.14.0"
+
+# Configuration
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Keyboard maps — must match Smithay's xkbcommon version
+xkbcommon = "0.8.0"
+
+# Image decoding for the wallpaper engine. Pure-Rust png/jpeg decoders only —
+# no system libjpeg/libpng linkage, so nothing to add to shell.nix.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

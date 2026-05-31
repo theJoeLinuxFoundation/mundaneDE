@@ -1,0 +1,45 @@
+# Example mundaneDE configuration.
+#
+# Copy this to your config path and tweak. mundaneDE loads, in order:
+#   $XDG_CONFIG_HOME/mundane/config.toml   (if XDG_CONFIG_HOME is set)
+#   ~/.config/mundane/config.toml
+#
+#   mkdir -p ~/.config/mundane
+#   cp config.example.toml ~/.config/mundane/config.toml
+#
+# Every key is optional — a missing or malformed file just falls back to the defaults
+# shown below. The values here ARE the defaults, except for [wallpaper].path.
+
+# Spring physics for window animations (position, snap). The damping ratio
+# zeta = damping / (2 * sqrt(stiffness * mass)) sets the feel:
+#   zeta < 1 springy/overshoot · zeta = 1 critical (fastest, no overshoot) · zeta > 1 sluggish
+[spring]
+stiffness = 100.0
+damping = 10.0
+mass = 1.0
+
+# Magnetic window manager. On drop, a window within `attraction_radius` px of an output
+# edge or neighbour snaps flush to it, leaving `gap_size` px of breathing room.
+[wm]
+attraction_radius = 24
+gap_size = 8
+
+# Output mode used by the winit backend (the DRM backend reads the real connector instead).
+# `refresh` is in millihertz (60000 = 60 Hz).
+[output]
+width = 1920
+height = 1080
+refresh = 60000
+
+# Wallpaper engine. With `path` set, the image fades in on startup (spring-driven) and
+# crossfades on reload (Super+W). Without `path`, you just get the dark clear colour.
+[wallpaper]
+# Absolute path is safest; a relative path is resolved against the process working dir.
+# This points at the image bundled with the repo — adjust if you move the checkout.
+path = "/home/ofekb/mundaneDE/pexels-jplenio-2080960.jpg"
+# Scaling: "fill" (cover, crop) · "fit" (contain, letterbox) · "stretch" · "center" · "tile"
+mode = "fill"
+# Spring driving the fade-in / crossfade opacity (defaults: a smooth, near-critical fade).
+fade_stiffness = 50.0
+fade_damping = 14.0
+fade_mass = 1.0
