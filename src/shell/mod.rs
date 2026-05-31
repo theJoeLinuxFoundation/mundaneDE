@@ -98,7 +98,7 @@ impl State {
     fn map_new_window(&mut self, window: Window) {
         let size = window.geometry().size;
         let output_size = self.output_logical_size();
-        let target = self.wm.initial_placement(size, output_size);
+        let target = self.wm.initial_placement(size, output_size, &self.space);
 
         // Spring in from just below the target for a gentle entrance.
         let params = self.config.spring.to_spring_params();

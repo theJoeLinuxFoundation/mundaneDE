@@ -1,4 +1,4 @@
-//! argentum-settings — entry point.
+//! mundane-settings — entry point.
 
 mod app;
 mod pages;
@@ -10,10 +10,10 @@ use clap::Parser;
 use pages::Page;
 
 #[derive(Parser, Debug)]
-#[command(name = "argentum-settings", version, about = "argentumOS system settings panel")]
+#[command(name = "mundane-settings", version, about = "mundaneDE system settings panel")]
 struct Args {
     /// Page to focus on launch.
-    #[arg(long, value_enum, default_value_t = Page::Appearance)]
+    #[arg(long, value_enum, default_value_t = Page::Compositor)]
     page: Page,
 }
 

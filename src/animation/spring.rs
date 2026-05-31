@@ -14,7 +14,9 @@
 //! ```
 //!
 //! This method is unconditionally stable for spring-damper systems at typical frame
-//! rates (60 Hz) and conserves energy better than explicit Euler.
+//! rates (60 Hz) and conserves energy better than explicit Euler. For stiffer springs
+//! (or larger `dt` after a dropped frame) we sub-step internally so a single `tick(dt)`
+//! call never integrates further than [`MAX_STEP`] in one go.
 //!
 //! ## Tuning advice
 //!
@@ -54,6 +56,35 @@ impl Default for SpringParams {
     }
 }
 
+impl SpringParams {
+    /// Build params from a target damping ratio. ζ = damping / (2·√(k·m)), so
+    /// `damping = 2·ζ·√(k·m)`. Convenient when you have a feel target (e.g. ζ=0.5)
+    /// rather than a raw friction coefficient.
+    ///
+    /// Public API surface for the Compositor settings page's live readout; not yet
+    /// called from compositor code.
+    #[allow(dead_code)]
+    pub fn from_zeta(zeta: f64, stiffness: f64, mass: f64) -> Self {
+        let damping = 2.0 * zeta * (stiffness * mass).sqrt();
+        Self {
+            stiffness,
+            damping,
+            mass,
+        }
+    }
+}
+
+/// What this spring is animating. The reload path uses this to decide which `[…]`
+/// section in `config.toml` to re-apply when the file changes — position springs pick
+/// up `[spring]`, fade springs pick up `[wallpaper].fade_*`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpringKind {
+    /// Drives a window position (or any value where physical-pixel feel matters).
+    Position,
+    /// Drives an opacity fade (e.g. wallpaper crossfade).
+    Fade,
+}
+
 /// The instantaneous state of a single 1D spring.
 #[derive(Debug, Clone, Copy)]
 pub struct SpringState {
@@ -71,18 +102,44 @@ impl SpringState {
         }
     }
 
-    /// Returns `true` if the spring is at rest (within epsilon of target with near-zero velocity).
-    pub fn is_settled(&self, epsilon: f64) -> bool {
-        (self.position - self.target).abs() < epsilon && self.velocity.abs() < epsilon
+    /// Returns `true` if the spring is at rest — close to target by `SETTLE_EPSILON_POS`
+    /// and moving slower than `SETTLE_EPSILON_VEL`. Position and velocity have different
+    /// units, so they need different thresholds; using one number for both was the
+    /// original bug.
+    pub fn is_settled(&self) -> bool {
+        (self.position - self.target).abs() < SETTLE_EPSILON_POS
+            && self.velocity.abs() < SETTLE_EPSILON_VEL
     }
 
-    /// Advance the spring by `dt` seconds using semi-implicit Euler integration.
-    pub fn tick(&mut self, params: &SpringParams, dt: f64) {
+    /// Force the spring to its target exactly. Called by the engine once a spring
+    /// crosses the settle threshold so it doesn't sit at `target + 0.4` indefinitely.
+    pub fn snap_to_target(&mut self) {
+        self.position = self.target;
+        self.velocity = 0.0;
+    }
+
+    /// Integrate one symplectic-Euler step of length `dt`. Caller is responsible
+    /// for keeping `dt` ≤ [`MAX_STEP`]; [`SpringState::tick`] does the sub-stepping
+    /// and is the entry point everyone uses.
+    fn step(&mut self, params: &SpringParams, dt: f64) {
         let displacement = self.position - self.target;
         let acceleration =
             (-params.stiffness * displacement - params.damping * self.velocity) / params.mass;
         self.velocity += acceleration * dt;
         self.position += self.velocity * dt;
+    }
+
+    /// Advance the spring by `dt` seconds, sub-stepping if needed to stay numerically
+    /// stable on stiff systems. Returns nothing — read `position` / `velocity` after.
+    pub fn tick(&mut self, params: &SpringParams, dt: f64) {
+        if dt <= 0.0 {
+            return;
+        }
+        let n = (dt / MAX_STEP).ceil().max(1.0) as usize;
+        let h = dt / n as f64;
+        for _ in 0..n {
+            self.step(params, h);
+        }
     }
 }
 
@@ -102,15 +159,29 @@ pub struct SpringHandle {
     pub x: SpringState,
     pub y: SpringState,
     pub params: SpringParams,
+    pub kind: SpringKind,
 }
 
 impl SpringHandle {
+    /// Convenience constructor for a `SpringKind::Position` handle.
+    #[allow(dead_code)] // tests use it; runtime path goes through with_kind via the engine
     pub fn new(id: SpringId, initial_x: i32, initial_y: i32, params: SpringParams) -> Self {
+        Self::with_kind(id, initial_x, initial_y, params, SpringKind::Position)
+    }
+
+    pub fn with_kind(
+        id: SpringId,
+        initial_x: i32,
+        initial_y: i32,
+        params: SpringParams,
+        kind: SpringKind,
+    ) -> Self {
         Self {
             id,
             x: SpringState::new(initial_x as f64),
             y: SpringState::new(initial_y as f64),
             params,
+            kind,
         }
     }
 
@@ -127,21 +198,33 @@ impl SpringHandle {
 
     /// Returns `true` if both axes have settled.
     pub fn is_settled(&self) -> bool {
-        self.x.is_settled(SETTLE_EPSILON) && self.y.is_settled(SETTLE_EPSILON)
+        self.x.is_settled() && self.y.is_settled()
     }
 
-    /// Advance both axes by `dt` seconds.
+    /// Advance both axes by `dt` seconds. The engine ticks each axis independently
+    /// (per-axis settling) so this is only used by tests that exercise a standalone
+    /// handle outside the engine.
+    #[allow(dead_code)]
     pub fn tick(&mut self, dt: f64) {
         self.x.tick(&self.params, dt);
         self.y.tick(&self.params, dt);
     }
 }
 
-/// Settlement threshold: half a pixel.
-const SETTLE_EPSILON: f64 = 0.5;
+/// Settle threshold for *position*: within half a pixel of target.
+pub const SETTLE_EPSILON_POS: f64 = 0.5;
+/// Settle threshold for *velocity*: less than 1 px/s. Looser than `SETTLE_EPSILON_POS`
+/// because px/s is not the same unit as px, and a sub-1px/s residual is imperceptible
+/// at any sensible frame rate.
+pub const SETTLE_EPSILON_VEL: f64 = 1.0;
 
-/// Maximum dt to prevent instability on dropped frames (clamped to ~2 frames at 60 Hz).
+/// Maximum dt the caller is allowed to feed into a tick before clamping. Two frames
+/// at 60 Hz; anything larger is assumed to be a dropped-frame burp.
 pub const MAX_DT: Duration = Duration::from_millis(33);
+
+/// Maximum sub-step inside `SpringState::tick`. ≈4 ms keeps stiffness up to ~10⁴ stable
+/// for any incoming `dt` (after `MAX_DT` clamping at the engine level).
+pub const MAX_STEP: f64 = 1.0 / 240.0;
 
 #[cfg(test)]
 mod tests {
@@ -180,7 +263,7 @@ mod tests {
             state.tick(&params, 1.0 / 60.0);
         }
 
-        assert!(state.is_settled(SETTLE_EPSILON));
+        assert!(state.is_settled());
     }
 
     #[test]
@@ -226,5 +309,56 @@ mod tests {
             "underdamped spring should overshoot, max was {}",
             max_pos
         );
+    }
+
+    #[test]
+    fn snap_to_target_zeroes_state() {
+        let mut state = SpringState::new(99.7);
+        state.target = 100.0;
+        state.velocity = 0.3;
+        state.snap_to_target();
+        assert_eq!(state.position, 100.0);
+        assert_eq!(state.velocity, 0.0);
+    }
+
+    #[test]
+    fn from_zeta_critically_damped() {
+        let p = SpringParams::from_zeta(1.0, 100.0, 1.0);
+        // ζ=1.0, k=100, m=1 → d = 2·1·√100 = 20.
+        assert!((p.damping - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stiff_spring_remains_stable_under_large_dt() {
+        // Stiffness 2000 with dt = 33 ms (a dropped-frame burp) would explode under
+        // a single Euler step; sub-stepping must keep it bounded.
+        let params = SpringParams {
+            stiffness: 2000.0,
+            damping: 60.0,
+            mass: 1.0,
+        };
+        let mut state = SpringState::new(0.0);
+        state.target = 1000.0;
+
+        let mut max_pos = 0.0f64;
+        for _ in 0..60 {
+            state.tick(&params, 0.033); // 33 ms
+            max_pos = max_pos.max(state.position);
+            assert!(state.position.is_finite(), "position blew up to NaN/inf");
+        }
+        // ζ ≈ 0.67 → some overshoot expected, but nowhere near divergence.
+        assert!(max_pos < 1200.0, "overshoot exploded, max was {max_pos}");
+        assert!((state.position - 1000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn settle_thresholds_independent_for_velocity_and_position() {
+        // Position close to target, but velocity above the velocity epsilon → not settled.
+        let mut s = SpringState::new(100.0);
+        s.target = 100.0;
+        s.velocity = 5.0;
+        assert!(!s.is_settled());
+        s.velocity = 0.1;
+        assert!(s.is_settled());
     }
 }

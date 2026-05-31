@@ -15,22 +15,22 @@
 , makeWrapper
 }:
 
-# argentum-settings — the native argentumOS system settings panel.
+# mundane-settings — the native mundaneDE system settings panel.
 #
 # This package depends on GPUI, which is pulled from a pinned commit of
 # zed-industries/zed (see settings-panel/Cargo.toml). The `cargoLock`
 # `outputHashes` entry below MUST be populated with the real hash returned by
-# the first `nix build .#argentum-settings` failure — Nix will print the
+# the first `nix build .#mundane-settings` failure — Nix will print the
 # expected hash on mismatch, and you paste it in here.
 #
 # Bumping GPUI:
 #   1. Edit `settings-panel/Cargo.toml` and change the `rev = "..."` for gpui.
 #   2. `cargo update -p gpui` to refresh `Cargo.lock`.
 #   3. Set the `outputHashes` value below to `lib.fakeHash`.
-#   4. Run `nix build .#argentum-settings` — copy the new hash from the error.
+#   4. Run `nix build .#mundane-settings` — copy the new hash from the error.
 
 rustPlatform.buildRustPackage {
-  pname = "argentum-settings";
+  pname = "mundane-settings";
   version = "0.1.0";
 
   src = ./.;
@@ -79,14 +79,14 @@ rustPlatform.buildRustPackage {
       libGL
       wayland
       fontconfig
-    ]} $out/bin/argentum-settings
+    ]} $out/bin/mundane-settings
   '';
 
   meta = {
-    description = "Native argentumOS system settings panel (Rust + GPUI)";
+    description = "Native mundaneDE system settings panel (Rust + GPUI)";
     homepage = "https://github.com/";
     license = lib.licenses.mit;
-    mainProgram = "argentum-settings";
+    mainProgram = "mundane-settings";
     platforms = lib.platforms.linux;
   };
 }

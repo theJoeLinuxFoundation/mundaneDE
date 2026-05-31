@@ -290,6 +290,15 @@ pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
         )
         .map_err(|e| anyhow::anyhow!("failed to insert session source: {e}"))?;
 
+    // Hot-reload watcher (best-effort).
+    let _hot_reload = match crate::hot_reload::install(&handle) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!("hot-reload disabled: {e}");
+            None
+        }
+    };
+
     tracing::info!("mundaneDE DRM backend running on WAYLAND_DISPLAY={socket_name}");
 
     // --- Run -------------------------------------------------------------------------------

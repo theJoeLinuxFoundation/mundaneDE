@@ -2,7 +2,7 @@
 
 use crate::pages::{Page, PageState};
 use crate::theme;
-use argentum_settings_core::display::{self as backend, Monitor};
+use mundane_settings_core::display::{self as backend, Monitor};
 use gpui::{Context, IntoElement, ParentElement, Render, Styled, Window, div, px, rgb};
 
 pub struct DisplayPage {

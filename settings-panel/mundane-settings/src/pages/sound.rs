@@ -4,7 +4,7 @@
 
 use crate::pages::{Page, PageState};
 use crate::theme;
-use argentum_settings_core::sound::{self as backend, AudioSink};
+use mundane_settings_core::sound::{self as backend, AudioSink};
 use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, div, px, rgb,

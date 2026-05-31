@@ -5,7 +5,7 @@
 use crate::pages::{Page, PageState};
 use crate::theme;
 use crate::widgets::prompt;
-use argentum_settings_core::dbus::network as backend;
+use mundane_settings_core::dbus::network as backend;
 use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, div, px, rgb,

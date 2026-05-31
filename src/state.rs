@@ -57,6 +57,11 @@ pub struct MoveState {
     /// Pointer-minus-window-origin captured at grab start, so the window tracks the
     /// pointer 1:1 instead of jumping its top-left to the cursor.
     pub offset: Point<f64, Logical>,
+    /// Where the magnetic snap would place this window if released right now, when that
+    /// position differs from the raw drop. `None` means "no snap candidate in range" —
+    /// the render path uses this to draw a ghost rectangle showing the user where the
+    /// window will land on release.
+    pub snap_preview: Option<smithay::utils::Rectangle<i32, Logical>>,
 }
 
 /// Per-client state required by the compositor protocol.
@@ -117,6 +122,8 @@ pub struct State {
     pub socket_name: String,
     /// `$MUNDANE_TERMINAL` override; when `None`, a built-in candidate list is tried.
     pub spawn_command: Option<String>,
+    /// `$MUNDANE_SETTINGS` override; when `None`, plain `mundane-settings` on PATH.
+    pub spawn_settings_command: Option<String>,
 }
 
 impl State {
@@ -152,6 +159,7 @@ impl State {
         let damage_tracker = OutputDamageTracker::from_output(&output);
 
         let spawn_command = std::env::var("MUNDANE_TERMINAL").ok();
+        let spawn_settings_command = std::env::var("MUNDANE_SETTINGS").ok();
 
         let mut animation = AnimationEngine::new();
         let wallpaper = WallpaperManager::new(&config.wallpaper, &mut animation);
@@ -180,6 +188,7 @@ impl State {
             loop_signal,
             socket_name,
             spawn_command,
+            spawn_settings_command,
         })
     }
 

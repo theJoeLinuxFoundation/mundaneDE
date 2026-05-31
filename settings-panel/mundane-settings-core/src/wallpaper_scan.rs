@@ -1,4 +1,4 @@
-//! Scan available wallpapers on argentumOS.
+//! Scan available wallpapers on the system.
 
 use crate::{Result, on_runtime};
 use std::path::PathBuf;

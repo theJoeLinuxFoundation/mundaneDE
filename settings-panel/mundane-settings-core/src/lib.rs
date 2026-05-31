@@ -1,4 +1,4 @@
-//! `argentum-settings-core` — backend logic for the argentumOS settings panel.
+//! `mundane-settings-core` — backend logic for the mundaneDE settings panel.
 //!
 //! This crate exposes async functions that read and mutate system state via
 //! D-Bus and subprocess calls. It contains **no UI framework dependencies** —
@@ -8,6 +8,7 @@
 //! caller's responsibility: spawn a task on the framework's executor, await a
 //! function from this crate, then dispatch the result back to the UI.
 
+pub mod compositor;
 pub mod datetime;
 pub mod display;
 pub mod os_release;
@@ -33,7 +34,7 @@ fn runtime() -> &'static tokio::runtime::Handle {
     RT.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
-            .thread_name("argentum-settings-tokio")
+            .thread_name("mundane-settings-tokio")
             .build()
             .expect("build tokio runtime")
     })
@@ -61,7 +62,7 @@ pub enum Error {
     #[error("not implemented: {0}")]
     NotImplemented(&'static str),
 
-    /// A subprocess (xrandr, gsettings, flatpak, hostnamectl) exited non-zero.
+    /// A subprocess (xrandr, gsettings, flatpak) exited non-zero.
     #[error("`{cmd}` exited {code}: {stderr}")]
     Subprocess { cmd: String, code: i32, stderr: String },
 

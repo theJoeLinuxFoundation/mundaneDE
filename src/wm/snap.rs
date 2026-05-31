@@ -1,10 +1,15 @@
 //! Pure magnetic-snapping geometry.
 //!
 //! [`snap`] computes where a window's top-left corner should land after a drag, given
-//! the output bounds and the rectangles of the other windows. A window edge that comes
-//! within `attraction_radius` of an output edge or a neighbour edge is pulled flush to
-//! it, leaving a `gap_size` margin. The two axes are independent, so a window can snap
-//! into a corner (x to one thing, y to another).
+//! the output bounds and the rectangles of the other windows. A window edge — or its
+//! centre line — that comes within `attraction_radius` of an output edge, a neighbour
+//! edge, or the corresponding centre is pulled to it. Two gaps are honoured:
+//!
+//! * `outer_gap` — space between a snapped window and the output edge,
+//! * `inner_gap` — space between two snapped windows.
+//!
+//! The two axes are independent, so a window can snap into a corner (x to one thing,
+//! y to another).
 //!
 //! This module is deliberately free of any compositor state — it operates only on the
 //! plain geometry types from [`smithay::utils`], so the behaviour is fully unit-testable
@@ -18,15 +23,17 @@ use smithay::utils::{Logical, Point, Rectangle, Size};
 /// * `size` — the window's size.
 /// * `output` — the usable output size.
 /// * `neighbors` — geometries of all *other* windows.
-/// * `attraction_radius` — max distance (px) at which an edge is pulled to a target.
-/// * `gap_size` — margin (px) left between snapped edges.
+/// * `attraction_radius` — max distance (px) at which a candidate is pulled in.
+/// * `outer_gap` — margin between a snapped edge and the output edge.
+/// * `inner_gap` — margin between two snapped windows.
 pub fn snap(
     desired: Point<i32, Logical>,
     size: Size<i32, Logical>,
     output: Size<i32, Logical>,
     neighbors: &[Rectangle<i32, Logical>],
     attraction_radius: i32,
-    gap_size: i32,
+    outer_gap: i32,
+    inner_gap: i32,
 ) -> Point<i32, Logical> {
     let x = snap_axis(
         desired.x,
@@ -34,7 +41,8 @@ pub fn snap(
         output.w,
         neighbors.iter().map(|r| (r.loc.x, r.size.w)),
         attraction_radius,
-        gap_size,
+        outer_gap,
+        inner_gap,
     );
     let y = snap_axis(
         desired.y,
@@ -42,7 +50,8 @@ pub fn snap(
         output.h,
         neighbors.iter().map(|r| (r.loc.y, r.size.h)),
         attraction_radius,
-        gap_size,
+        outer_gap,
+        inner_gap,
     );
     Point::from((x, y))
 }
@@ -50,19 +59,24 @@ pub fn snap(
 /// Snap one axis.
 ///
 /// `p` is the window-start (left or top), `len` the window length on this axis, `out`
-/// the output length, and each neighbour is `(start, length)` on this axis. Because the
-/// window is rigid, moving its start by Δ moves every edge by Δ, so the distance for any
-/// candidate target position `c` is simply `|p - c|`. We collect all candidate positions,
-/// keep those within `radius`, and pick the closest. Output edges are considered first,
-/// so they win ties (a slight bias toward the screen edges). If nothing is in range, the
-/// window stays where it was dropped.
+/// the output length, and each neighbour is `(start, length)` on this axis. The
+/// candidate positions are:
+///
+/// * Output edges: leading edge flush to `outer_gap`, trailing edge flush to `out - outer_gap`.
+/// * Output centre: window centre aligned to output centre.
+/// * Per-neighbour: leading-edge-to-neighbour-trailing-edge + `inner_gap`,
+///   trailing-edge-to-neighbour-leading-edge − `inner_gap`, and centre-to-centre.
+///
+/// Output edges are considered first, so they win ties (a slight bias toward the screen
+/// edges). If nothing is within `radius`, the window stays where it was dropped.
 fn snap_axis(
     p: i32,
     len: i32,
     out: i32,
     neighbors: impl Iterator<Item = (i32, i32)>,
     radius: i32,
-    gap: i32,
+    outer_gap: i32,
+    inner_gap: i32,
 ) -> i32 {
     let mut best: Option<(i32, i32)> = None; // (distance, candidate position)
     let mut consider = |c: i32| {
@@ -75,13 +89,17 @@ fn snap_axis(
         }
     };
 
-    // Output edges (considered before neighbours → screen-edge bias on ties).
-    consider(gap); // leading edge flush to output start + gap
-    consider(out - gap - len); // trailing edge flush to output end - gap
+    // Output edges (considered first → screen-edge bias on ties).
+    consider(outer_gap); // leading edge flush to output start + outer_gap
+    consider(out - outer_gap - len); // trailing edge flush to output end - outer_gap
+    // Output centreline (window centre = output centre).
+    consider((out - len) / 2);
 
     for (n_start, n_len) in neighbors {
-        consider(n_start + n_len + gap); // our leading edge to neighbour's trailing edge + gap
-        consider(n_start - gap - len); // our trailing edge to neighbour's leading edge - gap
+        consider(n_start + n_len + inner_gap); // our leading edge to neighbour's trailing edge + inner_gap
+        consider(n_start - inner_gap - len); // our trailing edge to neighbour's leading edge - inner_gap
+        // Neighbour centreline (our centre aligned to neighbour's centre).
+        consider(n_start + n_len / 2 - len / 2);
     }
 
     best.map(|(_, c)| c).unwrap_or(p)
@@ -93,7 +111,8 @@ mod tests {
 
     const OUT: (i32, i32) = (1000, 800);
     const RADIUS: i32 = 24;
-    const GAP: i32 = 8;
+    const OUTER: i32 = 8;
+    const INNER: i32 = 8;
 
     fn out() -> Size<i32, Logical> {
         Size::from(OUT)
@@ -103,113 +122,138 @@ mod tests {
         Rectangle::new(Point::from((x, y)), Size::from((w, h)))
     }
 
+    fn s(desired: Point<i32, Logical>, size: Size<i32, Logical>, neighbors: &[Rectangle<i32, Logical>]) -> Point<i32, Logical> {
+        snap(desired, size, out(), neighbors, RADIUS, OUTER, INNER)
+    }
+
     #[test]
     fn snaps_to_left_edge() {
-        // Window 5px from the left → leading edge within radius of `gap`.
-        let r = snap(Point::from((5, 300)), Size::from((200, 200)), out(), &[], RADIUS, GAP);
-        assert_eq!(r.x, GAP);
+        let r = s(Point::from((5, 300)), Size::from((200, 200)), &[]);
+        assert_eq!(r.x, OUTER);
     }
 
     #[test]
     fn snaps_to_right_edge() {
-        // Trailing edge near output right: place trailing edge at out.w - gap.
         let size = Size::from((200, 200));
-        let desired_x = OUT.0 - GAP - size.w + 5; // 5px inside the snap point
-        let r = snap(Point::from((desired_x, 300)), size, out(), &[], RADIUS, GAP);
-        assert_eq!(r.x, OUT.0 - GAP - size.w);
+        let desired_x = OUT.0 - OUTER - size.w + 5;
+        let r = s(Point::from((desired_x, 300)), size, &[]);
+        assert_eq!(r.x, OUT.0 - OUTER - size.w);
     }
 
     #[test]
     fn snaps_to_top_edge() {
-        let r = snap(Point::from((400, 6)), Size::from((200, 200)), out(), &[], RADIUS, GAP);
-        assert_eq!(r.y, GAP);
+        let r = s(Point::from((400, 6)), Size::from((200, 200)), &[]);
+        assert_eq!(r.y, OUTER);
     }
 
     #[test]
     fn snaps_to_bottom_edge() {
         let size = Size::from((200, 200));
-        let desired_y = OUT.1 - GAP - size.h - 4;
-        let r = snap(Point::from((400, desired_y)), size, out(), &[], RADIUS, GAP);
-        assert_eq!(r.y, OUT.1 - GAP - size.h);
+        let desired_y = OUT.1 - OUTER - size.h - 4;
+        let r = s(Point::from((400, desired_y)), size, &[]);
+        assert_eq!(r.y, OUT.1 - OUTER - size.h);
     }
 
     #[test]
     fn no_snap_beyond_radius() {
-        // Dead centre, far from every edge and no neighbours → unchanged.
-        let desired = Point::from((400, 300));
-        let r = snap(desired, Size::from((200, 200)), out(), &[], RADIUS, GAP);
-        assert_eq!((r.x, r.y), (400, 300));
+        // Dead centre is the new "centre" candidate — pick a desired far enough from
+        // every candidate that nothing wins, to test the no-snap fallback.
+        let size = Size::from((200, 200));
+        let desired = Point::from((350, 250)); // 100+ px from centre, edges, etc.
+        let r = s(desired, size, &[]);
+        assert_eq!((r.x, r.y), (350, 250));
     }
 
     #[test]
-    fn neighbor_snap_with_gap_left_side() {
-        // Neighbour occupies x in [100, 300). Our left edge should snap to 300 + gap.
-        let neighbor = rect(100, 0, 200, 200); // right edge at 300
-        let desired_x = 300 + GAP + 3; // just inside snap range of the neighbour's right edge
-        let r = snap(Point::from((desired_x, 300)), Size::from((150, 150)), out(), &[neighbor], RADIUS, GAP);
-        assert_eq!(r.x, 300 + GAP);
-        // Resulting gap between neighbour right edge (300) and our left edge equals GAP.
-        assert_eq!(r.x - 300, GAP);
+    fn neighbor_snap_with_inner_gap_left_side() {
+        // Neighbour at x in [100, 300). Our left edge should snap to 300 + INNER.
+        let neighbor = rect(100, 0, 200, 200);
+        let desired_x = 300 + INNER + 3;
+        let r = s(Point::from((desired_x, 300)), Size::from((150, 150)), &[neighbor]);
+        assert_eq!(r.x, 300 + INNER);
+        assert_eq!(r.x - 300, INNER);
     }
 
     #[test]
     fn neighbor_snap_right_side() {
-        // Neighbour starts at x = 600. Our trailing edge should snap to 600 - gap.
         let neighbor = rect(600, 0, 200, 200);
         let size = Size::from((150, 150));
-        let desired_x = 600 - GAP - size.w - 5;
-        let r = snap(Point::from((desired_x, 300)), size, out(), &[neighbor], RADIUS, GAP);
-        assert_eq!(r.x, 600 - GAP - size.w);
-        // Gap between our right edge and neighbour's left edge equals GAP.
-        assert_eq!(600 - (r.x + size.w), GAP);
+        let desired_x = 600 - INNER - size.w - 5;
+        let r = s(Point::from((desired_x, 300)), size, &[neighbor]);
+        assert_eq!(r.x, 600 - INNER - size.w);
+        assert_eq!(600 - (r.x + size.w), INNER);
     }
 
     #[test]
     fn corner_both_axes() {
-        // Near the top edge (y snaps to output top) and to the right of a neighbour
-        // (x snaps to the neighbour's right edge + gap).
-        let neighbor = rect(100, 0, 200, 600); // right edge at 300
-        let r = snap(Point::from((300 + GAP + 4, 6)), Size::from((150, 150)), out(), &[neighbor], RADIUS, GAP);
-        assert_eq!(r.x, 300 + GAP);
-        assert_eq!(r.y, GAP);
+        let neighbor = rect(100, 0, 200, 600);
+        let r = s(Point::from((300 + INNER + 4, 6)), Size::from((150, 150)), &[neighbor]);
+        assert_eq!(r.x, 300 + INNER);
+        assert_eq!(r.y, OUTER);
     }
 
     #[test]
     fn nearest_of_multiple_wins() {
-        // Two neighbours offer snap candidates at different distances; the closer wins.
-        // Neighbour A right edge at 300 → candidate 300+gap=308. Neighbour B right edge
-        // at 350 → candidate 358. Desired left edge at 356 (2px from 358, 48px from 308).
-        let a = rect(100, 0, 200, 200); // right edge 300
-        let b = rect(150, 400, 200, 200); // right edge 350
-        let r = snap(Point::from((356, 300)), Size::from((100, 100)), out(), &[a, b], RADIUS, GAP);
-        assert_eq!(r.x, 358);
+        let a = rect(100, 0, 200, 200);
+        let b = rect(150, 400, 200, 200);
+        let r = s(Point::from((356, 300)), Size::from((100, 100)), &[a, b]);
+        assert_eq!(r.x, 358); // closer candidate (b's right edge + INNER) wins
     }
 
     #[test]
     fn output_edge_preferred_on_tie() {
-        // Construct an exact tie between the output-left candidate (gap=8) and a
-        // neighbour candidate, both `d` away from `p`. Output edge must win.
-        // Output-left candidate = 8. Neighbour right edge n → candidate n+gap.
-        // Choose p so |p-8| == |p-(n+gap)|. p=20: |20-8|=12. Need n+gap=32 → n=24.
-        let neighbor = rect(0, 400, 24, 100); // right edge at 24 → candidate 32
-        let r = snap(Point::from((20, 300)), Size::from((100, 100)), out(), &[neighbor], RADIUS, GAP);
-        assert_eq!(r.x, GAP); // output edge wins the tie
+        // Construct an exact tie between the output-left candidate (8) and a neighbour
+        // candidate; output edge must win.
+        let neighbor = rect(0, 400, 24, 100); // right edge at 24 → candidate 24+INNER=32
+        let r = s(Point::from((20, 300)), Size::from((100, 100)), &[neighbor]);
+        assert_eq!(r.x, OUTER);
     }
 
     #[test]
     fn large_window_clamps_left() {
-        // Window wider than the usable area: left candidate (gap) is closest, no panic.
         let big = Size::from((OUT.0 + 200, 100));
-        let r = snap(Point::from((3, 300)), big, out(), &[], RADIUS, GAP);
-        assert_eq!(r.x, GAP);
+        let r = s(Point::from((3, 300)), big, &[]);
+        assert_eq!(r.x, OUTER);
     }
 
     #[test]
     fn radius_boundary_is_inclusive() {
-        // Exactly `radius` away → snaps. `radius + 1` away → does not.
-        let at = snap(Point::from((GAP + RADIUS, 300)), Size::from((100, 100)), out(), &[], RADIUS, GAP);
-        assert_eq!(at.x, GAP);
-        let beyond = snap(Point::from((GAP + RADIUS + 1, 300)), Size::from((100, 100)), out(), &[], RADIUS, GAP);
-        assert_eq!(beyond.x, GAP + RADIUS + 1);
+        let size = Size::from((100, 100));
+        let at = s(Point::from((OUTER + RADIUS, 300)), size, &[]);
+        assert_eq!(at.x, OUTER);
+        let beyond = s(Point::from((OUTER + RADIUS + 1, 300)), size, &[]);
+        assert_eq!(beyond.x, OUTER + RADIUS + 1);
+    }
+
+    // ---------- centreline tests (new in this round of polish) ----------
+
+    #[test]
+    fn snaps_to_output_center() {
+        // 200-wide window on a 1000-wide output → centred at x = (1000 - 200) / 2 = 400.
+        // Drop near centre and expect snap to centre.
+        let size = Size::from((200, 200));
+        let center_target = (OUT.0 - size.w) / 2; // 400
+        let r = s(Point::from((center_target + 5, 300)), size, &[]);
+        assert_eq!(r.x, center_target);
+    }
+
+    #[test]
+    fn snaps_to_neighbor_center() {
+        // Neighbour at [100, 300) on x (centre at x=200). Our 100-wide window's
+        // centre aligned to neighbour's centre → x = 200 - 50 = 150.
+        let neighbor = rect(100, 0, 200, 200);
+        let size = Size::from((100, 100));
+        let neighbor_center = 100 + 200 / 2 - size.w / 2; // 150
+        let r = s(Point::from((neighbor_center + 4, 400)), size, &[neighbor]);
+        assert_eq!(r.x, neighbor_center);
+    }
+
+    #[test]
+    fn edge_beats_center_when_closer() {
+        // Window of 100 px. Output-left candidate is x=8. Output centre would be x=450.
+        // Drop near the edge — the edge must win, even though both are valid candidates.
+        let size = Size::from((100, 100));
+        let r = s(Point::from((10, 300)), size, &[]);
+        assert_eq!(r.x, OUTER);
     }
 }

@@ -5,15 +5,16 @@
 //! `Ok(Some(text))` on submit, `Ok(None)` on cancel/close, `Err(_)` only on
 //! genuinely unexpected failure (zenity missing, permission error, etc.).
 //!
-//! Zenity is pulled in by `modules/settings.nix`, so callers can assume it is
-//! always on PATH in a built argentumOS image. In a development shell without
-//! it, the future resolves to an error instead of panicking.
+//! Zenity needs to be on PATH. In a development shell without it, the future
+//! resolves to an error instead of panicking.
 
 use anyhow::{Context, Result};
-use argentum_settings_core::on_runtime;
+use mundane_settings_core::on_runtime;
 use tokio::process::Command;
 
-/// One-line free-text prompt. `initial` pre-fills the entry box.
+/// One-line free-text prompt. `initial` pre-fills the entry box. Currently no caller
+/// in the panel uses this; kept available for future free-text settings.
+#[allow(dead_code)]
 pub async fn text(title: &str, label: &str, initial: &str) -> Result<Option<String>> {
     run_zenity(&[
         "--entry",

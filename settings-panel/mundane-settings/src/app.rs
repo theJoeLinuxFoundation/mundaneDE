@@ -62,7 +62,7 @@ pub fn run(initial: Page) {
             titlebar: None,
             window_min_size: Some(size(px(900.), px(600.))),
             kind: WindowKind::Normal,
-            app_id: Some("argentum-settings".into()),
+            app_id: Some("mundane-settings".into()),
             ..Default::default()
         };
         cx.open_window(opts, move |_window, cx| cx.new(|cx| App::new(initial, cx)))

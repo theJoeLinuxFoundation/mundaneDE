@@ -1,13 +1,13 @@
 [package]
-name = "argentum-settings"
+name = "mundane-settings"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Native argentumOS system settings panel."
+description = "Native mundaneDE system settings panel."
 
 [[bin]]
-name = "argentum-settings"
+name = "mundane-settings"
 path = "src/main.rs"
 
 [dependencies]
@@ -17,5 +17,5 @@ tracing.workspace = true
 clap.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
-argentum-settings-core.workspace = true
+mundane-settings-core.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

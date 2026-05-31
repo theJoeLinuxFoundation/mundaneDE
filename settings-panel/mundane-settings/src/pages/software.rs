@@ -3,7 +3,7 @@
 use crate::pages::{Page, PageState};
 use crate::theme;
 use crate::widgets::prompt;
-use argentum_settings_core::dbus::flatpak as backend;
+use mundane_settings_core::dbus::flatpak as backend;
 use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Window, div, px, rgb,
@@ -194,7 +194,6 @@ fn remotes_view(
     cx: &mut Context<SoftwarePage>,
 ) -> gpui::Div {
     let mut col = div().flex().flex_col().gap_3();
-    col = col.child(open_app_store_row(cx));
     col = col.child(div().text_color(rgb(theme::TEXT_MUTED)).child("Flatpak remotes"));
     for r in remotes {
         col = col.child(remote_row(r, in_flight.contains(&r.name), cx));
@@ -210,39 +209,6 @@ fn remotes_view(
         );
     }
     col
-}
-
-fn open_app_store_row(cx: &mut Context<SoftwarePage>) -> gpui::Div {
-    let inner = div()
-        .id("open-app-store")
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .size_full()
-        .px_4()
-        .py_3()
-        .bg(rgb(theme::SURFACE))
-        .rounded(px(10.))
-        .cursor_pointer()
-        .on_click(cx.listener(|_this, _event, _window, _cx| {
-            if let Err(e) = std::process::Command::new("argentum-app-store").spawn() {
-                tracing::warn!(?e, "failed to launch argentum-app-store");
-            }
-        }))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .child(div().text_color(rgb(theme::TEXT)).child("App Store"))
-                .child(
-                    div()
-                        .text_color(rgb(theme::TEXT_MUTED))
-                        .child("Browse, install, and manage Flathub apps"),
-                ),
-        )
-        .child(div().text_color(rgb(theme::ACCENT)).child("Open →"));
-    div().mb_2().child(inner)
 }
 
 fn remote_row(

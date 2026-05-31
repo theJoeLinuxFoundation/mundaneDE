@@ -1,6 +1,6 @@
 //! Parse `/etc/os-release` into structured fields.
 
-use crate::{Error, Result, on_runtime};
+use crate::{Result, on_runtime};
 
 #[derive(Debug, Clone, Default)]
 pub struct OsRelease {
@@ -50,43 +50,23 @@ pub async fn hostname() -> Result<String> {
     .await
 }
 
-pub async fn set_hostname(new: &str) -> Result<()> {
-    let new = new.to_string();
-    on_runtime(async move {
-        let out = tokio::process::Command::new("pkexec")
-            .args(["hostnamectl", "set-hostname", &new])
-            .output()
-            .await?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            Err(Error::Subprocess {
-                cmd: format!("pkexec hostnamectl set-hostname {new}"),
-                code: out.status.code().unwrap_or(-1),
-                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-            })
-        }
-    })
-    .await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn parses_argentumos_os_release() {
+    fn parses_mundane_os_release() {
         let raw = r#"
-NAME="argentumOS"
-ID=argentumos
+NAME="mundaneDE"
+ID=mundane
 ID_LIKE=nixos
-PRETTY_NAME="argentumOS"
+PRETTY_NAME="mundaneDE"
 HOME_URL="https://github.com/"
 "#;
         let r = parse(raw);
-        assert_eq!(r.name.as_deref(), Some("argentumOS"));
-        assert_eq!(r.id.as_deref(), Some("argentumos"));
-        assert_eq!(r.pretty_name.as_deref(), Some("argentumOS"));
+        assert_eq!(r.name.as_deref(), Some("mundaneDE"));
+        assert_eq!(r.id.as_deref(), Some("mundane"));
+        assert_eq!(r.pretty_name.as_deref(), Some("mundaneDE"));
         assert_eq!(r.home_url.as_deref(), Some("https://github.com/"));
     }
 

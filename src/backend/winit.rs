@@ -104,6 +104,16 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("failed to insert winit source: {e}"))?;
 
+    // Hot-reload watcher: kept alive in this function's scope so the watcher and the
+    // calloop source live for the event loop's lifetime.
+    let _hot_reload = match crate::hot_reload::install(&handle) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!("hot-reload disabled: {e}");
+            None
+        }
+    };
+
     tracing::info!("mundaneDE winit backend running on WAYLAND_DISPLAY={socket_name}");
 
     let mut last_frame = Instant::now();
@@ -194,6 +204,10 @@ impl State {
                                         state.reload_wallpaper();
                                         return FilterResult::Intercept(());
                                     }
+                                    keysyms::KEY_comma => {
+                                        state.spawn_settings();
+                                        return FilterResult::Intercept(());
+                                    }
                                     keysyms::KEY_Q => {
                                         state.loop_signal.stop();
                                         return FilterResult::Intercept(());
@@ -251,7 +265,11 @@ impl State {
                         // typically grabs Super+drag for itself, so Super never reaches us.
                         if mods.logo || mods.alt {
                             let offset = loc - win_loc.to_f64();
-                            self.move_state = Some(MoveState { window, offset });
+                            self.move_state = Some(MoveState {
+                                window,
+                                offset,
+                                snap_preview: None,
+                            });
                             return;
                         }
                     }
@@ -314,6 +332,33 @@ impl State {
                     h.y.velocity = 0.0;
                 }
             }
+            // Recompute snap preview: where the magnetic snap would put the window
+            // if released right now.
+            let size = self
+                .space
+                .element_geometry(&window)
+                .map(|g| g.size)
+                .or_else(|| self.wm.size_of(&window))
+                .unwrap_or_else(|| (0, 0).into());
+            let output = self.output_logical_size();
+            let neighbors = self.wm.neighbors_except(&window, &self.space);
+            let snapped = crate::wm::snap(
+                Point::from((x, y)),
+                size,
+                output,
+                &neighbors,
+                self.config.wm.attraction_radius,
+                self.config.wm.outer_gap,
+                self.config.wm.inner_gap,
+            );
+            let preview = if snapped.x != x || snapped.y != y {
+                Some(smithay::utils::Rectangle::new(snapped, size))
+            } else {
+                None
+            };
+            if let Some(mv) = self.move_state.as_mut() {
+                mv.snap_preview = preview;
+            }
         } else {
             let focus = self
                 .space
@@ -344,13 +389,21 @@ impl State {
             output_size,
             &neighbors,
             self.config.wm.attraction_radius,
-            self.config.wm.gap_size,
+            self.config.wm.outer_gap,
+            self.config.wm.inner_gap,
         );
         if let Some(id) = self.wm.spring_id(&window) {
             if let Some(h) = self.animation.spring_mut(id) {
                 h.set_target(target.x, target.y);
+                // Zero velocity explicitly: pointer_moved pins it during the drag, but
+                // a flick on release can leave a spike on the last motion. Start from
+                // rest at the drop position so the spring's only motion is toward the
+                // snap target.
+                h.x.velocity = 0.0;
+                h.y.velocity = 0.0;
             }
         }
+        // Snap preview is cleared because `move_state` was taken before this call.
         tracing::info!(
             "released window at ({}, {}) -> magnetic snap to ({}, {})",
             desired.x,
@@ -397,5 +450,22 @@ impl State {
             }
         }
         tracing::warn!("no terminal found (tried: {})", candidates.join(", "));
+    }
+
+    /// Spawn the mundaneDE settings panel as a Wayland client.
+    ///
+    /// Honours `$MUNDANE_SETTINGS` if set; otherwise calls `mundane-settings` on PATH.
+    pub fn spawn_settings(&self) {
+        let cmd = self
+            .spawn_settings_command
+            .as_deref()
+            .unwrap_or("mundane-settings");
+        match std::process::Command::new(cmd)
+            .env("WAYLAND_DISPLAY", &self.socket_name)
+            .spawn()
+        {
+            Ok(_) => tracing::info!("spawned settings '{cmd}'"),
+            Err(e) => tracing::warn!("could not spawn '{cmd}': {e}"),
+        }
     }
 }
