@@ -48,13 +48,22 @@ class UpgradeNotices:
             return []
         prepared = status["prepared_upgrade"]
         stamp = None
+        updated = dict(self.seen)
         if prepared is not None:
             title = "Upgrade ready, restart to apply"
             self.details.extend([title, prepared["summary"]])
-            stamp = [prepared["summary"], prepared["install"], prepared["remove"]]
-            if self.seen.get("prepared") != stamp:
+            legacy = [prepared["summary"], prepared["install"], prepared["remove"]]
+            stamp = prepared.get("id") or legacy
+            if isinstance(stamp, str):
+                delivered = self.seen.get("prepared_ids", [])
+                fresh = stamp not in delivered and self.seen.get("prepared") != legacy
+                if stamp not in delivered:
+                    updated["prepared_ids"] = [*delivered, stamp]
+            else:
+                fresh = self.seen.get("prepared") != legacy
+            if fresh:
                 alerts.append((title, prepared["summary"]))
-        updated = dict(self.seen, prepared=stamp)
+        updated["prepared"] = stamp
         last = status["last_upgrade"]
         if last and last["outcome"] == "fallback":
             title = f"Upgrade to deployment {last['deployment']} failed"

@@ -302,12 +302,11 @@ establish an automatic fallback. Store the delivered fallback’s `event` per
 user across shell restarts. Seeing the same event in `checking` must leave a
 later fallback eligible for notification.
 
-The prepared object lacks a stable identity. Show one notification per observed
-preparation, using a change in the summary or counts, or an intervening clear,
-to recognize a replacement. Retain the menu entry throughout. If a
-staged upgrade is replaced before the next poll by another with identical
-summary and counts, the shell cannot distinguish them. A staged-plan digest
-would allow exact once-per-preparation delivery in that case.
+Remember each delivered `prepared_upgrade.id` across polls, clears and
+logins. dave hashes the installed package set and the packages to install
+or remove. Two preparations with equal counts can therefore produce distinct
+notices. An older snapshot can be matched by its summary and counts until an
+ID is available. [Prepared upgrade identity](https://github.com/theJoeLinuxFoundation/joe-linux/commit/ab99159)
 
 **Acceptance.** With Packages closed, exercise preview, prepared, successful
 boot, manual rollback and automatic fallback. Check the attempted and restored

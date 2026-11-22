@@ -37,6 +37,7 @@ if __name__ == "__main__":
         path = Path(directory) / "seen"
         shell = UpgradeNotices(path)
         staged = {
+            "id": "sha256:" + "a" * 64,
             "summary": "2 to install or upgrade, 1 to remove",
             "install": 2,
             "remove": 1,
@@ -74,7 +75,20 @@ if __name__ == "__main__":
         assert len(notices) == 1 and "5" in notices[0][0] and "4" in notices[0][1]
         shell = UpgradeNotices(path)
         assert shell.update(fallback) == [] and "4" in shell.details[1]
-        assert shell.update(snapshot(10, staged))
+        assert not shell.update(snapshot(10, staged))
+        replacement = dict(staged, id="sha256:" + "b" * 64)
+        assert shell.update(snapshot(12, replacement))
+        assert not UpgradeNotices(path).update(snapshot(13, replacement))
+        assert not shell.update(
+            snapshot(14, dict(replacement, summary="Updated wording"))
+        )
+        assert not shell.update(snapshot(15, staged))
+        legacy = dict(staged)
+        del legacy["id"]
+        old = UpgradeNotices(Path(directory) / "legacy")
+        assert old.update(snapshot(1, legacy))
+        assert not old.update(snapshot(2, staged))
+        assert old.update(snapshot(3, replacement))
         assert shell.update(dict(snapshot(11), managed=False)) == []
     print(
         "dave readiness, all six boot outcomes, incomplete/unknown data and per-user deduplication passed"
