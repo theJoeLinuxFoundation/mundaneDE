@@ -63,6 +63,8 @@ impl State {
         if self.desktop.lock.active {
             return;
         }
+        self.revoke_capture(None);
+        self.shell_message(&serde_json::json!({"locked":true}));
         self.generation += 1;
         let l = &mut self.desktop.lock;
         l.active = true;
@@ -166,6 +168,7 @@ impl SessionLockHandler for State {
     }
     fn unlock(&mut self) {
         self.report_lock(b"U");
+        self.shell_message(&serde_json::json!({"locked":false}));
         self.desktop.lock.active = false;
         self.desktop.lock.surfaces.clear();
         self.desktop.lock.last_input = Instant::now();

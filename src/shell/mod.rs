@@ -176,10 +176,12 @@ impl XdgShellHandler for State {
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
         self.set_expanded(&surface, xdg_toplevel::State::Maximized, false);
     }
-    fn fullscreen_request(&mut self, surface: ToplevelSurface, _: Option<WlOutput>) {
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, output: Option<WlOutput>) {
+        surface.with_pending_state(|s| s.fullscreen_output = output);
         self.set_expanded(&surface, xdg_toplevel::State::Fullscreen, true);
     }
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        surface.with_pending_state(|s| s.fullscreen_output = None);
         self.set_expanded(&surface, xdg_toplevel::State::Fullscreen, false);
     }
     fn minimize_request(&mut self, surface: ToplevelSurface) {

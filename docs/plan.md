@@ -175,7 +175,7 @@ and applications run with the logged-in UID. [systemd session targets](https://w
 | Executables and libraries | Ship `mundane-de`, `mundane-session`, `mundane-settings`, a libseat built with logind, Python 3 with PyGObject/Gio/GLib, dbus-update-activation-environment and systemd user units. The [installer](../session/install.sh) accepts `DESTDIR` and `PREFIX` (use `/usr` for packages). Install Settings separately in the same bin directory. |
 | User units and activation | Install `mundane-session.target` and `mundane-ibus.service` under `lib/systemd/user/`. The launcher starts the target after exporting `WAYLAND_DISPLAY`, `XDG_CURRENT_DESKTOP=mundane`, `XDG_SESSION_DESKTOP=mundane`, `XDG_SESSION_TYPE=wayland` and `XDG_SESSION_ID`. Future shell units should use `PartOf=mundane-session.target`. GDM owns the seat process. A user service outside the session scope cannot take its place. Start X11 applications with the display returned by `mundane-de --x11-display`. |
 | Polkit and power | Until milestone 7, select a standalone graphical polkit agent as `mundane-polkit-agent` next to the launcher (a package symlink suffices), or set `MUNDANE_POLKIT_AGENT`. The beta1 test overlay uses polkit-gnome. Milestone 7 replaces this interim dependency with the shell’s agent. Keep polkitd, its PAM helper, `polkit-1` PAM configuration and joe’s administrator policy. The existing Settings timezone action uses `pkexec timedatectl`. The compositor introduces no privileged executable or PAM stack. The launcher requests logind’s delay inhibitor for sleep (`org.freedesktop.login1.inhibit-delay-sleep`), drops it when scanout has stopped and rearms it on wake. |
-| Portals | Install `share/xdg-desktop-portal/mundane-portals.conf`, xdg-desktop-portal, its GTK backend and the GNOME Keyring Secret backend. After Wayland dispatch begins, explicitly start the GTK backend and portal frontend on each login. This resolves pending D-Bus activation after a previous session stops. D-Bus clients can then reach the chooser and settings provider on the new display. ScreenCast and Screenshot are milestone 6. During logout stop both session targets explicitly so a portal holding a dependency on `graphical-session.target` cannot keep an old display alive. |
+| Portals | Install the frontend and its interface XML, GTK backend, keyring Secret backend, PipeWire and WirePlumber. Install the two mundaneDE routing files and the capture helpers listed in milestone 6. The session publishes its Wayland environment, waits for the shell backend’s bus name and restarts the frontend so it discovers all backends on the new display. Logout stops both session targets. |
 | IBus | Build the GTK Wayland input-method frontend described in milestone 2. Install it in the libexec or lib/ibus location or set `MUNDANE_IBUS_PANEL`. Its presence enables the session-bound daemon with `--panel=disable`. The compositor starts the candidate panel with its private Wayland connection after readiness. Beta1 supplies GNOME’s IBus build and skips this unit under mundaneDE. |
 
 Ctrl+Alt+Fn asks libseat to change VTs. On VT loss, suspend libinput and DRM.
@@ -262,8 +262,7 @@ Export its active sessions through ObjectManager at
 `org.joelinux.mundane.ActiveShare.Source`, a user-facing display name.
 Emit InterfacesAdded/Removed as sharing starts or ends and implement
 `org.freedesktop.impl.portal.Session.Close` on the same path. The shell
-shows a stop button for each active source. The M5 test supplies this side
-of the portal contract on the guest bus.
+shows a stop button for each active source. The portal qualification exercises this control against live Firefox streams.
 
 At 1920×1080, beta1 GNOME and mundaneDE both place Home and Trash at the upper
 left, Start at the lower left and system controls at the lower right. GNOME also
@@ -317,27 +316,36 @@ as an ordinary user. [Deployment VM scenarios](https://github.com/theJoeLinuxFou
 
 ## 6. Deliver portals that work outside GNOME Shell
 
-Use the distribution's xdg-desktop-portal frontend with
-`mundane-portals.conf` selected by `XDG_CURRENT_DESKTOP=mundane`. Start with
-the GTK backend for FileChooser, AppChooser, Settings and Notification, and
-retain the keyring Secret backend where available. Test the frontend's OpenURI
-flow with the user's preferred handler. Route Screenshot and ScreenCast to
-xdg-desktop-portal-wlr. The distribution will need a recipe for that backend
-and its selected chooser/screenshot helpers. It is a Wayland client and can
-run against Smithay when the negotiated capture protocols are implemented.
-[Portal routing](https://flatpak.github.io/xdg-desktop-portal/docs/portals.conf.html) ·
-[wlr backend interfaces and setup](https://github.com/emersion/xdg-desktop-portal-wlr#running)
+The GDM session sets `XDG_CURRENT_DESKTOP=mundane`. Install
+`share/xdg-desktop-portal/mundane-portals.conf` and
+`share/xdg-desktop-portal/portals/mundane.portal`. The frontend routes
+ScreenCast and Screenshot to the shell, FileChooser, AppChooser, Settings
+and Notification to GTK, and Secret to GNOME Keyring. OpenURI uses the
+preferred desktop handler. The shell owns its implementation bus name for the
+life of the session. [Portal routing](https://flatpak.github.io/xdg-desktop-portal/docs/portals.conf.html)
 
-Implement **wlr-screencopy** for output capture first. Add
-**ext-image-copy-capture-v1** with the matching **ext-image-capture-source-v1**
-output source and, for individual window sharing, a foreign-toplevel source.
-Record the backend revision and the interfaces it actually binds. Offer only
-sources that the negotiated path can capture. Authorize the portal backend
-and any capture helper it launches through scoped connections. Ordinary apps
-request capture through the portal. Require a visible source chooser and
-consent before returning an image or PipeWire stream. If the packaged backend
-cannot enforce consent or delegate capture safely to a helper, implement that
-portion in a mundane backend before enabling it in the session. [Capture protocols used upstream](https://github.com/emersion/xdg-desktop-portal-wlr/blob/master/protocols/meson.build) ·
+The shell names the requesting application when the frontend supplies its ID.
+Its chooser lists connected displays and individual windows and initially
+focuses Cancel. Selecting a source passes a fresh Wayland connection to one
+helper. The compositor checks both the connection and the selected source.
+Ordinary and sandboxed clients see no capture globals. A window capture
+renders that window’s surface tree, including when another app covers it.
+The compositor revokes grants before drawing the lock surface and on source
+removal or panel loss. [Compositor capture](../src/capture/mod.rs) ·
+[Desktop backend](../session/shell/portals.py)
+
+For joe packaging, provide **xdg-desktop-portal-wlr 0.9.0**, grim 1.5.0,
+`dbus-run-session`, PyGObject, the xdg-desktop-portal implementation XML and
+the session’s PipeWire service and WirePlumber policy. Keep the executable
+available on PATH or in the backend’s usual libexec directory. Each approved
+stream gets its own wlr process and private D-Bus session. It uses
+ext-image-copy-capture-v1 with an output or foreign-toplevel capture source,
+negotiates shared-memory video buffers and caps capture at 30 fps. The
+frontend receives the PipeWire node and its serial and gives the application
+a restricted remote. The shell shows a stop control on each taskbar until the
+stream ends. For a still image, grim uses wlr-screencopy v1 for a display
+or ext-image-copy-capture for a window. The returned PNG lives in the user’s
+runtime directory. [Pinned wlr release](https://github.com/emersion/xdg-desktop-portal-wlr/tree/8388b8a6214470462146840e92909aff5983eeac) ·
 [ScreenCast API](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html)
 
 **Acceptance.** On a private bus, start a Firefox WebRTC share with two outputs
@@ -350,6 +358,13 @@ and check that no image is delivered. Repeat source isolation for a single
 window before advertising window sharing. From Files or a suite fixture, open
 and cancel a file chooser, open a URI in its handler, and activate a
 notification. Check the active backend names in the session journal.
+
+The headless beta1 gate passed with two QEMU virtio displays. The selected
+display’s PNG matched both QMP colour samples exactly. Firefox reproduced
+both bands through WebRTC within four RGB levels per channel. Firefox and
+a GStreamer client using the restricted PipeWire remote both captured the
+covered window. The gate checks that the node and stop control disappear
+after teardown. [Repeat the portal qualification](../tests/qemu/session/README.md#headless-portal-qualification)
 
 ## 7. Share settings, appearance and accessibility
 

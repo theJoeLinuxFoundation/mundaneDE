@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=Portal test handler
+Exec=/usr/bin/python3 /tmp/mundane-portal-test/uri_handler.py %u
+Type=Application
+MimeType=x-scheme-handler/mundane-portal-test;

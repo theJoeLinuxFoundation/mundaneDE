@@ -3,6 +3,7 @@
 from pathlib import Path
 import argparse
 import json
+import hashlib
 import shlex
 import shutil
 import time
@@ -279,11 +280,10 @@ print(
     flush=True,
 )
 
-# A D-Bus app owns a real tray item, notification action and a mock M6 share.
+# A D-Bus app owns a real tray item and notification action.
 launch("python3 /tmp/mundane-shell-test/shell_bus_fixture.py", work + "/bus.log")
 for control, event in [
     ("Tray test", "tray activated"),
-    ("Stop sharing Virtual-1", "share stopped"),
     ("Open review", "notification action"),
 ]:
     click(control)
@@ -327,9 +327,7 @@ wait("keyboard probe focused", lambda: "key a" in logtext())
 g.key("volumeup")
 keys("b")
 wait("volume OSD kept focus", lambda: "key b" in logtext())
-print(
-    "Tray activation, share stop, notification action and OSD focus passed", flush=True
-)
+print("Tray activation, notification action and OSD focus passed", flush=True)
 
 force_output(2, True)
 time.sleep(0.5)
@@ -422,6 +420,7 @@ try:
     publish(snapshot(1))
     restart_panel()
     stage = {
+        "id": "sha256:" + hashlib.sha256(work.encode()).hexdigest(),
         "install": 2,
         "remove": 0,
         "summary": "2 to install or upgrade, 0 to remove",

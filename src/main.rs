@@ -1,5 +1,6 @@
 mod animation;
 mod backend;
+mod capture;
 mod config;
 mod cursor;
 mod focus;

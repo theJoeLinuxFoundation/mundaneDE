@@ -15,6 +15,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gtk4LayerShell", "1.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Gtk4LayerShell as Layer
 from bus import Services, Shares
+from portals import CapturePortals
 from bluetooth import Bluetooth
 from devices import command, devices
 from upgrades import UpgradeNotices
@@ -132,6 +133,7 @@ class Panel:
         self.monitors = self.display.get_monitors()
         self.monitors.connect("items-changed", lambda *_: self.outputs_changed())
         self.outputs_changed()
+        self.portals = CapturePortals(self)
         GLib.io_add_watch(
             self.channel.fileno(), GLib.PRIORITY_DEFAULT, GLib.IO_IN, self.receive
         )
@@ -265,6 +267,10 @@ class Panel:
                     first = icons.get_first_child()
                     if first:
                         first.grab_focus()
+        elif "locked" in data:
+            self.portals.locked = data["locked"]
+            if self.portals.locked:
+                self.portals.cancel_all()
         elif data.get("resume"):
             self.poll_dave()
         elif "osd" in data:
@@ -345,6 +351,20 @@ class Panel:
                 tray.append(b)
         return False
 
+    def capture_chooser(self, heading, verb, choices, accept, cancel):
+        box = self.open(next(iter(self.outputs)), "capture")
+        box.append(Gtk.Label(label=heading, wrap=True))
+        rows = vbox()
+        box.append(scrolled(rows, 200))
+        for choice in choices:
+            rows.append(
+                button(verb + " " + choice[2], lambda choice=choice: accept(*choice))
+            )
+        deny = button("Cancel", cancel)
+        box.append(deny)
+        self.menu.present()
+        deny.grab_focus()
+
     def dismiss(self):
         if self.menu is not None:
             if self.page == "pairing":
@@ -352,6 +372,8 @@ class Panel:
             old, self.menu = self.menu, None
             self.page = None
             old.destroy()
+            if hasattr(self, "portals") and self.portals.choosing:
+                self.portals.finish(self.portals.choosing, 1)
 
     def open(self, m, title, right=False):
         self.dismiss()

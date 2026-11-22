@@ -629,6 +629,7 @@ impl DrmBackend {
             return;
         }
         state.import_buffers(&mut self.renderer);
+        state.copy_capture_frames(&mut self.renderer);
         if let Some(t) = &self.trial {
             if Instant::now() >= t.deadline {
                 if let Err(e) = self.control(state, super::output_control::Command::Revert) {

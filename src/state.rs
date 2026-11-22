@@ -79,6 +79,7 @@ impl ClientData for ClientState {
 }
 
 pub struct State {
+    pub capture: crate::capture::Capture,
     pub desktop: crate::shell::desktop::Desktop,
     pub display_handle: DisplayHandle,
     pub client_exit: calloop::ping::Ping,
@@ -204,6 +205,7 @@ impl State {
         }).map_err(|e|anyhow::anyhow!("register client exit notification: {e}"))?;
 
         Ok(Self {
+            capture: crate::capture::Capture::new(dh),
             desktop: crate::shell::desktop::Desktop::new(dh,handle.clone()),
             display_handle: dh.clone(),
             client_exit,

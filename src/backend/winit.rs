@@ -157,6 +157,7 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
     let mut sequence = 0;
     event_loop.run(None, &mut state, |state| {
         state.import_buffers(backend.renderer());
+        state.copy_capture_frames(backend.renderer());
         let now = Instant::now();
         let active = state.animation.has_active_animations();
         if (active || generation != state.generation) && now >= deadline {

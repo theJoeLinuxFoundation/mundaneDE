@@ -94,6 +94,7 @@ impl State {
     }
 
     pub fn remove_head(&mut self, head: Head) {
+        self.revoke_capture(Some(&crate::capture::Source::Output(head.output.name())));
         self.desktop.lock.covered.remove(&head.output);
         self.desktop.presented.remove(&head.output);
         self.desktop.lock.surfaces.remove(&head.output);

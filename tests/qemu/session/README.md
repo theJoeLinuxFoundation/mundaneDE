@@ -86,11 +86,18 @@ The guest has no network interface or host device passthrough.
 The reference x86 host supplies KVM, QEMU with GTK display support, OVMF,
 rustup stable and the compositor and Settings build dependencies. Install
 libseat, GTK 4 layer-shell and its GI typelib, binutils, curl and bsdtar.
-The helper uses installed swaylock and the interim polkit-gnome agent when
-available. Otherwise it extracts the two pinned, SHA-256-checked binaries
+The helper uses installed grim, swaylock and the interim polkit-gnome agent when
+available. Otherwise it extracts pinned, SHA-256-checked binaries
 from the Arch package archive into the test cache. Their PAM conversation,
 libraries and services run inside joe. Distribution packages can select
 another agent through `MUNDANE_POLKIT_AGENT` until milestone 7.
+
+The harness builds xdg-desktop-portal-wlr 0.9.0 from a checksum-verified
+release source tree in its cache. The host needs a C compiler, pkg-config,
+the Wayland scanner and protocols, libinih, GBM, libdrm, PipeWire and systemd
+development files, plus libjpeg.so.8 for grim. Use Meson and Ninja, or uvx
+to run the pinned build tools. In the guest, media and permissions run
+against joe’s own PipeWire, WirePlumber and desktop portal frontend.
 
 ### Headless shell qualification
 
@@ -109,7 +116,7 @@ python3 tests/qemu/session/guest.py "$MUNDANE_TRY_DIR" qmp system_powerdown
 QMP captures the actual scanouts and delivers virtual seat input. Guest AT-SPI
 activates named controls. The gate exercises Start, desktop files, server-side
 window buttons, workspace moves, panel restart, app notifications, a
-StatusNotifierItem, the portal stop control, virtual Wi-Fi and audio devices,
+StatusNotifierItem, virtual Wi-Fi and audio devices,
 three locked displays, locker loss, wrong and correct passwords and S3.
 The beta1 image predates dave 0.4.0-r3. The panel reads schema-1 fixtures
 through its normal unprivileged command, including repeated polls and shell
@@ -122,3 +129,24 @@ runtime=$(mktemp -d)
 env -i HOME="$runtime" PATH=/usr/bin:/bin XDG_RUNTIME_DIR="$runtime" \
   dbus-run-session -- python3 tests/qemu/session/device_checks.py
 ```
+
+
+### Headless portal qualification
+
+Boot a dedicated overlay from the frozen beta1 image. Run from the repository
+root. The two virtual displays, browser profile, PipeWire graph and D-Bus
+services used for capture are all inside the guest.
+
+```sh
+export MUNDANE_TRY_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/mundane-try/portal-qualification"
+./tests/try-mundane.sh --headless
+python3 tests/qemu/session/qualify_portals.py "$MUNDANE_TRY_DIR"
+python3 tests/qemu/session/guest.py "$MUNDANE_TRY_DIR" qmp system_powerdown
+```
+
+The gate compares a portal PNG with QMP scanout samples and checks the
+decoded Firefox video against two known colour bands. A contrasting window
+covers the shared window on the first display. Stop, unplug, browser exit
+and lock must remove the PipeWire node and the shell indicator. The gate
+also exercises screenshot denial, the GTK file chooser, the preferred URI
+handler and a round trip from a shell notification button to its caller.

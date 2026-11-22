@@ -21,7 +21,7 @@ impl State {
         let layout = w.user_data().get::<Layout>().unwrap();
         let geometry = self.space.element_geometry(&w);
         let size = self.work_area(&w).size;
-        let full = self.window_bounds(&w).size;
+        let default_full = self.window_bounds(&w).size;
         surface.with_pending_state(|s| {
             if enabled {
                 s.states.set(flag);
@@ -33,7 +33,12 @@ impl State {
                     layout.normal.set(geometry);
                 }
                 s.size = Some(if s.states.contains(Flag::Fullscreen) {
-                    full
+                    s.fullscreen_output
+                        .as_ref()
+                        .and_then(smithay::output::Output::from_resource)
+                        .and_then(|o| self.space.output_geometry(&o))
+                        .map(|g| g.size)
+                        .unwrap_or(default_full)
                 } else {
                     size
                 });
@@ -89,12 +94,22 @@ impl State {
         };
         let flags = w.toplevel().unwrap().current_state().states;
         let expanded = flags.contains(Flag::Maximized) || flags.contains(Flag::Fullscreen);
-        if layout.expanded.replace(expanded) == expanded {
+        let full_bounds = w
+            .toplevel()
+            .unwrap()
+            .current_state()
+            .fullscreen_output
+            .as_ref()
+            .and_then(smithay::output::Output::from_resource)
+            .and_then(|o| self.space.output_geometry(&o));
+        let relocating = flags.contains(Flag::Fullscreen)
+            && full_bounds.is_some_and(|g| self.space.element_location(w) != Some(g.loc));
+        if layout.expanded.replace(expanded) == expanded && !relocating {
             return;
         }
         let position = if expanded {
             if flags.contains(Flag::Fullscreen) {
-                self.window_bounds(w).loc
+                full_bounds.unwrap_or_else(|| self.window_bounds(w)).loc
             } else {
                 self.work_area(w).loc
             }

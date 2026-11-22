@@ -27,11 +27,13 @@ pub enum Role {
     Application,
     Shell,
     Locker,
+    Capture,
+    Screenshot,
     InputMethod,
     ClipboardManager,
 }
 
-pub(super) fn role(client: &Client) -> Role {
+pub(crate) fn role(client: &Client) -> Role {
     client
         .get_data::<ClientState>()
         .map(|data| data.role)
@@ -180,11 +182,8 @@ impl State {
                     if state.desktop.panel.as_ref().map(|c| c.id()) != Some(pid) {
                         return Ok(calloop::PostAction::Remove);
                     }
-                    let mut buf = [0; 1024];
-                    if let Ok(n) = sock.recv(&mut buf) {
-                        if let Ok(s) = std::str::from_utf8(&buf[..n]) {
-                            state.shell_command(s);
-                        }
+                    if let Err(error) = state.panel_datagram(sock) {
+                        tracing::warn!(%error, "shell control message");
                     }
                     Ok(calloop::PostAction::Continue)
                 },
@@ -193,6 +192,9 @@ impl State {
         self.desktop.panel_source = Some(token);
         self.desktop.channel = Some(server);
         self.desktop.panel = Some(child);
+        if self.desktop.lock.active {
+            self.shell_message(&serde_json::json!({"locked": true}));
+        }
         Ok(())
     }
     pub fn supervise_shell(&mut self) -> anyhow::Result<()> {
@@ -210,6 +212,7 @@ impl State {
                         .as_mut()
                         .is_none_or(|c| !matches!(c.try_wait(), Ok(None)));
                     if dead {
+                        state.revoke_capture(None);
                         if let Err(e) = state.start_panel() {
                             tracing::error!(%e,"restart panel");
                         }

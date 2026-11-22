@@ -7,7 +7,7 @@ crossfades and a separate settings application. GDM, GNOME Shell and Mutter
 still provide the distribution's desktop session.
 
 Milestones 1–3 pass in isolated nested sessions and a two-output QEMU DRM guest.
-Milestones 4 and 5 exercise the optional GDM session, desktop shell and PAM lock in headless joe Linux x86 guests. Try the desktop with `./tests/try-mundane.sh`. The remaining milestones each end with a user-visible
+Milestones 4–6 exercise the optional GDM session, desktop shell, PAM lock and desktop portals in headless joe Linux x86 guests. Try the desktop with `./tests/try-mundane.sh`. The remaining milestones each end with a user-visible
 acceptance test. GTK4/libadwaita applications and Firefox are compatibility targets
 throughout the transition. The desktop will keep joe’s familiar layout and report
 dave upgrade and recovery status itself. [Public announcement](https://joelinux.io/news/mundanede/)
@@ -19,7 +19,7 @@ dave upgrade and recovery status itself. [Public announcement](https://joelinux.
 | [3. Outputs and animation](tests/qemu/README.md#automated-output-test) | Drag a window between 100% and 150% displays, unplug one and keep the window reachable. Check that magnetic snapping feels unobtrusive and still works with reduced motion. Meet the frame and idle budgets on the recorded reference hardware. |
 | [4. Login and logout](tests/qemu/session/README.md) | Select mundaneDE in GDM, switch VTs, suspend, resume and log out twice. Each login gets working seat devices and a fresh shell environment. GNOME remains selectable. |
 | [5. Desktop shell and lock](tests/qemu/session/README.md#try-the-desktop) | Use the bottom taskbar, Start menu, tray and desktop icons. Minimize, restore and maximize a window using its buttons. Verify the shell reports a prepared dave upgrade awaiting restart and an automatic return to the previous system after a failed upgrade. Lock both displays and disconnect the locker. Every display stays covered until authenticated recovery. |
-| 6. Desktop portals | In Firefox, choose a display, share it over PipeWire and stop sharing. Cancelled requests return no stream. A screenshot of a known scene matches that scene. |
+| [6. Desktop portals](tests/qemu/session/README.md#headless-portal-qualification) | Share one display or one covered window in Firefox. Verify its pixels, the taskbar stop control and stream teardown on lock, unplug or browser exit. Approve and deny screenshots, select a file, open a URI and activate a notification. |
 | 7. Settings and accessibility | Change appearance in Settings and see it update in GTK and GPUI. Use the launcher and a settings dialog by keyboard and with Orca. Authenticate a protected change in the shell’s polkit dialog and cancel one by locking. Reduced motion takes effect on the next frame. |
 | 8. Default-session qualification | Qualify clean and upgraded x86 images, including app workflows, lock/resume, upgrade recovery, the GNOME fallback and joe’s tests under security logging and enforcement. After automation passes, the maintainer tests the candidate on a real machine using the [manual checklist](docs/manual-test.md). Changing the default requires their sign-off. |
 

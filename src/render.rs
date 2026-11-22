@@ -245,7 +245,7 @@ pub fn collect_elements(
 
 /// Build the cursor render element(s): a client-provided surface if set, otherwise the
 /// built-in arrow, positioned in output-local coordinates.
-fn cursor_elements(
+pub(crate) fn cursor_elements(
     renderer: &mut GlesRenderer,
     state: &State,
     pos: smithay::utils::Point<f64, smithay::utils::Logical>,

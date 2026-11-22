@@ -7,7 +7,7 @@ release it to see a damped spring move it into place.
 The compositor runs in a host window or directly on multiple DRM/KMS outputs.
 It runs native Wayland applications and rootless X11 windows, negotiates
 client-side decorations and supports IBus text composition. The GPUI settings panel is a separate application.
-It supports mixed refresh rates, fractional scaling and hotplug. The GDM session includes a bottom taskbar with Start, a tray, desktop icons and a PAM lock screen.
+It supports mixed refresh rates, fractional scaling and hotplug. The GDM session includes a bottom taskbar with Start, a tray, desktop icons and a PAM lock screen. Its desktop portals let Firefox share a display or a single window over PipeWire. The taskbar names each active share and lets you stop it.
 The [roadmap](ROADMAP.md) describes when mundaneDE can become the default joe Linux session.
 
 ## Build and run in a window

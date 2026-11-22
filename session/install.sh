@@ -16,3 +16,5 @@ install -Dm755 "$here/mundane-panel" "$dest$prefix/bin/mundane-panel"
 for script in "$here"/shell/*.py; do
     install -Dm644 "$script" "$dest$prefix/share/mundane/shell/$(basename "$script")"
 done
+
+install -Dm644 "$here/mundane.portal" "$dest$prefix/share/xdg-desktop-portal/portals/mundane.portal"

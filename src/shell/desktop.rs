@@ -136,6 +136,7 @@ impl State {
     }
     pub fn forget_task(&mut self, w: &Window) {
         if let Some(task) = self.desktop.tasks.remove(w) {
+            self.revoke_capture(Some(&crate::capture::Source::Window(task.handle.identifier())));
             self.desktop.list.remove_toplevel(&task.handle);
         }
     }

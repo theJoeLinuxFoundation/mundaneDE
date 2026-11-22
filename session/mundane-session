@@ -227,15 +227,24 @@ def session():
                     check=True,
                 )
                 channel.sendall(b"1")
-                # A cancelled D-Bus activation at logout can remain pending
-                # in the per-user bus. Start both owners on the new display.
+                subprocess.run(
+                    [
+                        "gdbus",
+                        "wait",
+                        "--session",
+                        "--timeout=15",
+                        "org.freedesktop.impl.portal.desktop.mundane",
+                    ],
+                    check=True,
+                )
+                # GTK initialization can activate the frontend before the panel owns
+                # the capture backend. Rediscover the backends on the new display.
                 subprocess.run(
                     [
                         "systemctl",
                         "--user",
-                        "start",
+                        "restart",
                         "--no-block",
-                        "xdg-desktop-portal-gtk.service",
                         "xdg-desktop-portal.service",
                     ],
                     check=True,

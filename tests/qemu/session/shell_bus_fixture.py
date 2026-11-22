@@ -1,15 +1,10 @@
-"""A tray app and an active portal session on the isolated guest's user bus."""
+"""A tray app and an actionable notification on the isolated guest's user bus."""
 
 from pathlib import Path
 from gi.repository import Gio, GLib
 
 runtime = Path(GLib.get_user_runtime_dir())
 bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-portal = "org.freedesktop.impl.portal.desktop.mundane"
-root = "/org/freedesktop/portal/desktop"
-session = root + "/session/shell_test/stream"
-marker = "org.joelinux.mundane.ActiveShare"
-active = True
 
 
 def record(message):
@@ -18,26 +13,7 @@ def record(message):
 
 
 def call(_bus, sender, path, iface, method, args, response):
-    global active
-    if method == "GetManagedObjects":
-        objects = (
-            {session: {marker: {"Source": GLib.Variant("s", "Virtual-1")}}}
-            if active
-            else {}
-        )
-        response.return_value(GLib.Variant("(a{oa{sa{sv}}})", (objects,)))
-    elif method == "Close":
-        active = False
-        record("share stopped")
-        bus.emit_signal(
-            None,
-            root,
-            "org.freedesktop.DBus.ObjectManager",
-            "InterfacesRemoved",
-            GLib.Variant("(oas)", (session, [marker])),
-        )
-        response.return_value(None)
-    elif method == "Activate":
+    if method == "Activate":
         record("tray activated")
         response.return_value(None)
 
@@ -63,16 +39,6 @@ export(
 <property name="Status" type="s" access="read"/><method name="Activate"><arg type="i"/><arg type="i"/></method></interface>""",
     prop,
 )
-export(
-    root,
-    """<interface name="org.freedesktop.DBus.ObjectManager">
-<method name="GetManagedObjects"><arg type="a{oa{sa{sv}}}" direction="out"/></method></interface>""",
-)
-export(
-    session,
-    '<interface name="org.freedesktop.impl.portal.Session"><method name="Close"/></interface>',
-)
-Gio.bus_own_name_on_connection(bus, portal, Gio.BusNameOwnerFlags.NONE, None, None)
 
 
 def registered(_bus, _name, _owner):
