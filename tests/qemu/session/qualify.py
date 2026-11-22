@@ -108,6 +108,16 @@ def login(index):
         env["XDG_SESSION_TYPE"],
         env["XDG_SESSION_ID"],
     ) == ("mundane", "mundane", "wayland", sid)
+    wait(
+        "public portal and GTK backend on this login",
+        lambda: (
+            as_joe(
+                "systemctl --user is-active xdg-desktop-portal.service xdg-desktop-portal-gtk.service || :"
+            ).splitlines()
+            == ["active", "active"]
+        ),
+        30,
+    )
     name = env["WAYLAND_DISPLAY"]
     assert re.fullmatch("wayland-[0-9]+", name)
     socket = f"{runtime}/{name}"

@@ -289,6 +289,17 @@ fn enter(
             "org.freedesktop.impl.portal.desktop.mundane",
         ],
     )?;
+    // A rapid logout can cancel a D-Bus activation while it is still pending
+    // in the user bus. Queue the installed GTK backend for this display too.
+    run(
+        "systemctl",
+        &[
+            "--user",
+            "start",
+            "--no-block",
+            "xdg-desktop-portal-gtk.service",
+        ],
+    )?;
     run(
         "systemctl",
         &[
