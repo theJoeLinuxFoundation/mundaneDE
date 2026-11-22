@@ -47,13 +47,14 @@ def main():
         Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")).resolve()
         / "mundane-try"
     )
-    desktop = (cache / "desktop").resolve()
     run = Path(
         os.environ.get(
             "MUNDANE_TRY_DIR", cache / ("qualification" if args.headless else "desktop")
         )
     ).resolve()
-    if args.headless and (run == desktop or desktop in run.parents):
+    if args.headless and any(
+        run.is_relative_to(cache / name) for name in ("desktop", "hand-test")
+    ):
         parser.exit(
             2,
             "Headless qualification needs its own MUNDANE_TRY_DIR outside the desktop hand-test directory.\n",
@@ -65,39 +66,69 @@ def main():
     if args.image:
         flags.extend(["--image", str(args.image.resolve())])
 
-    def launch(root):
+    def launch(root, label):
         subprocess.run(
-            [sys.executable, root / "tests/qemu/session/try_session.py", *flags],
+            [
+                sys.executable,
+                Path(__file__).with_name("try_session.py"),
+                "--source",
+                root,
+                "--build-label",
+                label,
+                *flags,
+            ],
             env=env,
             check=True,
         )
 
+    head = git("rev-parse", "HEAD")
     if args.from_working_tree:
-        print(
-            f"Building working tree at {git('rev-parse', 'HEAD')} ({'modified' if dirty else 'clean'}). Guest: {run}",
-            flush=True,
-        )
-        launch(ROOT)
+        label = f"{head} (working tree, {'modified' if dirty else 'clean'})"
+        print(f"Building mundaneDE {label}. Guest: {run}", flush=True)
+        launch(ROOT, label)
         return
-    if not args.revision:
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                ROOT,
-                "fetch",
-                "--no-tags",
-                "origin",
-                "refs/heads/main:refs/remotes/origin/main",
-            ],
-            check=True,
+
+    # Refresh both namespaces so a stale branch or deleted remote tag cannot
+    # make an unpublished commit eligible. Keep local tags independent.
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            ROOT,
+            "fetch",
+            "--prune",
+            "--no-tags",
+            "origin",
+            "+refs/heads/*:refs/remotes/origin/*",
+            "+refs/tags/*:refs/mundane-try/origin-tags/*",
+        ],
+        check=True,
+    )
+
+    def require_pushed(commit):
+        refs = git(
+            "for-each-ref",
+            "--count=1",
+            "--format=%(refname)",
+            "--contains=" + commit,
+            "refs/remotes/origin/",
+            "refs/mundane-try/origin-tags/",
         )
+        if not refs:
+            parser.exit(
+                2,
+                f"{commit} has not been pushed to an origin branch or tag. Push it or explicitly pass --from-working-tree.\n",
+            )
+
+    require_pushed(head)
     revision = git(
         "rev-parse",
         "--verify",
         "--end-of-options",
         (args.revision or "refs/remotes/origin/main") + "^{commit}",
     )
+    if revision != head:
+        require_pushed(revision)
     print(f"Building committed mundaneDE {revision}. Guest: {run}", flush=True)
     builds = cache / "build" / hashlib.sha256(os.fsencode(run)).hexdigest()[:20]
     builds.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -119,7 +150,7 @@ def main():
             target = builds / ("target-" + name)
             target.mkdir(exist_ok=True)
             (workspace / "target").symlink_to(target, target_is_directory=True)
-        launch(root)
+        launch(root, revision)
 
 
 if __name__ == "__main__":

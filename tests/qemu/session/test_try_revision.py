@@ -40,7 +40,15 @@ class CommittedLauncher(unittest.TestCase):
             (origin / "settings-panel").mkdir()
             (origin / "settings-panel/Cargo.toml").touch()
             (driver / "try_session.py").write_text(
-                'from pathlib import Path\nimport os\nprint("guest",os.environ["MUNDANE_TRY_DIR"],Path(__file__).resolve().parents[3].joinpath("message").read_text())\n'
+                """from pathlib import Path
+import argparse, os
+p = argparse.ArgumentParser()
+p.add_argument('--source', type=Path)
+p.add_argument('--build-label')
+args, _ = p.parse_known_args()
+print('title', args.build_label)
+print('guest', os.environ['MUNDANE_TRY_DIR'], (args.source/'message').read_text())
+"""
             )
             (origin / "message").write_text("one")
             run(origin, "git", "add", ".")
@@ -65,6 +73,44 @@ class CommittedLauncher(unittest.TestCase):
                 run(local, *launcher, "--from-working-tree")
                 .stdout.strip()
                 .endswith(" unfinished")
+            )
+            run(local, "git", "commit", "-am", "local only")
+            unpublished = run(local, "git", "rev-parse", "HEAD").stdout.strip()
+            for flags in ([], ["--revision", first]):
+                self.assertEqual(
+                    run(local, *launcher, *flags, check=False).returncode, 2
+                )
+            opted_in = run(local, *launcher, "--from-working-tree").stdout
+            self.assertIn("title " + unpublished + " (working tree, clean)", opted_in)
+            run(local, "git", "switch", "--detach", first)
+            self.assertEqual(
+                run(
+                    local, *launcher, "--revision", unpublished, check=False
+                ).returncode,
+                2,
+            )
+            self.assertIn("title " + latest, run(local, *launcher).stdout)
+            run(local, "git", "push", "origin", unpublished + ":refs/heads/candidate")
+            self.assertIn(
+                "title " + unpublished,
+                run(local, *launcher, "--revision", unpublished).stdout,
+            )
+            run(local, "git", "push", "origin", "--delete", "candidate")
+            self.assertEqual(
+                run(
+                    local, *launcher, "--revision", unpublished, check=False
+                ).returncode,
+                2,
+            )
+            run(local, "git", "tag", "-a", "review", unpublished, "-m", "review")
+            run(local, "git", "push", "origin", "refs/tags/review")
+            self.assertIn(
+                "title " + unpublished,
+                run(local, *launcher, "--revision", "review").stdout,
+            )
+            run(local, "git", "push", "origin", ":refs/tags/review")
+            self.assertEqual(
+                run(local, *launcher, "--revision", "review", check=False).returncode, 2
             )
             del env["MUNDANE_TRY_DIR"]
             self.assertIn(

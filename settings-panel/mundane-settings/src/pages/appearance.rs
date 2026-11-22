@@ -217,6 +217,10 @@ impl Render for AppearancePage {
         };
         use mundane_ui::ControlRole;
         let prefs = theme::current();
+        let palette = mundane_ui::Theme::current(cx);
+        let dark = !palette.light;
+        let contrast = palette.high_contrast;
+        let reduced = cx.reduce_motion();
         let mut form = div()
             .id("appearance-scroll")
             .overflow_y_scroll()
@@ -235,33 +239,33 @@ impl Render for AppearancePage {
             (
                 "dark",
                 "Dark appearance",
-                prefs.dark.to_string(),
+                dark.to_string(),
                 "org.gnome.desktop.interface",
                 "color-scheme",
-                if prefs.dark {
+                if dark {
                     "prefer-light"
                 } else {
                     "prefer-dark"
                 },
-                Some(prefs.dark),
+                Some(dark),
             ),
             (
                 "contrast",
                 "High contrast",
-                prefs.contrast.to_string(),
+                contrast.to_string(),
                 "org.gnome.desktop.a11y.interface",
                 "high-contrast",
-                if prefs.contrast { "false" } else { "true" },
-                Some(prefs.contrast),
+                if contrast { "false" } else { "true" },
+                Some(contrast),
             ),
             (
                 "motion",
                 "Reduce motion",
-                prefs.reduced.to_string(),
+                reduced.to_string(),
                 "org.gnome.desktop.interface",
                 "enable-animations",
-                if prefs.reduced { "true" } else { "false" },
-                Some(prefs.reduced),
+                if reduced { "true" } else { "false" },
+                Some(reduced),
             ),
             (
                 "accent",

@@ -102,9 +102,7 @@ nix-build -E 'with import <nixpkgs> {}; callPackage ./settings-panel {}'
 ## Bumping the GPUI pin
 
 Settings pins Zed `f4fe0be1f8c7974db07e01c5cd05bee0cf4eb8d9`, the upstream
-AccessKit revision selected with mundane-apps and gpui-shades. The existing
-`gpui_platform::application()` constructor uses the Linux bridge. Settings
-control semantics and screen-reader acceptance belong to [milestone 7](../docs/plan.md#7-share-settings-appearance-and-accessibility).
+AccessKit revision selected with mundane-apps and gpui-shades. Settings starts through `mundane_ui::run`, which installs the live theme and enables the Linux bridge. The headless screen-reader checks are part of [milestone 7](../docs/plan.md#7-share-settings-appearance-and-accessibility).
 
 1. Set both `gpui` and `gpui_platform` in the workspace manifest to the agreed full revision. Preserve their platform features.
 2. From `settings-panel/`, refresh and review `Cargo.lock`. The AccessKit bump needed a workspace `cargo update` to resolve the futures and WebAssembly dependencies together.

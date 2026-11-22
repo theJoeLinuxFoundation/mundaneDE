@@ -7,8 +7,10 @@ crossfades and a separate settings application. GDM, GNOME Shell and Mutter
 still provide the distribution's desktop session.
 
 Milestones 1–3 pass in isolated nested sessions and a two-output QEMU DRM guest.
-Milestones 4–6 exercise the optional GDM session, desktop shell, PAM lock and desktop portals in headless joe Linux x86 guests. Try the desktop with `./tests/try-mundane.sh`. The remaining milestones each end with a user-visible
-acceptance test. GTK4/libadwaita applications and Firefox are compatibility targets
+Milestones 4–7 pass in headless joe Linux x86 guests. They cover GDM, the shell,
+PAM lock, portals, live appearance in GTK and the suite Terminal, and Orca speech.
+Try the desktop with `./tests/try-mundane.sh`. Milestone 8 qualifies the release
+candidate and ends with the maintainer’s real-machine sign-off. GTK4/libadwaita applications and Firefox are compatibility targets
 throughout the transition. The desktop will keep joe’s familiar layout and report
 dave upgrade and recovery status itself. [Public announcement](https://joelinux.io/news/mundanede/)
 

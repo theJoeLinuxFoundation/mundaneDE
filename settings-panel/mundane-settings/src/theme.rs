@@ -10,10 +10,6 @@ use zbus::{
 
 #[derive(Clone)]
 pub struct Appearance {
-    pub palette: Theme,
-    pub dark: bool,
-    pub contrast: bool,
-    pub reduced: bool,
     pub scale: f64,
     pub font: String,
     pub points: f64,
@@ -23,10 +19,6 @@ pub struct Appearance {
 impl Default for Appearance {
     fn default() -> Self {
         Self {
-            palette: Theme::DARK,
-            dark: true,
-            contrast: false,
-            reduced: false,
             scale: 1.,
             font: "Sans".into(),
             points: 12.,
@@ -35,60 +27,27 @@ impl Default for Appearance {
     }
 }
 
-thread_local! {static CURRENT:RefCell<Appearance> = RefCell::new(Appearance::default());}
+thread_local! {
+    static CURRENT: RefCell<Appearance> = RefCell::new(Appearance::default());
+    // Stateless row builders use the same palette as the shared GPUI controls.
+    static PALETTE: std::cell::Cell<Theme> = const { std::cell::Cell::new(Theme::DARK) };
+}
 pub fn current() -> Appearance {
     CURRENT.with_borrow(Clone::clone)
 }
 pub fn palette() -> Theme {
-    CURRENT.with_borrow(|p| p.palette)
+    PALETTE.get()
 }
 
 type Settings = HashMap<String, HashMap<String, OwnedValue>>;
 fn read(proxy: &Proxy) -> zbus::Result<Appearance> {
-    let all: Settings = proxy.call(
-        "ReadAll",
-        &(vec![
-            "org.freedesktop.appearance",
-            "org.gnome.desktop.interface",
-        ],),
-    )?;
-    let value = |group: &str, key: &str| all.get(group).and_then(|values| values.get(key));
-    let appearance = "org.freedesktop.appearance";
     let desktop = "org.gnome.desktop.interface";
-    let flag = |key: &str| value(appearance, key).and_then(|v| u32::try_from(v).ok()) == Some(1);
-    let dark = flag("color-scheme");
-    let contrast = flag("contrast");
-    let mut palette = if contrast {
-        Theme::HIGH_CONTRAST
-    } else if dark {
-        Theme::DARK
-    } else {
-        Theme {
-            surface: 0xf9faf8,
-            panel: 0xffffff,
-            text: 0x17201e,
-            secondary: 0x394a41,
-            border: 0x738279,
-            focus: 0x175db1,
-            selection: 0xc4dbeb,
-        }
-    };
-    if !contrast {
-        if let Some((r, g, b)) = value(appearance, "accent-color")
-            .and_then(|v| v.try_clone().ok())
-            .and_then(|v| <(f64, f64, f64)>::try_from(v).ok())
-        {
-            if [r, g, b].iter().all(|c| (0.0..=1.0).contains(c)) {
-                palette.focus = ((r * 255.).round() as u32) << 16
-                    | ((g * 255.).round() as u32) << 8
-                    | (b * 255.).round() as u32;
-            }
-        }
-    }
-    let scale = value(desktop, "text-scaling-factor")
+    let all: Settings = proxy.call("ReadAll", &([desktop].as_slice(),))?;
+    let value = |key: &str| all.get(desktop).and_then(|values| values.get(key));
+    let scale = value("text-scaling-factor")
         .and_then(|v| f64::try_from(v).ok())
         .unwrap_or(1.);
-    let font = value(desktop, "font-name")
+    let font = value("font-name")
         .and_then(|v| <&str>::try_from(v).ok())
         .unwrap_or("Sans 11");
     let (family, points) = font
@@ -102,20 +61,19 @@ fn read(proxy: &Proxy) -> zbus::Result<Appearance> {
         .unwrap_or((font, 12.));
     let font = family.to_owned();
     Ok(Appearance {
-        palette,
-        dark,
-        contrast,
-        reduced: flag("reduced-motion"),
         scale,
         font,
         points,
-        accent: value(desktop, "accent-color")
+        accent: value("accent-color")
             .and_then(|v| <&str>::try_from(v).ok())
             .unwrap_or("blue")
             .to_owned(),
     })
 }
 pub fn watch(cx: &mut App) {
+    PALETTE.set(Theme::current(cx));
+    cx.observe_global::<Theme>(|cx| PALETTE.set(Theme::current(cx)))
+        .detach();
     let (tx, rx) = async_channel::bounded(8);
     std::thread::spawn(move || {
         let run = || -> zbus::Result<()> {
@@ -126,7 +84,10 @@ pub fn watch(cx: &mut App) {
                 "/org/freedesktop/portal/desktop",
                 "org.freedesktop.portal.Settings",
             )?;
-            let mut changes = proxy.receive_signal("SettingChanged")?;
+            let mut changes = proxy.receive_signal_with_args(
+                "SettingChanged",
+                &[(0, "org.gnome.desktop.interface")],
+            )?;
             loop {
                 if tx.send_blocking(read(&proxy)?).is_err() || changes.next().is_none() {
                     return Ok(());

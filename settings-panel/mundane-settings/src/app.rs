@@ -10,7 +10,6 @@ use gpui::{
     div, px, rgb, size, App as GpuiApp, AppContext as _, Bounds, Context, Entity, IntoElement,
     ParentElement, Render, Styled, Window, WindowBounds, WindowKind, WindowOptions,
 };
-use gpui_platform::application;
 
 pub struct App {
     pub selected: Page,
@@ -72,7 +71,7 @@ impl Render for App {
 
 /// Open the main window and run the event loop.
 pub fn run(initial: Page) {
-    application().run(move |cx: &mut GpuiApp| {
+    mundane_ui::run(move |cx: &mut GpuiApp| {
         theme::watch(cx);
         let bounds = Bounds::centered(None, size(px(1100.), px(700.)), cx);
         let opts = WindowOptions {

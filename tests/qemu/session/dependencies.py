@@ -190,8 +190,8 @@ if ! test -x /usr/bin/orca; then
     for archive in /mnt/python-dasbus-1.7-5-any.pkg.tar.zst /mnt/orca-51.1-1-any.pkg.tar.zst; do
         tar -C / -xf "$archive" usr
     done
-    glib-compile-schemas /usr/share/glib-2.0/schemas
 fi
+glib-compile-schemas /usr/share/glib-2.0/schemas
 install -Dm755 /mnt/xdg-desktop-portal-wlr /usr/local/bin/xdg-desktop-portal-wlr
 install -Dm755 /mnt/grim /usr/local/bin/grim
 install -Dm755 /mnt/libjpeg.so.8 /usr/local/lib/libjpeg.so.8

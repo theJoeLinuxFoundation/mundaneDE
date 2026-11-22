@@ -26,18 +26,28 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", type=Path)
     parser.add_argument("--echo", type=Path, required=True, help="GPUI echo example")
+    parser.add_argument(
+        "--suite-target",
+        type=Path,
+        required=True,
+        help="pinned suite build containing mundane-terminal and examples/motion",
+    )
     opts = parser.parse_args()
     g = Guest(opts.run)
+    assert g.qmp("query-display-options")["type"] == "none"
     blocks = {v["node-name"]: v["ro"] for v in g.qmp("query-named-block-nodes")}
     assert blocks["base"] and blocks["basefile"] and not blocks["layer"]
     share = g.run / "share"
     for path in [*(HERE / "accessibility").glob("*.py"), HERE / "shell_widgets.py"]:
         shutil.copy(path, share / path.name)
-    subprocess.run(
-        ["objcopy", "--strip-debug", str(opts.echo), str(share / "m7-echo")], check=True
-    )
+    for source, name in (
+        (opts.echo, "m7-echo"),
+        (opts.suite_target / "mundane-terminal", "mundane-terminal"),
+        (opts.suite_target / "examples/motion", "suite-motion"),
+    ):
+        subprocess.run(["objcopy", "--strip-debug", source, share / name], check=True)
     g.shell(
-        "mkdir -p /tmp/m7; mount -t 9p -o trans=virtio,version=9p2000.L,ro mundane /mnt; cp /mnt/*.py /mnt/m7-echo /tmp/m7/; umount /mnt; chmod 755 /tmp/m7/m7-echo; install -d -o joe -g users /home/joe/.local/share/orca"
+        "mkdir -p /tmp/m7; mount -t 9p -o trans=virtio,version=9p2000.L,ro mundane /mnt; cp /mnt/*.py /mnt/m7-echo /mnt/suite-motion /tmp/m7/; install -m755 /mnt/mundane-terminal /usr/local/bin/; umount /mnt; chmod 755 /tmp/m7/m7-echo /tmp/m7/suite-motion; install -d -o joe -g users /home/joe/.local/share/orca"
     )
     g.shell(
         "cp /tmp/m7/recording_speech.py /tmp/m7/orca-customizations.py /home/joe/.local/share/orca/"

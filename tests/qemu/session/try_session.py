@@ -12,7 +12,6 @@ import time
 from guest import Guest
 from machine import boot
 
-ROOT = Path(__file__).resolve().parents[3]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument(
     "--headless", action="store_true", help="use QMP only and leave the guest running"
@@ -22,7 +21,17 @@ parser.add_argument(
     type=Path,
     default=Path.home() / "Projects/joe-linux/build/images/joe-desktop-beta1.img",
 )
+parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parents[3])
+# Older launchers run this file directly inside a git archive.
+parser.add_argument("--build-label", default="$Format:%H$")
 args = parser.parse_args()
+if args.build_label.startswith("$"):
+    # Direct callers in a checkout use the same publication checks as the shell entry point.
+    driver = str(Path(__file__).with_name("try_revision.py"))
+    os.execv(sys.executable, [sys.executable, driver, *sys.argv[1:]])
+ROOT = args.source.resolve(strict=True)
+fixtures = ROOT / "tests/qemu/session"
+title = "mundaneDE on joe Linux — " + args.build_label
 cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
 run = Path(
     os.environ.get(
@@ -30,7 +39,10 @@ run = Path(
         cache / "mundane-try" / ("qualification" if args.headless else "desktop"),
     )
 ).resolve()
-if args.headless and run == (cache / "mundane-try/desktop").resolve():
+if args.headless and any(
+    run.is_relative_to(cache.resolve() / "mundane-try" / name)
+    for name in ("desktop", "hand-test")
+):
     parser.error("choose a dedicated directory for headless tests")
 run.mkdir(mode=0o700, exist_ok=True, parents=True)
 guard = (run / "launcher.lock").open("a")
@@ -116,7 +128,7 @@ for path in [
     settings,
     *sorted((ROOT / "session").rglob("*")),
     *(
-        Path(__file__).with_name(n)
+        fixtures / n
         for n in (
             "prepare.py",
             "dependencies.py",
@@ -137,11 +149,11 @@ print(f"Guest files in {run}", flush=True)
 if install:
     # Always stage the current checkout in an invisible boot, including on the first run.
     existing = (run / "system.qcow2").exists()
-    boot(image, run, large=True)
+    boot(image, run, large=True, title=title)
     try:
         prepare = [
             sys.executable,
-            str(Path(__file__).with_name("prepare.py")),
+            str(fixtures / "prepare.py"),
             str(run),
             "--binary",
             str(binary),
@@ -174,6 +186,7 @@ if not install or not args.headless:
         run,
         display="none" if args.headless else "gtk,show-menubar=off",
         large=True,
+        title=title,
     )
     ready()
 g.screen("desktop")

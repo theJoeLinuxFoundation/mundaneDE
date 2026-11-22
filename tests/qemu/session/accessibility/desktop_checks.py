@@ -4,6 +4,8 @@ import json
 import shlex
 import time
 
+from . import suite_checks
+
 
 def check(g, joe, launch, tree, speech, read, wait):
     widgets = "python3 -W ignore /tmp/m7/shell_widgets.py "
@@ -46,13 +48,17 @@ def check(g, joe, launch, tree, speech, read, wait):
     # An existing app and a newly mapped Settings use the same live preferences.
     native = launch("python3 /tmp/m7/style.py", "style")
     try:
-        wait("native GTK", lambda: read("gtk-style"))
+        wait(
+            "native GTK",
+            lambda: "frame Native appearance test" in tree() and read("gtk-style"),
+        )
+        suite_checks.drag_from_centre(g, 0.12, 0.35)
         pref("a11y.interface", "high-contrast", "false")
         pref("interface", "enable-animations", "true")
         pref("interface", "color-scheme", "prefer-light")
         g.key("meta_l", "comma")
         activate("Appearance")
-        wait("light GPUI paint", lambda: pixel("settings-light", "f9faf8"))
+        wait("light GPUI paint", lambda: pixel("settings-light", "f8faf8"))
         activate("Dark appearance")
         wait("dark GPUI paint", lambda: pixel("settings-dark", "17201e"))
         wait("native dark", lambda: json.loads(read("gtk-style"))["dark"])
@@ -79,19 +85,13 @@ def check(g, joe, launch, tree, speech, read, wait):
         )
         assert "pressed" in state("Reduce motion")
         activate("High contrast")
-        pref("interface", "accent-color", "purple")
+        pref("interface", "accent-color", "blue")
         wait(
-            "native accent", lambda: json.loads(read("gtk-style"))["accent"] == "purple"
+            "initial native accent",
+            lambda: json.loads(read("gtk-style"))["accent"] == "blue",
         )
-        wait(
-            "GPUI accent paint",
-            lambda: (
-                g.screen("settings-accent")
-                .split(b"\n", 3)[3]
-                .count(bytes.fromhex("9141ac"))
-                > 100
-            ),
-        )
+
+        suite_checks.check(g, joe, launch, activate, tree, read, wait)
         # Exercise the same live window across actual DRM fractional-scale changes.
         output = json.loads(joe("/usr/local/bin/mundane-de output list"))[0]
         mode = output["current"]

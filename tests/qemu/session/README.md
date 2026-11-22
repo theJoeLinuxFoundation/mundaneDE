@@ -64,7 +64,10 @@ Run this command from the repository root.
 ./tests/try-mundane.sh
 ```
 
-The launcher requires a clean checkout, fetches and prints the origin/main revision, and builds a private export. Use `--revision COMMIT` for a specific revision or `--from-working-tree` to opt into development changes. Headless trials default to a separate qualification directory. On the first start it installs the build in a
+The launcher builds a private export of freshly fetched `origin/main`. Its terminal
+output and QEMU title show the full revision. Both HEAD and any explicit
+`--revision COMMIT` must be published on an origin branch or tag. Use
+`--from-working-tree` to opt into a dirty checkout or local commits. Headless trials default to a separate qualification directory. On the first start it installs the build in a
 private qcow2 overlay, selects mundaneDE for joe through GDM and checks the
 enforcing boot headlessly. It then opens the QEMU window. The guest has eight
 KVM vCPUs, 6 GiB RAM and a 1920×1080 primary display. The test account and
@@ -163,15 +166,21 @@ The driver changes the guest's reader profile, accessibility preferences and
 display settings. It uses QMP to send keys and capture rendered frames.
 
 ```sh
+suite_rev=78540788819e4c899fa4a15df0f1d5ec1cefa938
+suite=$(mktemp -d)
+git -C "$HOME/Projects/mundane-apps" archive "$suite_rev" | tar -x -C "$suite"
+cargo +stable build --locked --manifest-path "$suite/Cargo.toml" -p mundane-terminal
+cargo +stable build --locked --manifest-path "$suite/Cargo.toml" -p mundane-ui --example motion
 cargo +stable build --locked --manifest-path settings-panel/Cargo.toml --example echo
 python3 tests/qemu/session/qualify_accessibility.py "$run" \
-    --echo settings-panel/target/debug/examples/echo
+    --echo settings-panel/target/debug/examples/echo --suite-target "$suite/target/debug"
 ```
 
 Each typing trial starts a fresh Orca input history, focuses a real GTK entry
 or mundane-ui text field, and compares AT-SPI insert offsets, final value and
 recorded speech. A second ordinary client checks directed-signal isolation.
 The desktop checks use the same GDM session for launcher and toggle speech,
-native libadwaita and GPUI colours, display rollback and a PAM-protected
+live libadwaita preferences, the suite Terminal’s rendered surface and cursor,
+the suite’s reduced-motion preview, display rollback and a PAM-protected
 timezone change. The two-identity fixture uses a separate runtime directory
 and authority bus inside the guest.

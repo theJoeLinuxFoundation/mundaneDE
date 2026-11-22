@@ -7,7 +7,7 @@ import shutil
 import subprocess
 
 
-def boot(image, run, display="none", large=False):
+def boot(image, run, display="none", large=False, title="mundaneDE on joe Linux"):
     image = Path(image).resolve(strict=True)
     run = Path(run).resolve()
     firmware = Path(os.environ.get("OVMF_DIR", "/usr/share/edk2/x64"))
@@ -60,7 +60,7 @@ def boot(image, run, display="none", large=False):
         "-pidfile",
         "vm.pid",
         "-name",
-        "mundaneDE on joe Linux",
+        title.replace(",", ",,"),
         "-machine",
         "q35,accel=kvm",
         "-cpu",

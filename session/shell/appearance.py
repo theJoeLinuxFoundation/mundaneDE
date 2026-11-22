@@ -1,8 +1,9 @@
 """Publish the desktop's appearance preferences and apply them to the shell."""
 
 from fnmatch import fnmatchcase
+import math
 from gi.repository import Gio, GLib
-from portals import ROOT, IMPL, standard
+from portals import FRONT, ROOT, IMPL, standard
 
 APPEARANCE = "org.freedesktop.appearance"
 INTERFACE = "org.gnome.desktop.interface"
@@ -33,7 +34,26 @@ class Appearance:
         self.values = {}
         self.prefs.connect("changed", self.refresh)
         self.a11y.connect("changed", self.refresh)
+        self.owner = None
+        self.request = 0
+        self.applied = None
         self.refresh()
+        self.bus.signal_subscribe(
+            FRONT,
+            "org.freedesktop.portal.Settings",
+            "SettingChanged",
+            ROOT,
+            APPEARANCE,
+            Gio.DBusSignalFlags.NONE,
+            self.changed,
+        )
+        Gio.bus_watch_name_on_connection(
+            self.bus,
+            FRONT,
+            Gio.BusNameWatcherFlags.AUTO_START,
+            self.appeared,
+            self.vanished,
+        )
 
     def refresh(self, *_):
         scheme = self.prefs.get_string("color-scheme")
@@ -72,8 +92,64 @@ class Appearance:
                         GLib.Variant("(ssv)", (group, key, value)),
                     )
         self.values = values
+        if self.owner is None:
+            self.apply_local()
+
+    def apply_local(self):
+        self.apply({k: v.unpack() for k, v in self.values[APPEARANCE].items()})
+
+    def appeared(self, bus, name, owner):
+        self.owner = owner
+        self.read_portal()
+
+    def vanished(self, *_):
+        self.owner = None
+        self.apply_local()
+
+    def changed(self, bus, sender, path, iface, signal, args):
+        if sender == self.owner:
+            self.read_portal()
+
+    def read_portal(self):
+        # The frontend may call our own backend to assemble the snapshot.
+        # Read asynchronously and discard replies superseded by a newer owner or change.
+        self.request += 1
+        request, owner = self.request, self.owner
+
+        def received(bus, task):
+            try:
+                (groups,) = bus.call_finish(task).unpack()
+            except GLib.Error:
+                return
+            if request == self.request and owner == self.owner and APPEARANCE in groups:
+                self.apply(groups[APPEARANCE])
+
+        self.bus.call(
+            owner,
+            ROOT,
+            "org.freedesktop.portal.Settings",
+            "ReadAll",
+            GLib.Variant("(as)", ([APPEARANCE],)),
+            None,
+            Gio.DBusCallFlags.NONE,
+            5000,
+            None,
+            received,
+        )
+
+    def apply(self, values):
+        light = values.get("color-scheme") != 1
+        contrast = values.get("contrast") == 1
+        reduce = values.get("reduced-motion") == 1
+        rgb = values.get("accent-color", ())
+        accent = ACCENTS["blue"]
+        if len(rgb) == 3 and all(math.isfinite(c) and 0 <= c <= 1 for c in rgb):
+            accent = "".join(f"{round(c * 255):02x}" for c in rgb)
+        appearance = light, contrast, reduce, accent
+        if appearance == self.applied:
+            return
+        self.applied = appearance
         self.panel.send("reduced-motion " + ("on" if reduce else "off"))
-        light = scheme != "prefer-dark"
         fg, bg = ("#141414", "#fafafa") if light else ("#f1f4fb", "#1b2130")
         if contrast:
             fg, bg = ("#ffffff", "#000000")

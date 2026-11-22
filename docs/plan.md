@@ -483,17 +483,23 @@ accent-color, contrast and reduced-motion and forwards font-name,
 text-scaling-factor and enable-animations in `org.gnome.desktop.interface`.
 The GTK backend on beta1 supplies color-scheme and contrast. Install
 `mundane.portal` and `mundane-portals.conf` so the frontend can merge both
-backends. Settings takes an initial `ReadAll` snapshot and listens for
-`SettingChanged`. It uses mundane-ui’s shared roles, focus rings, dark and
-high-contrast palettes at revision `612f5c5a8d774c81f9baac38c6909f0037805ede`.
-The suite's Terminal at that revision selects its palette on startup.
-The suite is adding live support for all four standard appearance keys. Settings
-writes the corresponding GNOME interface and accessibility GSettings so the
-session portal publishes each change. The shell, Settings and suite must read
-the same portal keys at startup and on `SettingChanged`. To close this gate,
-change a preference once in Settings with a GTK app and an installed suite app
-already visible. Verify both repaint without restarting, and repeat for scheme,
-accent, contrast and reduced motion. Record the suite revision used.
+backends. Install `50-mundane.gschema.override` alongside the desktop schemas
+in `/usr/share/glib-2.0/schemas` and run the distribution’s
+`glib-compile-schemas` trigger. The override selects light on a fresh mundaneDE
+login. Existing user choices take precedence and GNOME keeps its own default.
+Settings writes `color-scheme`, `accent-color` and `enable-animations`
+in `org.gnome.desktop.interface` and `high-contrast` in
+`org.gnome.desktop.a11y.interface`. The shell consumes the frontend's appearance
+snapshot and change signals. Settings and suite apps use the same mundane-ui
+portal subscription, semantic colours and GPUI motion preference. Settings also
+reads font, text scale and the accent name from the desktop interface namespace.
+[Shared implementation at the pinned suite revision](https://github.com/theJoeLinuxFoundation/mundane-apps/blob/78540788819e4c899fa4a15df0f1d5ec1cefa938/crates/mundane-ui/src/appearance.rs)
+
+The headless joe beta1 gate changes the preferences in Settings while libadwaita
+and the suite’s Terminal stay open. It observes native style properties, Terminal
+grid and cursor colours, and the suite’s moving and stationary GPUI marker.
+The same gate checks Orca speech and character echo, keyboard monitoring access,
+real and fixture polkit authentication, display rollback and a fresh GDM login.
 
 Settings lists connector modes through `mundane-de output list`. Test, Keep
 and Revert use the compositor's 15-second layout trial. The socket requires

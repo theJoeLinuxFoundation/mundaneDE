@@ -6,6 +6,7 @@ dest=${DESTDIR:-}
 here=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
 install -Dm755 "${1:?path to built mundane-de}" "$dest$prefix/bin/mundane-de"
 install -Dm755 "$here/mundane-session" "$dest$prefix/bin/mundane-session"
+install -Dm644 "$here/50-mundane.gschema.override" "$dest/usr/share/glib-2.0/schemas/50-mundane.gschema.override"
 install -d "$dest/usr/share/wayland-sessions"
 sed "s|@bindir@|$prefix/bin|g" "$here/mundane.desktop.in" > "$dest/usr/share/wayland-sessions/mundane.desktop"
 for unit in mundane-session.target mundane-ibus.service; do

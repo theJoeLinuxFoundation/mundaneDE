@@ -11,6 +11,7 @@ from gi.repository import Adw, GLib, Gtk
 Adw.init()
 style = Adw.StyleManager.get_default()
 window = Adw.Window(title="Native appearance test")
+window.set_default_size(280, 180)
 window.set_content(Gtk.Label(label="Native appearance"))
 window.present()
 
@@ -22,7 +23,10 @@ def snapshot(*args):
         accent=style.get_accent_color().value_nick,
         animations=Gtk.Settings.get_default().get_property("gtk-enable-animations"),
     )
-    (Path(os.environ["XDG_RUNTIME_DIR"]) / "gtk-style").write_text(json.dumps(data))
+    dest = Path(os.environ["XDG_RUNTIME_DIR"]) / "gtk-style"
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data))
+    tmp.replace(dest)
     return True
 
 
