@@ -20,6 +20,7 @@ pkgs.mkShell {
     clippy
     rustfmt
     pkg-config
+    rustPlatform.bindgenHook
     gcc           # provides `cc` linker
     cmake         # some GPUI transitive deps want it (e.g. zstd-sys)
     protobuf      # gpui uses prost for some IPC types
@@ -33,6 +34,7 @@ pkgs.mkShell {
     libGL
     wayland
     polkit
+    pam
     wayland-protocols
     glib
     fontconfig

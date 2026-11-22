@@ -1,5 +1,6 @@
 { lib
 , rustPlatform
+, pam
 , polkit
 , pkg-config
 , vulkan-loader
@@ -44,10 +45,11 @@ rustPlatform.buildRustPackage {
 
   env = { RUST_MIN_STACK = "16777216"; };
 
-  nativeBuildInputs = [ pkg-config makeWrapper ];
+  nativeBuildInputs = [ pkg-config makeWrapper rustPlatform.bindgenHook ];
 
   buildInputs = [
     polkit
+    pam
     vulkan-loader
     libxkbcommon
     libGL

@@ -46,8 +46,9 @@ pub struct Prompt {
     pub message: String,
     pub action: String,
     pub details: BTreeMap<String, String>,
-    pub users: Vec<(u32, String)>,
+    pub users: Vec<(u32, String, String)>,
     pub selected: u32,
+    pub failures: usize,
     pub status: String,
     pub challenge: Option<(u64, String, bool)>,
 }
@@ -181,15 +182,19 @@ impl Agent {
                 if uid > i32::MAX as u32 {
                     return None;
                 }
-                let name = nix::unistd::User::from_uid(uid.into())
-                    .ok()
-                    .flatten()
-                    .map(|u| u.name)
-                    .unwrap_or_else(|| uid.to_string());
-                Some((uid, name))
+                let user = nix::unistd::User::from_uid(uid.into()).ok().flatten()?;
+                let full = user
+                    .gecos
+                    .to_string_lossy()
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_owned();
+                Some((uid, user.name, full))
             })
             .collect();
-        let Some(&(selected, _)) = users.first() else {
+        let Some(&(selected, _, _)) = users.first() else {
             reply.return_dbus_error(
                 "org.freedesktop.PolicyKit1.Error.Failed",
                 "No supported administrator",
@@ -206,6 +211,7 @@ impl Agent {
                 details: args.child_get(3),
                 users,
                 selected,
+                failures: 0,
                 status: String::new(),
                 challenge: None,
             },
@@ -226,7 +232,9 @@ impl Agent {
         let old = p.session.take();
         p.prompt.selected = uid;
         p.prompt.challenge = None;
-        p.prompt.status.clear();
+        if old.is_some() {
+            p.prompt.status.clear();
+        }
         let user: glib::Object = unsafe { from_glib_full(polkit_unix_user_new(uid as i32)) };
         let session: glib::Object =
             unsafe { from_glib_full(polkit_agent_session_new(user.as_ptr(), p.cookie.as_ptr())) };
@@ -248,13 +256,41 @@ impl Agent {
                 if signal == "completed" {
                     p.session.take();
                     let success = values[1].get::<bool>().ok()?;
-                    drop(state);
-                    a.finish(false);
-                    if !success {
-                        let _ = a.tx.try_send(Event::Service(crate::Service::LocalNotice(
-                            "Authentication failed".into(),
-                            "The action was not authorized.".into(),
-                        )));
+                    if success {
+                        drop(state);
+                        a.finish(false);
+                    } else {
+                        p.prompt.challenge = None;
+                        p.prompt.failures += 1;
+                        let last = p.prompt.failures >= 3;
+                        p.prompt.status = if last {
+                            "Authentication failed."
+                        } else {
+                            "Authentication failed. Try again."
+                        }
+                        .into();
+                        let id = p.prompt.id;
+                        let uid = p.prompt.selected;
+                        let _ = a.tx.try_send(Event::Auth(p.prompt.clone()));
+                        drop(state);
+                        // A new helper performs every retry, with the original authority cookie.
+                        // Defer to avoid recursing if starting the helper itself fails.
+                        let a = a.clone();
+                        glib::MainContext::ref_thread_default().spawn_local(async move {
+                            let delay = if last { 1200 } else { 250 };
+                            glib::timeout_future(std::time::Duration::from_millis(delay)).await;
+                            if a.active
+                                .borrow()
+                                .as_ref()
+                                .is_some_and(|p| p.prompt.id == id && p.session.is_none())
+                            {
+                                if last {
+                                    a.finish(false);
+                                } else {
+                                    a.select(id, uid);
+                                }
+                            }
+                        });
                     }
                 } else {
                     let text = values[1].get::<String>().ok()?;

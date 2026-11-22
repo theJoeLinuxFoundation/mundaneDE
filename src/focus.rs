@@ -91,7 +91,7 @@ impl KeyboardTarget<State> for KeyboardFocus {
 }
 
 pub fn set_keyboard_focus(state: &mut State, window: Option<&Window>) {
-    if state.desktop.lock.active {
+    if state.desktop.lock.active || state.auth_surface().is_some() {
         return;
     }
     if let Some(w) = window {

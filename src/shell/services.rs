@@ -27,6 +27,7 @@ pub enum Role {
     Application,
     Shell,
     Locker,
+    GpuiLocker(u64),
     Capture,
     Screenshot,
     InputMethod,
@@ -138,9 +139,16 @@ smithay::delegate_input_method_manager!(State);
 smithay::delegate_virtual_keyboard_manager!(State);
 
 impl State {
-    pub fn trusted_child(&self, role: Role, mut cmd: Command) -> anyhow::Result<Child> {
+    pub fn trusted_child(&self, role: Role, cmd: Command) -> anyhow::Result<Child> {
+        Ok(self.spawn_connected(role, cmd)?.0)
+    }
+    pub(super) fn spawn_connected(
+        &self,
+        role: Role,
+        mut cmd: Command,
+    ) -> anyhow::Result<(Child, Client)> {
         let (server, child) = UnixStream::pair()?;
-        self.display_handle.clone().insert_client(
+        let client = self.display_handle.clone().insert_client(
             server,
             Arc::new(ClientState {
                 role,
@@ -149,10 +157,12 @@ impl State {
                 on_exit: self.client_exit.clone(),
             }),
         )?;
-        Ok(cmd
-            .stdin(Stdio::from(OwnedFd::from(child)))
-            .env("WAYLAND_SOCKET", "0")
-            .spawn()?)
+        Ok((
+            cmd.stdin(Stdio::from(OwnedFd::from(child)))
+                .env("WAYLAND_SOCKET", "0")
+                .spawn()?,
+            client,
+        ))
     }
     fn start_panel(&mut self) -> anyhow::Result<()> {
         use std::os::unix::net::UnixDatagram;
@@ -194,7 +204,7 @@ impl State {
         self.desktop.channel = Some(server);
         self.desktop.watch_tasks = false;
         self.desktop.panel = Some(child);
-        self.desktop.monitor=Default::default();
+        self.desktop.monitor = Default::default();
         if self.desktop.lock.active {
             self.shell_message(&serde_json::json!({"locked": true}));
         }

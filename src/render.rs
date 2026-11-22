@@ -49,6 +49,7 @@ fn append_layers(
     renderer: &mut GlesRenderer,
     output: &smithay::output::Output,
     order: [smithay::wayland::shell::wlr_layer::Layer; 2],
+    modal: Option<&smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
     elements: &mut Vec<MundaneRenderElement>,
 ) {
     use smithay::backend::renderer::element::AsRenderElements;
@@ -56,6 +57,9 @@ fn append_layers(
     let scale = output.current_scale().fractional_scale();
     for level in order {
         for layer in layers.layers_on(level).rev() {
+            if Some(layer.wl_surface()) == modal {
+                continue;
+            }
             if let Some(geometry) = layers.layer_geometry(layer) {
                 let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = layer
                     .render_elements(
@@ -79,22 +83,69 @@ pub fn collect_elements(
     output: &smithay::output::Output,
     draw_cursor: bool,
 ) -> (Vec<MundaneRenderElement>, Color32F) {
+    let modal = !state.desktop.lock.active && state.auth_surface().is_some();
+    let (mut elements, clear) = collect_scene(renderer, state, output, draw_cursor && !modal);
+    if modal {
+        use smithay::backend::renderer::element::AsRenderElements;
+        let bounds = state.space.output_geometry(output).unwrap();
+        let scale = output.current_scale().fractional_scale();
+        let mut overlay = Vec::new();
+        if draw_cursor {
+            overlay.extend(cursor_elements(
+                renderer,
+                state,
+                state.cursor_location - bounds.loc.to_f64(),
+                scale,
+            ));
+        }
+        let map = smithay::desktop::layer_map_for_output(output);
+        if let Some(layer) = map
+            .layers()
+            .find(|l| Some(l.wl_surface()) == state.auth_surface())
+        {
+            if let Some(r) = map.layer_geometry(layer) {
+                let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = layer
+                    .render_elements(
+                        renderer,
+                        r.loc.to_physical_precise_round(scale),
+                        scale.into(),
+                        1.,
+                    );
+                overlay.extend(surfaces.into_iter().map(MundaneRenderElement::from));
+            }
+        }
+        overlay.push(
+            SolidColorRenderElement::new(
+                state.desktop.lock.mask.clone(),
+                smithay::utils::Rectangle::from_size(bounds.size).to_physical_precise_round(scale),
+                CommitCounter::default(),
+                Color32F::new(0., 0., 0., 0.52),
+                Kind::Unspecified,
+            )
+            .into(),
+        );
+        overlay.append(&mut elements);
+        return (overlay, clear);
+    }
+    (elements, clear)
+}
+
+fn collect_scene(
+    renderer: &mut GlesRenderer,
+    state: &mut State,
+    output: &smithay::output::Output,
+    draw_cursor: bool,
+) -> (Vec<MundaneRenderElement>, Color32F) {
     let mut elements: Vec<MundaneRenderElement> = Vec::new();
 
     let bounds = state.space.output_geometry(output).unwrap();
     let scale = output.current_scale().fractional_scale();
     if state.desktop.lock.active {
-        if let Some(lock) = state
-            .desktop
-            .lock
-            .surfaces
-            .get(output)
-            .filter(|s| s.alive())
-        {
+        if let Some(lock) = state.lock_surface(output) {
             let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
                 render_elements_from_surface_tree(
                     renderer,
-                    lock.wl_surface(),
+                    &lock,
                     (0, 0),
                     scale,
                     1.0,
@@ -166,7 +217,8 @@ pub fn collect_elements(
         elements.push(MundaneRenderElement::from(ghost));
     }
 
-    if state.desktop.transition.is_some()
+    if state.auth_surface().is_some()
+        || state.desktop.transition.is_some()
         || state
             .space
             .elements()
@@ -178,6 +230,7 @@ pub fn collect_elements(
             renderer,
             output,
             [Layer::Overlay, Layer::Top],
+            state.auth_surface(),
             &mut elements,
         );
         let transition = state.desktop.transition.as_ref();
@@ -230,6 +283,7 @@ pub fn collect_elements(
             renderer,
             output,
             [Layer::Bottom, Layer::Background],
+            state.auth_surface(),
             &mut elements,
         );
     } else {

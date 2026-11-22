@@ -262,8 +262,13 @@ impl State {
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = event.time_msec();
                 let press = event.state() == KeyState::Pressed;
-                if self.desktop.lock.active {
-                    let target = self.lock_focus().map(crate::focus::KeyboardFocus::native);
+                if self.desktop.lock.active || self.auth_surface().is_some() {
+                    let surface = if self.desktop.lock.active {
+                        self.lock_focus()
+                    } else {
+                        self.auth_surface().cloned()
+                    };
+                    let target = surface.map(crate::focus::KeyboardFocus::native);
                     if keyboard.current_focus() != target {
                         keyboard.set_focus(self, target, serial);
                     }
@@ -292,6 +297,13 @@ impl State {
                             return FilterResult::Intercept(());
                         }
                         if state.desktop.lock.active {
+                            return FilterResult::Forward;
+                        }
+                        if state.auth_surface().is_some() {
+                            if press && mods.logo && sym == keysyms::KEY_l {
+                                state.begin_lock();
+                                return FilterResult::Intercept(());
+                            }
                             return FilterResult::Forward;
                         }
                         if press && mods.logo && mods.alt && sym==keysyms::KEY_s {
@@ -453,10 +465,17 @@ impl State {
                 let button_state = event.state();
                 let pointer = self.seat.get_pointer().unwrap();
                 let mods = self.seat.get_keyboard().unwrap().modifier_state();
+                if self.desktop.lock.active {
+                    self.pointer_moved(self.cursor_location, serial, time);
+                }
 
                 if button_state == ButtonState::Released
                     && self.desktop.dismissed_buttons.remove(&button)
                 {
+                    return;
+                }
+                if !self.desktop.lock.active && self.auth_surface().is_some()
+                    && !self.hit_layer(self.cursor_location, true).is_some_and(|(_,_,l)| Some(l.wl_surface()) == self.auth_surface()) {
                     return;
                 }
                 if !self.desktop.lock.active && button_state == ButtonState::Pressed {
@@ -483,7 +502,7 @@ impl State {
                     self.menu_action(if button == BTN_LEFT { row } else { None });
                     return;
                 }
-                if button_state == ButtonState::Pressed {
+                if !self.desktop.lock.active && button_state == ButtonState::Pressed {
                     self.record_input(serial, pointer.current_focus());
                 }
                 let layer = self.hit_layer(self.cursor_location, true).or_else(|| {
@@ -566,6 +585,9 @@ impl State {
 
             InputEvent::PointerAxis { event } => {
                 let pointer = self.seat.get_pointer().unwrap();
+                if self.desktop.lock.active || self.auth_surface().is_some() {
+                    self.pointer_moved(self.cursor_location, SERIAL_COUNTER.next_serial(), event.time_msec());
+                }
                 let source = event.source();
                 let mut frame = AxisFrame::new(event.time_msec()).source(source);
                 for axis in [Axis::Vertical, Axis::Horizontal] {
@@ -627,6 +649,10 @@ impl State {
         } else {
             let focus = if self.desktop.lock.active {
                 self.lock_pointer(pos)
+            } else if let Some(auth) = self.auth_surface() {
+                self.hit_layer(pos, true)
+                    .filter(|(_, _, layer)| layer.wl_surface() == auth)
+                    .map(|(s, p, _)| (s, p))
             } else {
                 self.hit_layer(pos, true)
                     .map(|(s, p, _)| (s, p))

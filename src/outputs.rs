@@ -144,6 +144,7 @@ impl State {
             self.layout.push((output, bounds));
             x = x.max(bounds.loc.x + bounds.size.w);
         }
+        self.sync_lock_outputs();
         self.generation += 1;
         self.window_menu = None;
         self.resize = None;
@@ -369,9 +370,9 @@ impl State {
     }
     pub fn send_frames(&self, output: &Output) {
         if self.desktop.lock.active {
-            if let Some(s) = self.desktop.lock.surfaces.get(output) {
+            if let Some(s) = self.lock_frame_recipient(output) {
                 smithay::desktop::utils::send_frames_surface_tree(
-                    s.wl_surface(),
+                    &s,
                     output,
                     self.start_time.elapsed(),
                     None,

@@ -190,6 +190,8 @@ def session():
     if sys.argv[1:] and not candidate:
         raise SystemExit("usage: mundane-session [--gpui]")
     env["MUNDANE_PANEL"] = str(bindir / ("mundane-shell" if candidate else "mundane-panel"))
+    if candidate:
+        env["MUNDANE_GPUI_LOCKER"] = str(bindir / "mundane-lock")
     compositor = channel = None
     published = False
     with tempfile.TemporaryDirectory(

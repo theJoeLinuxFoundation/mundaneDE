@@ -11,6 +11,9 @@ install -Dm644 "$here/org.joelinux.mundane.shell.gschema.xml" "$dest/usr/share/g
 install -d "$dest/usr/share/wayland-sessions"
 sed "s|@bindir@|$prefix/bin|g" "$here/mundane.desktop.in" > "$dest/usr/share/wayland-sessions/mundane.desktop"
 if [ -n "${2:-}" ]; then
+    locker=${3:-$(dirname "$2")/mundane-lock}
+    install -Dm755 "$locker" "$dest$prefix/bin/mundane-lock"
+    install -Dm644 "$here/mundane-lock.pam" "$dest/usr/lib/pam.d/mundane-lock"
     install -Dm755 "$2" "$dest$prefix/bin/mundane-shell"
     sed "s|@bindir@|$prefix/bin|g" "$here/mundane-gpui.desktop.in" > "$dest/usr/share/wayland-sessions/mundane-gpui.desktop"
 fi

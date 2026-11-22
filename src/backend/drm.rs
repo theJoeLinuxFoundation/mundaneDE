@@ -268,6 +268,8 @@ pub fn run_drm(config: MundaneConfig, notify: Option<&std::path::Path>) -> anyho
             match event {
                 SessionEvent::PauseSession => {
                     tracing::info!("seat paused");
+                    state.desktop.lock.seat_active = false;
+                    state.invalidate_lock_attempt();
                     state.desktop.pending_keys.clear();
                     b.active = false;
                     libinput_context.suspend();
@@ -279,12 +281,17 @@ pub fn run_drm(config: MundaneConfig, notify: Option<&std::path::Path>) -> anyho
                         return;
                     }
                     tracing::info!("seat resumed");
+                    state.desktop.lock.seat_active = true;
                     b.active = true;
                     for head in b.heads.values_mut() {
                         head.pending = false;
+                        if let Err(e) = head.compositor.reset_state() {
+                            tracing::warn!(%e,"restore scanout after VT switch");
+                        }
                         head.compositor.reset_buffers();
                     }
                     let _ = b.rescan(state);
+                    state.ensure_locker();
                     state.generation += 1;
                     if let Err(e) = libinput_context.resume() {
                         tracing::warn!(?e, "resume input");

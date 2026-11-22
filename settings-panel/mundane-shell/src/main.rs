@@ -336,6 +336,9 @@ fn close_menu(cx: &mut App) {
     }
 }
 fn open_menu(display: DisplayId, page: Page, anchor: Option<f32>, cx: &mut App) {
+    if cx.global::<Shell>().auth.is_some() && !matches!(page, Page::Auth(_)) {
+        return;
+    }
     let same = cx
         .global::<Shell>()
         .menu
@@ -468,7 +471,9 @@ fn handle(event: Event, cx: &mut App) {
         Event::Shares(v) => cx.global_mut::<Shell>().shares = v,
         Event::Picker(p) => {
             let id = p.serial;
-            if let Some(d) = home_display(cx).filter(|_| !cx.global::<Shell>().locked) {
+            if let Some(d) = home_display(cx)
+                .filter(|_| !cx.global::<Shell>().locked && cx.global::<Shell>().auth.is_none())
+            {
                 close_menu(cx);
                 cx.global_mut::<Shell>().picker = Some(p);
                 let _ = cx.global::<Shell>().socket.send(b"list");

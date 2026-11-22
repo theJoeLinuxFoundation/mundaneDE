@@ -13,6 +13,7 @@ pub(crate) mod interaction;
 mod layout;
 mod switcher;
 pub(crate) mod lock;
+mod gpui_lock;
 pub(crate) mod menu;
 mod protocols;
 pub(crate) mod services;
@@ -50,6 +51,9 @@ impl XdgShellHandler for State {
         self.app_id_changed(t);
     }
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
+        if gpui_lock::locker_epoch(surface.wl_surface()).is_some() {
+            return;
+        }
         surface.with_pending_state(|s| {
             s.states.set(xdg_toplevel::State::Activated);
         });
@@ -200,6 +204,10 @@ impl XdgShellHandler for State {
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        if gpui_lock::locker_epoch(surface.wl_surface()).is_some() {
+            self.lock_window_destroyed(&surface);
+            return;
+        }
         self.dismiss_menu_for(&surface);
         if self.resize.as_ref().and_then(|r| r.window.toplevel()) == Some(&surface) {
             self.resize = None;
@@ -281,6 +289,10 @@ impl State {
     pub fn handle_commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
 
+        if gpui_lock::locker_epoch(surface).is_some() {
+            self.commit_lock_window(surface);
+            return;
+        }
         self.popups.commit(surface);
         if let Some(popup) = self.popups.find_popup(surface) {
             match popup {

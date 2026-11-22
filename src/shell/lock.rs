@@ -24,6 +24,10 @@ use std::{
 
 pub struct Lock {
     manager: SessionLockManagerState,
+    pub(super) gpui: Option<super::gpui_lock::Attempt>,
+    reported: bool,
+    pub(crate) seat_active: bool,
+    pub(crate) preparing_sleep: bool,
     pub active: bool,
     pub mask: Id,
     pub since: u64,
@@ -40,6 +44,10 @@ impl Lock {
                 services::role(c) == Role::Locker
             }),
             active: false,
+            reported: false,
+            seat_active: true,
+            preparing_sleep: false,
+            gpui: None,
             mask: Id::new(),
             since: 0,
             covered: HashSet::new(),
@@ -70,6 +78,7 @@ impl State {
         self.generation += 1;
         let l = &mut self.desktop.lock;
         l.active = true;
+        l.reported = false;
         l.since = self.generation;
         l.mask = Id::new();
         l.covered.clear();
@@ -96,6 +105,12 @@ impl State {
     }
     pub fn ensure_locker(&mut self) {
         if !self.desktop.lock.active {
+            return;
+        }
+        if let Some(path) = std::env::var_os("MUNDANE_GPUI_LOCKER") {
+            if self.desktop.lock.seat_active && !self.desktop.lock.preparing_sleep {
+                self.supervise_gpui_locker(path);
+            }
             return;
         }
         if let Some(c) = &mut self.desktop.lock.child {
@@ -128,11 +143,25 @@ impl State {
             .outputs()
             .all(|o| self.desktop.lock.covered.contains(o))
         {
+            if !self.desktop.lock.reported && std::env::var_os("MUNDANE_GPUI_LOCKER").is_some() {
+                self.report_lock(b"L");
+                self.desktop.lock.reported = true;
+            }
             if let Some(c) = self.desktop.lock.confirmation.take() {
                 c.lock();
                 self.report_lock(b"L");
             }
         }
+    }
+    pub(super) fn finish_unlock(&mut self) {
+        self.report_lock(b"U");
+        self.shell_message(&serde_json::json!({"locked":false}));
+        self.desktop.lock.active = false;
+        self.publish_tasks();
+        self.desktop.lock.surfaces.clear();
+        self.desktop.lock.last_input = Instant::now();
+        self.generation += 1;
+        crate::focus::refocus(self);
     }
     fn report_lock(&self, msg: &[u8]) {
         use std::io::Write;
@@ -144,17 +173,33 @@ impl State {
         self.space
             .output_under(self.cursor_location)
             .next()
-            .and_then(|o| self.desktop.lock.surfaces.get(o))
-            .or_else(|| self.desktop.lock.surfaces.values().find(|s| s.alive()))
+            .and_then(|o| self.lock_surface(o))
+            .or_else(|| self.space.outputs().find_map(|o| self.lock_surface(o)))
+    }
+    pub fn lock_surface(&self, o: &Output) -> Option<WlSurface> {
+        if let Some(attempt) = &self.desktop.lock.gpui {
+            return attempt.ready(o);
+        }
+        self.desktop
+            .lock
+            .surfaces
+            .get(o)
             .filter(|s| s.alive())
             .map(|s| s.wl_surface().clone())
+    }
+    pub fn lock_frame_recipient(&self, output: &Output) -> Option<WlSurface> {
+        if let Some(a) = &self.desktop.lock.gpui {
+            a.configured(output)
+        } else {
+            self.lock_surface(output)
+        }
     }
     pub fn lock_pointer(
         &self,
         pos: Point<f64, Logical>,
     ) -> Option<(WlSurface, Point<f64, Logical>)> {
         let o = self.space.output_under(pos).next()?;
-        let s = self.desktop.lock.surfaces.get(o)?.wl_surface().clone();
+        let s = self.lock_surface(o)?;
         Some((s, self.space.output_geometry(o)?.loc.to_f64()))
     }
 }
@@ -169,14 +214,9 @@ impl SessionLockHandler for State {
         }
     }
     fn unlock(&mut self) {
-        self.report_lock(b"U");
-        self.shell_message(&serde_json::json!({"locked":false}));
-        self.desktop.lock.active = false;
-        self.publish_tasks();
-        self.desktop.lock.surfaces.clear();
-        self.desktop.lock.last_input = Instant::now();
-        self.generation += 1;
-        crate::focus::refocus(self);
+        if self.desktop.lock.active && std::env::var_os("MUNDANE_GPUI_LOCKER").is_none() {
+            self.finish_unlock();
+        }
     }
     fn new_surface(&mut self, s: LockSurface, o: WlOutput) {
         if !self.desktop.lock.active {

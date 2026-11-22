@@ -33,6 +33,8 @@ pub fn ready(
                 match stream.read(&mut message)? {
                     1 if message == *b"L" => state.begin_lock(),
                     1 if message == *b"S" => {
+                        state.desktop.lock.preparing_sleep = true;
+                        state.invalidate_lock_attempt();
                         state.begin_lock();
                         let sleep = sleep.clone();
                         let mut leader = stream.try_clone()?;
@@ -63,6 +65,8 @@ pub fn ready(
                     }
                     1 if message == *b"W" => {
                         sleep.borrow_mut()(state, false);
+                        state.desktop.lock.preparing_sleep = false;
+                        state.ensure_locker();
                         state.shell_message(&serde_json::json!({"resume":true}));
                     }
                     _ => {

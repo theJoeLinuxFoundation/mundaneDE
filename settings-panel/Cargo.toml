@@ -5,6 +5,7 @@ members = [
     "mundane-settings",
     "mundane-settings-core",
     "mundane-shell",
+    "mundane-lock",
 ]
 
 [workspace.package]

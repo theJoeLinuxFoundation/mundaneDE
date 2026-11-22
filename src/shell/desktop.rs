@@ -136,6 +136,12 @@ impl State {
             })
     }
 
+    pub(crate) fn auth_surface(&self) -> Option<&WlSurface> {
+        self.desktop.menu_surface.as_ref().filter(|s| {
+            with_states(s, |state| state.data_map.get::<AuthenticationSurface>().is_some())
+        })
+    }
+
     pub fn register_task(&mut self, w: &Window) {
         if self.desktop.tasks.contains_key(w)
             || w.x11_surface().is_some_and(|x| x.is_override_redirect())
@@ -512,6 +518,7 @@ impl State {
             l.layer_surface().send_configure();
         }
         if !self.desktop.lock.active
+            && self.auth_surface().is_none_or(|auth| auth == s)
             && l.cached_state().keyboard_interactivity == KeyboardInteractivity::Exclusive
         {
             self.finish_switcher(false);
@@ -531,7 +538,17 @@ impl State {
                     self.desktop.previous_menu_focus =
                         self.seat.get_keyboard().and_then(|k| k.current_focus());
                 }
+                let first_auth = l.namespace() == "mundane-authentication" && self.auth_surface().is_none();
                 self.desktop.menu_surface = Some(s.clone());
+                if first_auth {
+                    self.move_state = None;
+                    self.resize = None;
+                    self.window_menu = None;
+                    let serial = SERIAL_COUNTER.next_serial();
+                    self.seat.get_keyboard().unwrap().unset_grab(self);
+                    self.seat.get_pointer().unwrap().unset_grab(self, serial, 0);
+                    self.pointer_moved(self.cursor_location, serial, 0);
+                }
             }
             self.layer_focus(l.wl_surface());
         }
