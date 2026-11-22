@@ -8,6 +8,7 @@ The compositor runs in a host window or directly on a single DRM/KMS output.
 It can display Wayland applications, manage keyboard and pointer focus, and
 crossfade between wallpapers. The GPUI settings panel is a separate application.
 A desktop shell, session lock and multi-monitor support are still missing.
+The [roadmap](ROADMAP.md) describes when mundaneDE can become the default joe Linux session.
 
 ## Build and run in a window
 
