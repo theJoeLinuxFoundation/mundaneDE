@@ -6,11 +6,15 @@
 //! configure handshake.
 
 use smithay::backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state};
+pub(crate) mod decorations;
+pub(crate) mod desktop;
 pub(crate) mod interaction;
 mod layout;
+pub(crate) mod lock;
 pub(crate) mod menu;
 mod protocols;
 pub(crate) mod services;
+pub(crate) mod toplevels;
 use smithay::delegate_xdg_shell;
 use smithay::desktop::{
     find_popup_root_surface, get_popup_toplevel_coords, PopupKeyboardGrab, PopupKind,
@@ -35,6 +39,14 @@ impl XdgShellHandler for State {
         &mut self.xdg_shell_state
     }
 
+    fn app_id_changed(&mut self, t: ToplevelSurface) {
+        if let Some(w) = self.wm.window_for_surface(t.wl_surface()) {
+            self.task_changed(&w);
+        }
+    }
+    fn title_changed(&mut self, t: ToplevelSurface) {
+        self.app_id_changed(t);
+    }
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         surface.with_pending_state(|s| {
             s.states.set(xdg_toplevel::State::Activated);
@@ -192,6 +204,7 @@ impl XdgShellHandler for State {
         }
         if let Some(window) = self.wm.window_for_surface(surface.wl_surface()) {
             self.minimized.retain(|w| w != &window);
+            self.forget_task(&window);
             self.space.unmap_elem(&window);
             if let Some(spring) = self.wm.remove(&window) {
                 self.animation.remove_spring(spring);
@@ -245,9 +258,13 @@ impl State {
         let fallback = self.window_bounds(&window);
         popup.with_pending_state(|s| {
             let anchor = s.positioner.anchor_rect;
-            let point = parent + anchor.loc
+            let point = parent
+                + anchor.loc
                 + smithay::utils::Point::from((anchor.size.w / 2, anchor.size.h / 2));
-            let mut bounds = self.space.output_under(point.to_f64()).next()
+            let mut bounds = self
+                .space
+                .output_under(point.to_f64())
+                .next()
                 .and_then(|output| self.space.output_geometry(output))
                 .unwrap_or(fallback);
             bounds.loc -= parent;
@@ -287,6 +304,7 @@ impl State {
             .cloned();
         if let Some(window) = xwindow {
             window.on_commit();
+            self.task_changed(&window);
             if window
                 .x11_surface()
                 .is_some_and(|x| !x.is_override_redirect())
@@ -302,10 +320,12 @@ impl State {
             return;
         };
         window.on_commit();
+        self.task_changed(&window);
 
         let has_buffer =
             with_renderer_surface_state(&root, |s| s.buffer().is_some()).unwrap_or(false);
         if !has_buffer && self.wm.is_mapped(&window) {
+            self.forget_task(&window);
             self.space.unmap_elem(&window);
             self.minimized.retain(|w| w != &window);
             if let Some(id) = self.wm.remove(&window) {
@@ -334,6 +354,7 @@ impl State {
 
     /// Place a newly buffered window, give it a spring, and animate it into view.
     fn map_new_window(&mut self, window: Window) {
+        self.leave_desktop();
         let size = window.geometry().size;
         let bounds = self.pointer_bounds();
         let parent = window
@@ -361,6 +382,7 @@ impl State {
 
         self.space.map_element(window.clone(), start, true);
         self.wm.add_mapped(window.clone(), spring, size);
+        self.register_task(&window);
         self.apply_layout(&window);
 
         tracing::info!(

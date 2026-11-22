@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+bindir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+prefix=$(dirname -- "$bindir")
+exec env GI_TYPELIB_PATH="$prefix/lib/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}" LD_PRELOAD=libgtk4-layer-shell.so.0 python3 "$bindir/../share/mundane/shell/panel.py"

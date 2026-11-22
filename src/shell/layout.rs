@@ -20,7 +20,8 @@ impl State {
         w.user_data().insert_if_missing(Layout::default);
         let layout = w.user_data().get::<Layout>().unwrap();
         let geometry = self.space.element_geometry(&w);
-        let size = self.window_bounds(&w).size;
+        let size = self.work_area(&w).size;
+        let full = self.window_bounds(&w).size;
         surface.with_pending_state(|s| {
             if enabled {
                 s.states.set(flag);
@@ -31,7 +32,11 @@ impl State {
                 if layout.normal.get().is_none() {
                     layout.normal.set(geometry);
                 }
-                s.size = Some(size);
+                s.size = Some(if s.states.contains(Flag::Fullscreen) {
+                    full
+                } else {
+                    size
+                });
             } else {
                 s.size = layout.normal.get().map(|g| g.size);
             }
@@ -60,10 +65,15 @@ impl State {
     pub fn resize_expanded_windows(&self) {
         for window in self.space.elements().chain(&self.minimized) {
             if let Some(t) = window.toplevel() {
-                let size = self.window_bounds(window).size;
+                let size = self.work_area(window).size;
+                let full = self.window_bounds(window).size;
                 t.with_pending_state(|s| {
                     if s.states.contains(Flag::Maximized) || s.states.contains(Flag::Fullscreen) {
-                        s.size = Some(size);
+                        s.size = Some(if s.states.contains(Flag::Fullscreen) {
+                            full
+                        } else {
+                            size
+                        });
                     }
                 });
                 if t.is_initial_configure_sent() {
@@ -83,7 +93,11 @@ impl State {
             return;
         }
         let position = if expanded {
-            self.window_bounds(w).loc
+            if flags.contains(Flag::Fullscreen) {
+                self.window_bounds(w).loc
+            } else {
+                self.work_area(w).loc
+            }
         } else {
             layout.normal.take().map(|g| g.loc).unwrap_or_default()
         };
@@ -96,12 +110,20 @@ impl State {
             s.x.snap_to_target();
             s.y.snap_to_target();
         }
-        if !self.minimized.contains(w) {
+        if !self.desktop.showing_desktop
+            && !self.minimized.contains(w)
+            && self
+                .desktop
+                .tasks
+                .get(w)
+                .is_none_or(|t| t.workspace == self.desktop.workspace)
+        {
             self.space.map_element(w.clone(), position, false);
         }
     }
 
     pub fn restore_window(&mut self, window: &Window) {
+        self.leave_desktop();
         self.minimized.retain(|w| w != window);
         if let Some(spring) = self
             .wm
@@ -110,6 +132,9 @@ impl State {
         {
             self.space
                 .map_element(window.clone(), spring.rounded_position(), true);
+        } else if let Some(x) = window.x11_surface() {
+            self.space
+                .map_element(window.clone(), x.geometry().loc, true);
         } else {
             self.map_new_window(window.clone());
         }

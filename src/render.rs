@@ -45,6 +45,31 @@ render_elements! {
     SnapGhost = SolidColorRenderElement,
 }
 
+fn append_layers(
+    renderer: &mut GlesRenderer,
+    output: &smithay::output::Output,
+    order: [smithay::wayland::shell::wlr_layer::Layer; 2],
+    elements: &mut Vec<MundaneRenderElement>,
+) {
+    use smithay::backend::renderer::element::AsRenderElements;
+    let layers = smithay::desktop::layer_map_for_output(output);
+    let scale = output.current_scale().fractional_scale();
+    for level in order {
+        for layer in layers.layers_on(level).rev() {
+            if let Some(geometry) = layers.layer_geometry(layer) {
+                let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = layer
+                    .render_elements(
+                        renderer,
+                        geometry.loc.to_physical_precise_round(scale),
+                        scale.into(),
+                        1.0,
+                    );
+                elements.extend(surfaces.into_iter().map(MundaneRenderElement::from));
+            }
+        }
+    }
+}
+
 /// Collect the full front-to-back element list for the output, plus the clear colour shown
 /// underneath everything. `draw_cursor` is set by backends with no host pointer (DRM); the
 /// winit backend leaves it to the host compositor to avoid a double cursor.
@@ -58,6 +83,39 @@ pub fn collect_elements(
 
     let bounds = state.space.output_geometry(output).unwrap();
     let scale = output.current_scale().fractional_scale();
+    if state.desktop.lock.active {
+        if let Some(lock) = state
+            .desktop
+            .lock
+            .surfaces
+            .get(output)
+            .filter(|s| s.alive())
+        {
+            let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                render_elements_from_surface_tree(
+                    renderer,
+                    lock.wl_surface(),
+                    (0, 0),
+                    scale,
+                    1.0,
+                    Kind::Unspecified,
+                );
+            elements.extend(surfaces.into_iter().map(MundaneRenderElement::from));
+        }
+        let rect =
+            smithay::utils::Rectangle::from_size(bounds.size).to_physical_precise_round(scale);
+        elements.push(
+            SolidColorRenderElement::new(
+                state.desktop.lock.mask.clone(),
+                rect,
+                CommitCounter::default(),
+                Color32F::new(0.04, 0.07, 0.10, 1.0),
+                Kind::Unspecified,
+            )
+            .into(),
+        );
+        return (elements, Color32F::BLACK);
+    }
     let pointer = state.cursor_location - bounds.loc.to_f64();
     // The cursor draws on top of everything.
     if draw_cursor {
@@ -66,19 +124,34 @@ pub fn collect_elements(
 
     if let Some(icon) = &state.dnd_icon {
         let icon_elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-            render_elements_from_surface_tree(renderer, icon, pointer.to_physical_precise_round(scale), scale, 1.0, Kind::Unspecified);
+            render_elements_from_surface_tree(
+                renderer,
+                icon,
+                pointer.to_physical_precise_round(scale),
+                scale,
+                1.0,
+                Kind::Unspecified,
+            );
         elements.extend(icon_elements.into_iter().map(MundaneRenderElement::from));
     }
     if let Some(menu) = &state.window_menu {
-        if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(renderer,
-            (menu.origin - bounds.loc).to_f64().to_physical(scale), &menu.buffer, None, None, None, Kind::Unspecified) {
+        if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            (menu.origin - bounds.loc).to_f64().to_physical(scale),
+            &menu.buffer,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        ) {
             elements.push(MundaneRenderElement::from(element));
         }
     }
     // Snap-preview ghost: shown only during an interactive drag when the snap target
     // would move the window. Drawn above windows so the user sees where it'll land.
     if let Some(rect) = state.move_state.as_ref().and_then(|mv| mv.snap_preview) {
-        let geo = smithay::utils::Rectangle::new(rect.loc - bounds.loc, rect.size).to_physical_precise_round(scale);
+        let geo = smithay::utils::Rectangle::new(rect.loc - bounds.loc, rect.size)
+            .to_physical_precise_round(scale);
         // Fresh Id each frame matches the cursor pattern in this module — the
         // damage tracker damages both the previous frame's ghost (gone) and this
         // frame's ghost (new), which keeps the preview crisp under any motion.
@@ -93,16 +166,76 @@ pub fn collect_elements(
         elements.push(MundaneRenderElement::from(ghost));
     }
 
-    match space_render_elements::<_, Window, _>(renderer, [&state.space], output, 1.0) {
-        Ok(windows) => elements.extend(windows.into_iter().map(MundaneRenderElement::from)),
-        Err(err) => tracing::warn!("collecting window elements failed: {err:?}"),
+    if state
+        .space
+        .elements()
+        .any(crate::shell::decorations::decorated)
+    {
+        use smithay::backend::renderer::element::AsRenderElements;
+        use smithay::wayland::shell::wlr_layer::Layer;
+        append_layers(
+            renderer,
+            output,
+            [Layer::Overlay, Layer::Top],
+            &mut elements,
+        );
+        for w in state.space.elements().rev() {
+            let Some(g) = state.space.element_geometry(w) else {
+                continue;
+            };
+            let origin = g.loc - bounds.loc;
+            let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = w.render_elements(
+                renderer,
+                (origin - w.geometry().loc).to_physical_precise_round(scale),
+                scale.into(),
+                1.0,
+            );
+            elements.extend(surfaces.into_iter().map(MundaneRenderElement::from));
+            if crate::shell::decorations::decorated(w) {
+                let title = state
+                    .desktop
+                    .tasks
+                    .get(w)
+                    .map(|t| t.handle.title())
+                    .unwrap_or_default();
+                if let Some(buffer) = crate::shell::decorations::draw(w, title, g.size.w) {
+                    let loc = origin
+                        - smithay::utils::Point::from((0, crate::shell::decorations::HEIGHT));
+                    if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                        renderer,
+                        loc.to_f64().to_physical(scale),
+                        &buffer,
+                        None,
+                        None,
+                        None,
+                        Kind::Unspecified,
+                    ) {
+                        elements.push(el.into());
+                    }
+                }
+            }
+        }
+        append_layers(
+            renderer,
+            output,
+            [Layer::Bottom, Layer::Background],
+            &mut elements,
+        );
+    } else {
+        match space_render_elements::<_, Window, _>(renderer, [&state.space], output, 1.0) {
+            Ok(windows) => elements.extend(windows.into_iter().map(MundaneRenderElement::from)),
+            Err(err) => tracing::warn!("collecting window elements failed: {err:?}"),
+        }
     }
 
     // Wallpaper sits behind the windows, so it is appended last (front-to-back order).
 
-    let wallpaper = state
-        .wallpaper
-        .elements(renderer, &state.animation, (bounds.size.w, bounds.size.h), scale);
+    let wallpaper = state.wallpaper.elements(
+        renderer,
+        &state.animation,
+        (bounds.size.w, bounds.size.h),
+        scale,
+    );
     elements.extend(wallpaper.into_iter().map(MundaneRenderElement::from));
 
     // Background clear colour, visible before the wallpaper fades in or if a custom image fails to load.
@@ -112,8 +245,12 @@ pub fn collect_elements(
 
 /// Build the cursor render element(s): a client-provided surface if set, otherwise the
 /// built-in arrow, positioned in output-local coordinates.
-fn cursor_elements(renderer: &mut GlesRenderer, state: &State, pos: smithay::utils::Point<f64, smithay::utils::Logical>, scale: f64) -> Vec<MundaneRenderElement> {
-
+fn cursor_elements(
+    renderer: &mut GlesRenderer,
+    state: &State,
+    pos: smithay::utils::Point<f64, smithay::utils::Logical>,
+    scale: f64,
+) -> Vec<MundaneRenderElement> {
     match &state.cursor_status {
         CursorImageStatus::Hidden => Vec::new(),
         CursorImageStatus::Surface(surface) => {
@@ -131,7 +268,14 @@ fn cursor_elements(renderer: &mut GlesRenderer, state: &State, pos: smithay::uti
             // Compositing on the primary plane like a regular element damages prev+new
             // correctly. We give up the cursor-plane perf optimisation.
             let surface_elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-                render_elements_from_surface_tree(renderer, surface, location, scale, 1.0, Kind::Unspecified);
+                render_elements_from_surface_tree(
+                    renderer,
+                    surface,
+                    location,
+                    scale,
+                    1.0,
+                    Kind::Unspecified,
+                );
             surface_elements
                 .into_iter()
                 .map(MundaneRenderElement::from)
@@ -164,7 +308,10 @@ pub fn sync_spring_positions(state: &mut State) {
     let order: Vec<_> = state.space.elements().cloned().collect();
     let mut reordered = false;
     for window in order {
-        let position = state.wm.spring_id(&window).and_then(|id| state.animation.spring(id))
+        let position = state
+            .wm
+            .spring_id(&window)
+            .and_then(|id| state.animation.spring(id))
             .map(|s| s.rounded_position().into());
         match position {
             Some(pos) if Some(pos) != state.space.element_location(&window) => {

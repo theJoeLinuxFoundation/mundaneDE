@@ -97,6 +97,7 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
             if let Err(e) = state.display_handle.insert_client(
                 stream,
                 Arc::new(ClientState {
+                    context: None,
                     on_exit: state.client_exit.clone(),
                     role: Default::default(),
                     compositor_state: Default::default(),
@@ -170,6 +171,7 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
             match render(&mut backend,state,&output,&mut damage_tracker,&mut presented_size) {
                 Ok(Some(mut feedback)) => {
                     sequence += 1;
+                    state.lock_frame(&output,state.generation);
                     feedback.presented(state.clock.now(), Refresh::fixed(period), sequence, Kind::empty());
                     tracing::trace!(target: "mundane_frame",
                         frame = sequence,
@@ -252,13 +254,20 @@ impl State {
     /// relative pointer) backends share one handler.
     pub fn handle_input<B: InputBackend>(&mut self, event: InputEvent<B>) {
         self.generation += 1;
+        self.input_activity();
         match event {
             InputEvent::Keyboard { event } => {
                 let keyboard = self.seat.get_keyboard().unwrap();
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = event.time_msec();
                 let press = event.state() == KeyState::Pressed;
-                if press {
+                if self.desktop.lock.active {
+                    let target = self.lock_focus().map(crate::focus::KeyboardFocus::native);
+                    if keyboard.current_focus() != target {
+                        keyboard.set_focus(self, target, serial);
+                    }
+                }
+                if press && !self.desktop.lock.active {
                     self.record_input(serial, keyboard.current_focus().map(|f| f.surface));
                 }
                 keyboard.input::<(), _>(
@@ -279,17 +288,57 @@ impl State {
                                 return FilterResult::Intercept(());
                             }
                         }
+                        if state.desktop.lock.active {
+                            return FilterResult::Forward;
+                        }
                         if state.window_menu.is_some() {
                             if press {
                                 state.menu_key(sym);
                             }
                             return FilterResult::Intercept(());
                         }
+                        if press && state.desktop.panel.is_some() {
+                            let delta = match sym {
+                                keysyms::KEY_XF86AudioRaiseVolume => Some("5%+"),
+                                keysyms::KEY_XF86AudioLowerVolume => Some("5%-"),
+                                _ => None,
+                            };
+                            if let Some(d) = delta {
+                                state.shell_message(&serde_json::json!({"osd":d}));
+                                return FilterResult::Intercept(());
+                            }
+                        }
                         if press {
                             if mods.logo {
                                 match sym {
+                                    keysyms::KEY_d if state.desktop.panel.is_some() => {
+                                        state.toggle_desktop();
+                                        return FilterResult::Intercept(());
+                                    }
+                                    keysyms::KEY_l if state.desktop.panel.is_some() => {
+                                        state.begin_lock();
+                                        return FilterResult::Intercept(());
+                                    }
+                                    keysyms::KEY_space if state.desktop.panel.is_some() => {
+                                        state.shell_message(&serde_json::json!({"open":"start"}));
+                                        return FilterResult::Intercept(());
+                                    }
+                                    n if (keysyms::KEY_1..=keysyms::KEY_4).contains(&n) => {
+                                        state.switch_workspace((n - keysyms::KEY_1 + 1) as u8);
+                                        return FilterResult::Intercept(());
+                                    }
                                     keysyms::KEY_Tab => {
-                                        if let Some(w) = state.minimized.last().cloned() {
+                                        if let Some(w) = state
+                                            .minimized
+                                            .iter()
+                                            .rev()
+                                            .find(|w| {
+                                                state.desktop.tasks.get(w).is_some_and(|t| {
+                                                    t.workspace == state.desktop.workspace
+                                                })
+                                            })
+                                            .cloned()
+                                        {
                                             state.restore_window(&w);
                                         }
                                         return FilterResult::Intercept(());
@@ -367,7 +416,35 @@ impl State {
                 if button_state == ButtonState::Pressed {
                     self.record_input(serial, pointer.current_focus());
                 }
-                if button_state == ButtonState::Pressed && !pointer.is_grabbed() {
+                let layer = self.hit_layer(self.cursor_location, true).or_else(|| {
+                    if self.space.element_under(self.cursor_location).is_none() {
+                        self.hit_layer(self.cursor_location, false)
+                    } else {
+                        None
+                    }
+                });
+                if !self.desktop.lock.active && button_state == ButtonState::Pressed {
+                    if let Some((_, _, l)) = &layer {
+                        if l.can_receive_keyboard_focus() {
+                            self.layer_focus(l.wl_surface());
+                        }
+                    }
+                }
+                if !self.desktop.lock.active
+                    && self.hit_layer(self.cursor_location, true).is_none()
+                    && button == BTN_LEFT
+                    && button_state == ButtonState::Pressed
+                {
+                    if let Some((w, offset)) = self.decoration_at(self.cursor_location) {
+                        self.decoration_click(w, offset);
+                        return;
+                    }
+                }
+                if !self.desktop.lock.active
+                    && layer.is_none()
+                    && button_state == ButtonState::Pressed
+                    && !pointer.is_grabbed()
+                {
                     let loc = pointer.current_location();
                     if let Some((window, win_loc)) =
                         self.space.element_under(loc).map(|(w, l)| (w.clone(), l))
@@ -469,10 +546,25 @@ impl State {
                 mv.snap_preview = preview;
             }
         } else {
-            let focus = self.space.element_under(pos).and_then(|(w, loc)| {
-                w.surface_under(pos - loc.to_f64(), smithay::desktop::WindowSurfaceType::ALL)
-                    .map(|(s, offset)| (s, (loc + offset).to_f64()))
-            });
+            let focus = if self.desktop.lock.active {
+                self.lock_pointer(pos)
+            } else {
+                self.hit_layer(pos, true)
+                    .map(|(s, p, _)| (s, p))
+                    .or_else(|| {
+                        self.space
+                            .element_under(pos)
+                            .filter(|_| self.decoration_at(pos).is_none())
+                            .and_then(|(w, loc)| {
+                                w.surface_under(
+                                    pos - loc.to_f64(),
+                                    smithay::desktop::WindowSurfaceType::ALL,
+                                )
+                                .map(|(s, offset)| (s, (loc + offset).to_f64()))
+                            })
+                    })
+                    .or_else(|| self.hit_layer(pos, false).map(|(s, p, _)| (s, p)))
+            };
             pointer.motion(
                 self,
                 focus,

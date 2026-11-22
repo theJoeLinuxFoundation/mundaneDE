@@ -91,6 +91,9 @@ impl KeyboardTarget<State> for KeyboardFocus {
 }
 
 pub fn set_keyboard_focus(state: &mut State, window: Option<&Window>) {
+    if state.desktop.lock.active {
+        return;
+    }
     if let Some(w) = window {
         if w.x11_surface().is_some_and(|x| x.is_override_redirect()) {
             return;

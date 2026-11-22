@@ -34,6 +34,8 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Command {
+    #[command(hide = true)]
+    WatchToplevels,
     /// Test, confirm or revert a DRM output configuration.
     Output {
         #[command(subcommand)]
@@ -50,6 +52,7 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+    if matches!(cli.command,Some(Command::WatchToplevels)){return shell::toplevels::watch();}
     if let Some(Command::Output { action }) = cli.command {
         return backend::output_control::request(action);
     }

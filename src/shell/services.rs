@@ -25,11 +25,13 @@ use std::{
 pub enum Role {
     #[default]
     Application,
+    Shell,
+    Locker,
     InputMethod,
     ClipboardManager,
 }
 
-fn role(client: &Client) -> Role {
+pub(super) fn role(client: &Client) -> Role {
     client
         .get_data::<ClientState>()
         .map(|data| data.role)
@@ -60,6 +62,7 @@ pub fn launch(dh: &DisplayHandle, on_exit: &calloop::ping::Ping) -> anyhow::Resu
         dh.clone().insert_client(
             server,
             Arc::new(ClientState {
+                context: None,
                 role,
                 compositor_state: Default::default(),
                 on_exit: on_exit.clone(),
@@ -131,3 +134,101 @@ impl InputMethodHandler for State {
 smithay::delegate_ext_data_control!(State);
 smithay::delegate_input_method_manager!(State);
 smithay::delegate_virtual_keyboard_manager!(State);
+
+impl State {
+    pub fn trusted_child(&self, role: Role, mut cmd: Command) -> anyhow::Result<Child> {
+        let (server, child) = UnixStream::pair()?;
+        self.display_handle.clone().insert_client(
+            server,
+            Arc::new(ClientState {
+                role,
+                context: None,
+                compositor_state: Default::default(),
+                on_exit: self.client_exit.clone(),
+            }),
+        )?;
+        Ok(cmd
+            .stdin(Stdio::from(OwnedFd::from(child)))
+            .env("WAYLAND_SOCKET", "0")
+            .spawn()?)
+    }
+    fn start_panel(&mut self) -> anyhow::Result<()> {
+        use std::os::unix::net::UnixDatagram;
+        let Some(path) = std::env::var_os("MUNDANE_PANEL") else {
+            return Ok(());
+        };
+        let (server, client) = UnixDatagram::pair()?;
+        server.set_nonblocking(true)?;
+        let mut cmd = Command::new(path);
+        cmd.stdout(Stdio::from(OwnedFd::from(client)))
+            .env("GDK_BACKEND", "wayland");
+        let child = self.trusted_child(Role::Shell, cmd)?;
+        let source = server.try_clone()?;
+        let pid = child.id();
+        if let Some(old) = self.desktop.panel_source.take() {
+            self.handle.remove(old);
+        }
+        let token = self
+            .handle
+            .insert_source(
+                calloop::generic::Generic::new(
+                    source,
+                    calloop::Interest::READ,
+                    calloop::Mode::Level,
+                ),
+                move |_, sock, state| {
+                    if state.desktop.panel.as_ref().map(|c| c.id()) != Some(pid) {
+                        return Ok(calloop::PostAction::Remove);
+                    }
+                    let mut buf = [0; 1024];
+                    if let Ok(n) = sock.recv(&mut buf) {
+                        if let Ok(s) = std::str::from_utf8(&buf[..n]) {
+                            state.shell_command(s);
+                        }
+                    }
+                    Ok(calloop::PostAction::Continue)
+                },
+            )
+            .map_err(|e| anyhow::anyhow!("shell control: {e}"))?;
+        self.desktop.panel_source = Some(token);
+        self.desktop.channel = Some(server);
+        self.desktop.panel = Some(child);
+        Ok(())
+    }
+    pub fn supervise_shell(&mut self) -> anyhow::Result<()> {
+        if std::env::var_os("MUNDANE_PANEL").is_none() {
+            return Ok(());
+        }
+        self.start_panel()?;
+        self.handle
+            .insert_source(
+                calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)),
+                |_, _, state| {
+                    let dead = state
+                        .desktop
+                        .panel
+                        .as_mut()
+                        .is_none_or(|c| !matches!(c.try_wait(), Ok(None)));
+                    if dead {
+                        if let Err(e) = state.start_panel() {
+                            tracing::error!(%e,"restart panel");
+                        }
+                    }
+                    if let Some(c) = &mut state.desktop.lock.child {
+                        let _ = c.try_wait();
+                    }
+                    state.update_inhibitors();
+                    if state.desktop.lock.active {
+                        state.ensure_locker();
+                    } else if state.desktop.lock.last_input.elapsed().as_secs() >= 600
+                        && !state.idle_inhibited()
+                    {
+                        state.begin_lock();
+                    }
+                    calloop::timer::TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
+                },
+            )
+            .map_err(|e| anyhow::anyhow!("shell supervision: {e}"))?;
+        Ok(())
+    }
+}

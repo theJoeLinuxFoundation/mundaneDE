@@ -174,7 +174,7 @@ and applications run with the logged-in UID. [systemd session targets](https://w
 | GDM and PAM | Install `mundane.desktop` under `/usr/share/wayland-sessions/`, alongside GNOME. Set `Exec` and `TryExec` to the installed launcher. GDM registers the session. Use joe’s existing `gdm-password` and `gdm-autologin` PAM stacks, pam_systemd, logind and the per-user D-Bus instance. Keep the GNOME entry and the distribution default. AccountsService’s per-user `Session=mundane` and `SessionType=wayland` opt into this session. |
 | Executables and libraries | Ship `mundane-de`, `mundane-session`, `mundane-settings`, a libseat built with logind, Python 3 with PyGObject/Gio/GLib, dbus-update-activation-environment and systemd user units. The [installer](../session/install.sh) accepts `DESTDIR` and `PREFIX` (use `/usr` for packages). Install Settings separately in the same bin directory. |
 | User units and activation | Install `mundane-session.target` and `mundane-ibus.service` under `lib/systemd/user/`. The launcher starts the target after exporting `WAYLAND_DISPLAY`, `XDG_CURRENT_DESKTOP=mundane`, `XDG_SESSION_DESKTOP=mundane`, `XDG_SESSION_TYPE=wayland` and `XDG_SESSION_ID`. Future shell units should use `PartOf=mundane-session.target`. GDM owns the seat process. A user service outside the session scope cannot take its place. Start X11 applications with the display returned by `mundane-de --x11-display`. |
-| Polkit and power | Install a standalone graphical polkit agent as `mundane-polkit-agent` next to the launcher (a package symlink suffices), or set `MUNDANE_POLKIT_AGENT`. The tested agent is polkit-gnome. Keep polkitd, its PAM helper, `polkit-1` PAM configuration and joe’s administrator policy. The existing Settings timezone action uses `pkexec timedatectl`. The compositor introduces no privileged executable or PAM stack. The launcher requests logind’s delay inhibitor for sleep (`org.freedesktop.login1.inhibit-delay-sleep`), drops it when scanout has stopped and rearms it on wake. |
+| Polkit and power | Until milestone 7, select a standalone graphical polkit agent as `mundane-polkit-agent` next to the launcher (a package symlink suffices), or set `MUNDANE_POLKIT_AGENT`. The beta1 test overlay uses polkit-gnome. Milestone 7 replaces this interim dependency with the shell’s agent. Keep polkitd, its PAM helper, `polkit-1` PAM configuration and joe’s administrator policy. The existing Settings timezone action uses `pkexec timedatectl`. The compositor introduces no privileged executable or PAM stack. The launcher requests logind’s delay inhibitor for sleep (`org.freedesktop.login1.inhibit-delay-sleep`), drops it when scanout has stopped and rearms it on wake. |
 | Portals | Install `share/xdg-desktop-portal/mundane-portals.conf`, xdg-desktop-portal, its GTK backend and the GNOME Keyring Secret backend. After Wayland dispatch begins, explicitly start the GTK backend and portal frontend on each login. This resolves pending D-Bus activation after a previous session stops. D-Bus clients can then reach the chooser and settings provider on the new display. ScreenCast and Screenshot are milestone 6. During logout stop both session targets explicitly so a portal holding a dependency on `graphical-session.target` cannot keep an old display alive. |
 | IBus | Build the GTK Wayland input-method frontend described in milestone 2. Install it in the libexec or lib/ibus location or set `MUNDANE_IBUS_PANEL`. Its presence enables the session-bound daemon with `--panel=disable`. The compositor starts the candidate panel with its private Wayland connection after readiness. Beta1 supplies GNOME’s IBus build and skips this unit under mundaneDE. |
 
@@ -240,6 +240,40 @@ input isolation until a recovered locker authenticates. Include a suspend/lid
 cycle with the session locked before sleep. Exercise service failures on a
 private test bus and repeat device actions on a laptop.
 
+**Implementation and joe packaging.** Install the panel launcher and its Python
+modules with `session/install.sh`. Supply GTK 4, PyGObject, the
+gtk4-layer-shell shared library and typelib, icon themes, GIO desktop and MIME
+databases and the distribution’s preferred file handlers. The session launches
+the panel on a compositor-issued Wayland connection. It uses a second,
+ordinary connection for ext-foreign-toplevel enumeration. Window activation,
+close and workspace moves travel on a private socket inherited by the panel.
+A replacement panel enumerates the existing windows again.
+
+Ship swaylock with its PAM service (`auth include system-auth` on the test
+image), NetworkManager and nmcli, PipeWire, WirePlumber and wpctl, BlueZ
+and bluetoothctl, UPower, polkit and logind. The compositor launches the PAM
+locker on its own connection. It masks every output, checks page-flip completion
+and keeps drawing that mask if the locker exits. The session handles logind’s
+Lock and PrepareForSleep signals. Explicit lock overrides an idle inhibitor.
+
+Milestone 6’s portal backend owns `org.freedesktop.impl.portal.desktop.mundane`.
+Export its active sessions through ObjectManager at
+`/org/freedesktop/portal/desktop`. Each stream session publishes
+`org.joelinux.mundane.ActiveShare.Source`, a user-facing display name.
+Emit InterfacesAdded/Removed as sharing starts or ends and implement
+`org.freedesktop.impl.portal.Session.Close` on the same path. The shell
+shows a stop button for each active source. The M5 test supplies this side
+of the portal contract on the guest bus.
+
+At 1920×1080, beta1 GNOME and mundaneDE both place Home and Trash at the upper
+left, Start at the lower left and system controls at the lower right. GNOME also
+pins application launchers. mundaneDE uses the space beside Start for running
+windows. The headless shell checks drive the guest’s actual taskbar, inspect
+scanout and exercise PAM. Virtual radios and sinks use NetworkManager and
+WirePlumber. BlueZ and UPower service tests run on a private bus. Physical
+device and lid checks belong to the maintainer’s real-machine gate.
+[Shell tests and hand-test launcher](../tests/qemu/session/README.md#try-the-desktop)
+
 ### Upgrade and recovery status on the desktop
 
 The shell owns a persistent entry in the system menu and a notification when
@@ -268,8 +302,9 @@ establish an automatic fallback. Store the delivered fallback’s `event` per
 user across shell restarts. Seeing the same event in `checking` must leave a
 later fallback eligible for notification.
 
-The prepared object lacks a stable identity. Show one notification per
-observed period of preparation and retain the menu entry throughout. If a
+The prepared object lacks a stable identity. Show one notification per observed
+preparation, using a change in the summary or counts, or an intervening clear,
+to recognize a replacement. Retain the menu entry throughout. If a
 staged upgrade is replaced before the next poll by another with identical
 summary and counts, the shell cannot distinguish them. A staged-plan digest
 would allow exact once-per-preparation delivery in that case.
@@ -329,6 +364,28 @@ layouts. Replace the Wayland display stub and keep NixOS upgrade commands out
 of the joe workflow. Direct package management to the suite's Packages app
 when its dave integration is ready. Use AccountsService, timedated and the
 same device services as the system menu for the relevant pages.
+
+**Shell-owned polkit agent.** Replace the interim `MUNDANE_POLKIT_AGENT`
+hook as the default for joe. Register
+`org.freedesktop.PolicyKit1.AuthenticationAgent` with the system authority for
+the active logind session and unregister at logout. Accept BeginAuthentication
+and CancelAuthentication from the authority. Present the action’s localized
+message, action ID and details in an accessible shell dialog, and let the
+user choose among the administrator identities the authority offers. Use
+libpolkit-agent’s authentication session and the distribution’s
+`polkit-agent-helper-1`/PAM conversation. Keep passwords out of logs,
+command arguments and saved state. Give the dialog keyboard focus and restore
+the requesting window afterwards. Cancel pending authentication on lock,
+discard the entry and require a fresh request after unlock.
+
+On a private polkitd or fixture bus test two eligible identities, success,
+a wrong password, both user and authority cancellation, disappearance of the
+requester and a lock during password entry. Verify the selected identity,
+exactly one response to each request, no privileged action after cancellation,
+and that the locker alone receives input. Repeat Settings’ protected timezone
+change through GDM under joe enforcement. Screen-reader checks cover the action,
+identity chooser, errors and masked entry. The interim agent can be supplied
+independently while this work lands.
 
 **Agreement with mundane-apps.** At the suite's Terminal milestone, agree on
 semantic foreground/background, selection, error, accent and focus roles,

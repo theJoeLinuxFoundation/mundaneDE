@@ -82,12 +82,12 @@ def login(index):
         "compositor and agent",
         lambda: (
             g.shell(
-                "pgrep -u joe -x mundane-de && pgrep -u joe -f '^/usr/local/bin/mundane-polkit-agent$' || :"
+                "pgrep -u joe -f '^/usr/local/bin/mundane-de --session-notify ' && pgrep -u joe -f '^/usr/local/bin/mundane-polkit-agent$' || :"
             ).count("\n")
             == 1
         ),
     )
-    pid = int(g.shell("pgrep -u joe -x mundane-de"))
+    pid = int(g.shell("pgrep -u joe -f '^/usr/local/bin/mundane-de --session-notify '"))
     agent = int(g.shell("pgrep -u joe -f '^/usr/local/bin/mundane-polkit-agent$'"))
     for p in (pid, agent):
         assert f"session-{sid}.scope" in g.shell(f"cat /proc/{p}/cgroup")
@@ -181,6 +181,17 @@ def power_cycle(data):
             "PM: suspend exit"
             in g.shell("journalctl -k -b -o cat --no-pager | grep 'PM: suspend' || :")
         ),
+    )
+    wait(
+        "resume remains locked",
+        lambda: g.shell(f"loginctl show-session {sid} -p LockedHint --value") == "yes",
+    )
+    for key in ("j", "o", "e", "ret"):
+        g.key(key)
+        time.sleep(0.12)
+    wait(
+        "PAM unlock after resume",
+        lambda: g.shell(f"loginctl show-session {sid} -p LockedHint --value") == "no",
     )
     key_frame("s3-return", "c", "c12387")
     click_probe()

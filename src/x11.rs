@@ -166,6 +166,7 @@ impl State {
     fn xwindow(&self, x: &X11Surface) -> Option<Window> {
         self.space
             .elements()
+            .chain(self.desktop.tasks.keys())
             .find(|w| w.x11_surface() == Some(x))
             .cloned()
     }
@@ -230,8 +231,10 @@ impl XwmHandler for State {
                     .initial_placement(geo.size, self.pointer_bounds(), &self.space)
             });
         if x.set_mapped(true).is_ok() && x.configure(geo).is_ok() {
-            self.space
-                .map_element(Window::new_x11_window(x), geo.loc, true);
+            self.leave_desktop();
+            let window = Window::new_x11_window(x);
+            self.space.map_element(window.clone(), geo.loc, true);
+            self.register_task(&window);
         }
     }
     fn mapped_override_redirect_window(&mut self, _: XwmId, x: X11Surface) {
@@ -241,6 +244,7 @@ impl XwmHandler for State {
     }
     fn unmapped_window(&mut self, _: XwmId, x: X11Surface) {
         if let Some(w) = self.xwindow(&x) {
+            self.forget_task(&w);
             self.space.unmap_elem(&w);
             if !x.is_override_redirect() {
                 let _ = x.set_mapped(false);

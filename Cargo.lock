@@ -1156,6 +1156,7 @@ dependencies = [
  "image",
  "notify",
  "serde",
+ "serde_json",
  "smithay",
  "smithay-drm-extras",
  "thiserror 2.0.18",

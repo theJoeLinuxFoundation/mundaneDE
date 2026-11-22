@@ -4,13 +4,12 @@ Use joe’s beta1 `--test` desktop image with its serial test console and GDM
 autologin account. From the repository root on an x86 KVM host, build the
 compositor and Settings. Supply a logind-enabled libseat and a standalone GTK
 polkit authentication agent compatible with the guest. The reference run used
-the host’s libseat.so.1 and polkit-gnome’s authentication agent. All other
-runtime libraries came from joe. The host and guest used glibc 2.44.
+the host’s libseat.so.1 and polkit-gnome’s authentication agent. The shell also needs GTK 4 layer-shell and swaylock, which the harness stages in the overlay. The host and guest used glibc 2.44.
 
 ```sh
 cargo build --release --locked --bins --examples
 cargo build --locked --manifest-path settings-panel/Cargo.toml
-run=$(tests/qemu/session/boot.sh /path/to/joe-desktop.img)
+run=$(tests/qemu/session/boot.sh)
 python3 tests/qemu/session/prepare.py "$run" \
     --libseat /usr/lib/libseat.so.1 --agent /path/to/polkit-gnome-authentication-agent-1 \
     --settings settings-panel/target/debug/mundane-settings
@@ -58,3 +57,68 @@ for the guest journal observations under enforcement and across suspend.
 The serial transcript, firmware variables, overlay and named PPM screenshots
 remain in the private run directory. The overlay contains the test account and
 its session state.
+
+## Try the desktop
+
+Run this command from the repository root.
+
+```sh
+./tests/try-mundane.sh
+```
+
+On the first start the script builds the current checkout, installs it in a
+private qcow2 overlay, selects mundaneDE for joe through GDM and checks the
+enforcing boot headlessly. It then opens the QEMU window. The guest has eight
+KVM vCPUs, 6 GiB RAM and a 1920×1080 primary display. The test account and
+password are both `joe`. Open Start with Super+Space, move between workspaces
+with Super+1 through Super+4, focus the desktop icons with Super+D and lock
+with Super+L. The clock opens the system
+menu. Choose Power off and confirm to end the run cleanly.
+
+The default base is `~/Projects/joe-linux/build/images/joe-desktop-beta1.img`.
+Both base nodes and the staging share are read-only. Guest writes and EFI
+variables persist in `~/.cache/mundane-try/desktop` (under `XDG_CACHE_HOME`
+when set). Relaunching reuses that disk and updates the installed shell when
+the checkout changes. An image replacement requires a fresh `MUNDANE_TRY_DIR`.
+Select a different compatible beta1 test image with `--image PATH`.
+The guest has no network interface or host device passthrough.
+
+The reference x86 host supplies KVM, QEMU with GTK display support, OVMF,
+rustup stable and the compositor and Settings build dependencies. Install
+libseat, GTK 4 layer-shell and its GI typelib, binutils, curl and bsdtar.
+The helper uses installed swaylock and the interim polkit-gnome agent when
+available. Otherwise it extracts the two pinned, SHA-256-checked binaries
+from the Arch package archive into the test cache. Their PAM conversation,
+libraries and services run inside joe. Distribution packages can select
+another agent through `MUNDANE_POLKIT_AGENT` until milestone 7.
+
+### Headless shell qualification
+
+Use a dedicated guest because the test controls its virtual devices, logs in
+and out of the locker and temporarily substitutes shell-only dave fixtures.
+Run these commands from the repository root.
+
+```sh
+export MUNDANE_TRY_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/mundane-try/qualification"
+./tests/try-mundane.sh --headless
+cargo +stable build --locked --release --example nested-capabilities
+python3 tests/qemu/session/qualify_shell.py "$MUNDANE_TRY_DIR"
+python3 tests/qemu/session/guest.py "$MUNDANE_TRY_DIR" qmp system_powerdown
+```
+
+QMP captures the actual scanouts and delivers virtual seat input. Guest AT-SPI
+activates named controls. The gate exercises Start, desktop files, server-side
+window buttons, workspace moves, panel restart, app notifications, a
+StatusNotifierItem, the portal stop control, virtual Wi-Fi and audio devices,
+three locked displays, locker loss, wrong and correct passwords and S3.
+The beta1 image predates dave 0.4.0-r3. The panel reads schema-1 fixtures
+through its normal unprivileged command, including repeated polls and shell
+restarts. The actual deployment and failed-boot evidence belongs to joe’s
+dave VM suite.
+
+```sh
+python3 tests/qemu/session/upgrade_checks.py
+runtime=$(mktemp -d)
+env -i HOME="$runtime" PATH=/usr/bin:/bin XDG_RUNTIME_DIR="$runtime" \
+  dbus-run-session -- python3 tests/qemu/session/device_checks.py
+```

@@ -185,6 +185,7 @@ pub fn run_drm(config: MundaneConfig, notify: Option<&std::path::Path>) -> anyho
             if let Err(e) = state.display_handle.insert_client(
                 stream,
                 Arc::new(ClientState {
+                    context: None,
                     on_exit: state.client_exit.clone(),
                     role: Default::default(),
                     compositor_state: Default::default(),
@@ -250,6 +251,7 @@ pub fn run_drm(config: MundaneConfig, notify: Option<&std::path::Path>) -> anyho
                                 seq = sequence, ns = stamp.as_nanos() as u64, "DRM page flip");
                         }
                         head.submitted_generation = head.generation;
+                        state.lock_frame(&head.head.output,head.generation);
                         feedback.presented(time, Refresh::fixed(head.period()), sequence, flags);
                     }
                     Ok(None) => {}

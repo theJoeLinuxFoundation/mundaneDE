@@ -1,5 +1,6 @@
 //! Inspect the initial configure as a CSD-capable client would before building its header.
 mod presentation;
+mod shell_client;
 use std::{env, os::unix::net::UnixStream};
 use wayland_client::{
     delegate_noop,
@@ -14,13 +15,15 @@ use wayland_protocols::xdg::{
 
 #[derive(Default)]
 struct Client {
-    presented:u64,
-    sequence:u64,
-    drm:bool,
-    discarded:bool,
+    presented: u64,
+    sequence: u64,
+    drm: bool,
+    discarded: bool,
     serial: Option<u32>,
     capabilities: Vec<u32>,
     client_side: bool,
+    server_side_requested: bool,
+    requested_size: Option<(i32, i32)>,
     configured: bool,
 }
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Client {
@@ -47,6 +50,14 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for Client {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if matches!(e, xdg_toplevel::Event::Close) && s.server_side_requested {
+            println!("close requested");
+            std::process::exit(0);
+        }
+        if let xdg_toplevel::Event::Configure { width, height, .. } = &e {
+            s.requested_size = Some((*width, *height));
+            println!("configure {width} {height}");
+        }
         if let xdg_toplevel::Event::WmCapabilities { capabilities } = e {
             s.capabilities = capabilities
                 .chunks_exact(4)
@@ -85,7 +96,7 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for Client {
                 [1, 2, 3, 4],
                 "window menu, maximize, fullscreen and minimize"
             );
-            assert!(s.client_side);
+            assert_eq!(s.client_side, !s.server_side_requested);
             x.ack_configure(serial);
             s.configured = true;
         }
@@ -147,16 +158,40 @@ fn main() -> anyhow::Result<()> {
     let surface = wm.get_xdg_surface(&wl, &q, ());
     let top = surface.get_toplevel(&q, ());
     let decoration = manager.get_toplevel_decoration(&top, &q, ());
-    decoration.unset_mode();
+    let shell = env::args().nth(2).as_deref() == Some("--shell");
+    if shell {
+        top.set_app_id("org.joelinux.ShellTest".into());
+        top.set_title(
+            env::args()
+                .nth(4)
+                .unwrap_or_else(|| "Shell test window".into()),
+        );
+        decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
+    } else {
+        decoration.unset_mode();
+    }
+
     wl.commit();
-    let mut state = Client::default();
+    let mut state = Client {
+        server_side_requested: shell,
+        ..Client::default()
+    };
     while !state.configured {
         queue.blocking_dispatch(&mut state)?;
     }
     if let Some(path) = env::args().nth(2) {
-        if path=="--presentation"{
-            state.drm=env::args().nth(3).as_deref()==Some("drm");
-            return presentation::exercise(&globals,&mut queue,&mut state,&wl)
+        if shell {
+            return shell_client::run(
+                &globals,
+                &mut queue,
+                &mut state,
+                &wl,
+                std::path::Path::new(&env::args().nth(3).unwrap()),
+            );
+        }
+        if path == "--presentation" {
+            state.drm = env::args().nth(3).as_deref() == Some("drm");
+            return presentation::exercise(&globals, &mut queue, &mut state, &wl);
         }
         use std::os::fd::AsFd;
         let backing = std::fs::File::create_new(path)?;

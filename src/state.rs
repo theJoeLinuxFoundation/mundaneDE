@@ -67,6 +67,7 @@ pub struct MoveState {
 
 /// Per-client state required by the compositor protocol.
 pub struct ClientState {
+    pub context: Option<smithay::wayland::security_context::SecurityContext>,
     pub on_exit: calloop::ping::Ping,
     pub compositor_state: CompositorClientState,
     pub role: crate::shell::services::Role,
@@ -78,6 +79,7 @@ impl ClientData for ClientState {
 }
 
 pub struct State {
+    pub desktop: crate::shell::desktop::Desktop,
     pub display_handle: DisplayHandle,
     pub client_exit: calloop::ping::Ping,
 
@@ -202,6 +204,7 @@ impl State {
         }).map_err(|e|anyhow::anyhow!("register client exit notification: {e}"))?;
 
         Ok(Self {
+            desktop: crate::shell::desktop::Desktop::new(dh,handle.clone()),
             display_handle: dh.clone(),
             client_exit,
             compositor_state,
@@ -264,6 +267,7 @@ impl State {
     }
 
     pub fn launch_helpers(&mut self) -> anyhow::Result<()> {
+        self.supervise_shell()?;
         self.services = crate::shell::services::launch(&self.display_handle, &self.client_exit)?;
         Ok(())
     }
@@ -281,6 +285,12 @@ impl CompositorHandler for State {
         &mut self.compositor_state
     }
 
+    fn new_surface(&mut self, surface:&WlSurface) {
+        if surface.client().and_then(|c|c.get_data::<ClientState>().map(|d|d.role))==Some(crate::shell::services::Role::Shell){
+            crate::shell::desktop::track_layer_teardown(surface);
+        }
+    }
+
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
         if let Some(x) = client.get_data::<XWaylandClientData>() {
             return &x.compositor_state;
@@ -291,6 +301,7 @@ impl CompositorHandler for State {
     fn commit(&mut self, surface: &WlSurface) {
         self.generation += 1;
         self.handle_commit(surface);
+        self.layer_commit(surface);
     }
 }
 

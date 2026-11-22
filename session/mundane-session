@@ -35,7 +35,9 @@ def publish(env):
     )
     absent = [key for key in KEYS if key not in env]
     if absent:
-        subprocess.run(["systemctl", "--user", "unset-environment", *absent], check=True)
+        subprocess.run(
+            ["systemctl", "--user", "unset-environment", *absent], check=True
+        )
 
 
 def stop(process):
@@ -61,7 +63,9 @@ def run_until_logout(compositor, agent, channel):
             path,
             manager,
             "Inhibit",
-            GLib.Variant("(ssss)", ("sleep", "mundaneDE", "Release display buffers", "delay")),
+            GLib.Variant(
+                "(ssss)", ("sleep", "mundaneDE", "Release display buffers", "delay")
+            ),
             GLib.VariantType.new("(h)"),
             Gio.DBusCallFlags.NONE,
             5000,
@@ -70,6 +74,17 @@ def run_until_logout(compositor, agent, channel):
         )
         return fds.get(reply.unpack()[0])
 
+    session_path = bus.call_sync(
+        service,
+        path,
+        manager,
+        "GetSession",
+        GLib.Variant("(s)", (os.environ["XDG_SESSION_ID"],)),
+        GLib.VariantType.new("(o)"),
+        Gio.DBusCallFlags.NONE,
+        5000,
+        None,
+    ).unpack()[0]
     inhibitor = inhibit()
 
     def sleep_changed(_bus, _sender, _path, _interface, _signal, args):
@@ -83,7 +98,21 @@ def run_until_logout(compositor, agent, channel):
 
     def reply(_fd, condition):
         nonlocal inhibitor
-        if condition & GLib.IO_HUP or channel.recv(1) != b"S":
+        op = channel.recv(1)
+        if op in (b"L", b"U"):
+            bus.call_sync(
+                service,
+                session_path,
+                "org.freedesktop.login1.Session",
+                "SetLockedHint",
+                GLib.Variant("(b)", (op == b"L",)),
+                None,
+                Gio.DBusCallFlags.NONE,
+                5000,
+                None,
+            )
+            return True
+        if condition & GLib.IO_HUP or op != b"S":
             loop.quit()
             return False
         if inhibitor is not None:
@@ -92,11 +121,28 @@ def run_until_logout(compositor, agent, channel):
         return True
 
     subscription = bus.signal_subscribe(
-        service, manager, "PrepareForSleep", path, None, Gio.DBusSignalFlags.NONE, sleep_changed
+        service,
+        manager,
+        "PrepareForSleep",
+        path,
+        None,
+        Gio.DBusSignalFlags.NONE,
+        sleep_changed,
+    )
+    lock_subscription = bus.signal_subscribe(
+        service,
+        "org.freedesktop.login1.Session",
+        "Lock",
+        session_path,
+        None,
+        Gio.DBusSignalFlags.NONE,
+        lambda *_: channel.sendall(b"L"),
     )
     children = [os.pidfd_open(child.pid) for child in (compositor, agent)]
     sources = [
-        GLib.io_add_watch(channel.fileno(), GLib.PRIORITY_DEFAULT, GLib.IO_IN | GLib.IO_HUP, reply)
+        GLib.io_add_watch(
+            channel.fileno(), GLib.PRIORITY_DEFAULT, GLib.IO_IN | GLib.IO_HUP, reply
+        )
     ]
 
     def quit_loop(*_):
@@ -105,12 +151,15 @@ def run_until_logout(compositor, agent, channel):
 
     try:
         for fd in children:
-            sources.append(GLib.io_add_watch(fd, GLib.PRIORITY_DEFAULT, GLib.IO_IN, quit_loop))
+            sources.append(
+                GLib.io_add_watch(fd, GLib.PRIORITY_DEFAULT, GLib.IO_IN, quit_loop)
+            )
         for sig in (signal.SIGTERM, signal.SIGHUP):
             sources.append(GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, quit_loop))
         loop.run()
     finally:
         bus.signal_unsubscribe(subscription)
+        bus.signal_unsubscribe(lock_subscription)
         for source in sources:
             if loop.get_context().find_source_by_id(source):
                 GLib.source_remove(source)
@@ -137,19 +186,25 @@ def session():
                 env["MUNDANE_IBUS_PANEL"] = path
                 break
     bindir = Path(__file__).resolve().parent
+    env["MUNDANE_PANEL"] = str(bindir / "mundane-panel")
     agent_path = env.get("MUNDANE_POLKIT_AGENT") or bindir / "mundane-polkit-agent"
     if not os.access(agent_path, os.X_OK):
-        raise RuntimeError("install the mundane-polkit-agent executable for this session")
+        raise RuntimeError(
+            "install the mundane-polkit-agent executable for this session"
+        )
     compositor = agent = channel = None
     published = False
-    with tempfile.TemporaryDirectory(dir=env["XDG_RUNTIME_DIR"], prefix="mundane-session-") as temp:
+    with tempfile.TemporaryDirectory(
+        dir=env["XDG_RUNTIME_DIR"], prefix="mundane-session-"
+    ) as temp:
         with socket.socket(socket.AF_UNIX) as listener:
             listener.bind(temp + "/ready")
             listener.listen(1)
             listener.settimeout(0.25)
             try:
                 compositor = subprocess.Popen(
-                    [bindir / "mundane-de", "--session-notify", temp + "/ready"], env=env
+                    [bindir / "mundane-de", "--session-notify", temp + "/ready"],
+                    env=env,
                 )
                 while compositor.poll() is None:
                     try:
@@ -168,7 +223,8 @@ def session():
                 published = True
                 publish(env)
                 subprocess.run(
-                    ["systemctl", "--user", "start", "mundane-session.target"], check=True
+                    ["systemctl", "--user", "start", "mundane-session.target"],
+                    check=True,
                 )
                 channel.sendall(b"1")
                 # A cancelled D-Bus activation at logout can remain pending

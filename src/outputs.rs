@@ -94,6 +94,9 @@ impl State {
     }
 
     pub fn remove_head(&mut self, head: Head) {
+        self.desktop.lock.covered.remove(&head.output);
+        self.desktop.presented.remove(&head.output);
+        self.desktop.lock.surfaces.remove(&head.output);
         self.space.unmap_output(&head.output);
         // Let clients that saw the announcement bind an already in-flight wl_output.
         // New registry listeners see the removal immediately.
@@ -130,6 +133,13 @@ impl State {
             self.space.map_output(&output, loc);
             output.change_current_state(None, None, None, Some(loc));
             let bounds = self.space.output_geometry(&output).unwrap();
+            smithay::desktop::layer_map_for_output(&output).arrange();
+            if let Some(lock) = self.desktop.lock.surfaces.get(&output) {
+                lock.with_pending_state(|s| {
+                    s.size = Some((bounds.size.w as u32, bounds.size.h as u32).into())
+                });
+                lock.send_configure();
+            }
             self.layout.push((output, bounds));
             x = x.max(bounds.loc.x + bounds.size.w);
         }
@@ -333,10 +343,14 @@ impl State {
         );
     }
     pub fn feedback(
-        &self,
+        &mut self,
         output: &Output,
         states: &RenderElementStates,
     ) -> OutputPresentationFeedback {
+        self.desktop
+            .presented
+            .insert(output.clone(), states.clone());
+        self.update_inhibitors();
         let mut feedback = OutputPresentationFeedback::new(output);
         for w in self.space.elements() {
             w.take_presentation_feedback(
@@ -353,6 +367,23 @@ impl State {
         feedback
     }
     pub fn send_frames(&self, output: &Output) {
+        if self.desktop.lock.active {
+            if let Some(s) = self.desktop.lock.surfaces.get(output) {
+                smithay::desktop::utils::send_frames_surface_tree(
+                    s.wl_surface(),
+                    output,
+                    self.start_time.elapsed(),
+                    None,
+                    |_, _| Some(output.clone()),
+                );
+            }
+            return;
+        }
+        for layer in smithay::desktop::layer_map_for_output(output).layers() {
+            layer.send_frame(output, self.start_time.elapsed(), None, |_, _| {
+                Some(output.clone())
+            });
+        }
         for w in self.space.elements() {
             w.send_frame(
                 output,

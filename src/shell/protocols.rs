@@ -28,8 +28,11 @@ impl XdgDecorationHandler for State {
     fn new_decoration(&mut self, surface: ToplevelSurface) {
         self.unset_mode(surface);
     }
-    fn request_mode(&mut self, surface: ToplevelSurface, _: Mode) {
-        self.unset_mode(surface);
+    fn request_mode(&mut self, surface: ToplevelSurface, mode: Mode) {
+        surface.with_pending_state(|s| s.decoration_mode = Some(mode));
+        if surface.is_initial_configure_sent() {
+            surface.send_pending_configure();
+        }
     }
     fn unset_mode(&mut self, surface: ToplevelSurface) {
         surface.with_pending_state(|s| s.decoration_mode = Some(Mode::ClientSide));
