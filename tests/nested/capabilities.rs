@@ -1,4 +1,5 @@
 //! Inspect the initial configure as a CSD-capable client would before building its header.
+mod presentation;
 use std::{env, os::unix::net::UnixStream};
 use wayland_client::{
     delegate_noop,
@@ -13,6 +14,10 @@ use wayland_protocols::xdg::{
 
 #[derive(Default)]
 struct Client {
+    presented:u64,
+    sequence:u64,
+    drm:bool,
+    discarded:bool,
     serial: Option<u32>,
     capabilities: Vec<u32>,
     client_side: bool,
@@ -149,6 +154,10 @@ fn main() -> anyhow::Result<()> {
         queue.blocking_dispatch(&mut state)?;
     }
     if let Some(path) = env::args().nth(2) {
+        if path=="--presentation"{
+            state.drm=env::args().nth(3).as_deref()==Some("drm");
+            return presentation::exercise(&globals,&mut queue,&mut state,&wl)
+        }
         use std::os::fd::AsFd;
         let backing = std::fs::File::create_new(path)?;
         backing.set_len(64 * 64 * 4)?;

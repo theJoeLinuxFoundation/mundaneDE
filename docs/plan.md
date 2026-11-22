@@ -97,7 +97,12 @@ traces and screenshots are recorded by the [application tests](../tests/nested/R
 `DISPLAY` from `mundane-de --x11-display`. Ship the upstream GTK 3 IBus panel
 built with its Wayland input-method-v2 frontend, start the session's IBus daemon
 with the automatic panel disabled, and set `MUNDANE_IBUS_PANEL` to the panel
-executable. Keep the existing joe IBus daemon and engines. The compositor gives
+executable. The compositor launches it with `--enable-wayland-im`. This panel
+draws the candidate list and auxiliary text in an input-method popup. mundaneDE
+positions that surface by the focused field’s caret, keeping it on the output.
+The panel relays preedit and commits through input-method-v2 and text-input-v3.
+GTK and Firefox draw inline preedit in the field and insert the committed text.
+Keep the existing joe IBus daemon and engines. The compositor gives
 input-method and virtual-keyboard access to that frontend’s private connection.
 An optional session clipboard manager named by `MUNDANE_CLIPBOARD_MANAGER`
 receives ext-data-control on its own connection. GTK and GPUI should use
@@ -106,32 +111,34 @@ capabilities. The taskbar restore path belongs to milestone 5.
 
 ## 3. Drive each display at its own scale and refresh rate
 
-Replace the single output and flip flag with per-connector mode, logical
-position, transform, scale, damage history and presentation clock. Map input
-in logical coordinates and choose an output for each surface and its popups.
-On unplug, move windows, focus and panels to an available display. Retain a
-known-good layout and require confirmation with a timeout for mode changes.
+Each active CRTC has a scanout, damage history, pending flip and presentation
+clock. The session maps connectors into logical coordinates and picks the output
+with the largest overlap for each surface. Unplugging a display keeps windows,
+pointer and keyboard focus reachable. A mode trial restores the previous layout
+after 15 seconds unless confirmed after a successful flip. Confirmed connector
+preferences survive reconnect and login. The shell in milestone 5 will use
+this layout for its panels.
 
 | Interface | Behaviour and test |
 | --- | --- |
 | fractional-scale-v1 and viewporter | Send preferred fractional scale, apply viewport source/destination correctly and retain integer-scale fallback. Move GTK, Firefox and GPUI between 100%, 150% and 200%. Check a sharp text sample, exact pointer hit targets and a popup crossing the boundary. |
 | linux-dmabuf and presentation-time | Advertise formats/modifiers the renderer imports, send feedback and retain the shared-memory path. Exercise a Mesa/EGL client and a GPUI wgpu client, compare colours, and check presented/discarded feedback against DRM page flips. Record the timing source on nested runs. |
-| tearing-control-v1 | Treat the requested presentation mode as a hint. Permit asynchronous flips only on a capable output under the chosen fullscreen policy. Verify normal windows remain synchronized and an unsupported request falls back to vsync. |
+| tearing-control-v1 | Treat the requested presentation mode as a hint. Use synchronized flips for all windows, including fullscreen surfaces requesting async. The pinned Smithay DRM compositor exposes synchronized submission. The guest requests async and checks vsync feedback. |
 
 **Acceptance.** With two outputs of different scale and refresh, drag a window
 between them, unplug its current output, reconnect, then reject a proposed mode
 and recover the previous layout. Check window bounds, cursor, focus and content
-in each state. Use virtual outputs for geometry and real DRM hardware for
-hotplug, modesetting, modifier import and scanout timing.
+in each state. Exercise hotplug, modesetting and kernel page-flip feedback on virtual connectors
+in a headless DRM guest. Check DMA-BUF import against shared-memory pixels on
+the isolated render node. Physical displays belong to the final maintainer gate.
 
 Magnetic placement should go unnoticed during an ordinary drag. Verify the
 window follows the pointer until release, settles at a nearby edge or neighbour
 and stays put when released outside the attraction radius. Repeat with reduced
 motion enabled and use the same target immediately, without overshoot or a fade.
 
-**Spring and frame budgets.** Proposed targets are measured in a release DRM
-build on a recorded reference GPU/CPU, first at 1920×1080/60 Hz and then at
-120 Hz on a capable display. Script ten moving windows and repeat drag, snap
+**Spring and frame budgets.** Measure the release build on a recorded GPU/CPU
+with headless 1920×1080 outputs at 60 and 120 Hz. Script ten moving windows and repeat drag, snap
 and wallpaper fade for 60 seconds after warm-up. Record p50/p95/p99 spring
 CPU time, composition time and presentation intervals per output. Target p95
 spring update below 1 ms, p95 CPU update plus render submission below 8 ms at
@@ -141,7 +148,14 @@ run. Drive frames from damage, active springs and pending client work. In a
 zero animation redraws. In a deterministic clock test, drop a frame, check
 bounded motion and exact final positions, then verify the final settled frame
 reaches the screen. Keep software-rendered screenshot runs separate from timing
-measurements.
+measurements. The nested timing source is the monotonic EGL submission timestamp.
+DRM clients receive the guest kernel’s monotonic flip timestamp and sequence
+when available. Superseded submissions receive discarded feedback.
+
+The [two-output guest test](../tests/qemu/README.md#automated-output-test) covers
+mode rollback, reconnect, application scaling and per-output presentation. The
+[frame and idle measurements](../tests/nested/README.md#frame-and-idle-budgets)
+record the reference run and reproduction commands.
 
 ## 4. Enter and leave a real session
 
@@ -375,4 +389,4 @@ Extend the checklist as each milestone lands.
 | Rust and service tests | Run `cargo test --locked` in the root and `cargo test --locked --workspace` in `settings-panel/`. Extend the current spring, snap, wallpaper, parser and TOML tests with clock-driven final frames, output transforms, focus transitions and config migration. Use private D-Bus fixtures for disappearing devices, cancellation and denied authorization. |
 | Nested and headless tests | Start a disposable host compositor, private runtime/config/data directories and a session bus. Wait for socket and service readiness with a timeout. Drive real Wayland processes with input delivered by the harness. Record registry, configure/ack, focus and client exit. Keep virtual input confined to the test session. Supplement these tests with GPUI headless widget tests. |
 | Screenshot checks | Pin the Mesa software renderer, fonts, locale, fixture data, geometry, scale, wallpaper, cursor and clock. Capture at a named state or spring tick, including the frame after settling. Compare geometry exactly and use a documented per-channel tolerance for pixels. On failure save reference, actual, diff and logs. Review changed reference images with the feature that changed them. |
-| DRM, VM and hardware | Use the existing manual QEMU path for KMS smoke tests. Add automated joe image scenarios through the distribution handoff. Verify VT ownership, mixed-refresh presentation, hotplug, lock and suspend on real devices. Store timing traces alongside hardware details. [Manual QEMU test](../tests/qemu/README.md) |
+| DRM, VM and hardware | Run the diskless two-output QEMU test for modes, mixed refresh, presentation and hotplug. Use the interactive VM for investigation and add joe image scenarios through the distribution handoff. The final maintainer gate covers physical devices, VT ownership, lock and suspend. Keep timing traces with hardware details. [QEMU tests](../tests/qemu/README.md) |

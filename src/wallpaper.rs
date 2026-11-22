@@ -10,11 +10,13 @@
 //! of the outgoing `previous` (fading 100→0). The fade value lives on the spring's `x` axis,
 //! read as `position / 100` and clamped to `[0, 1]`.
 
+use std::rc::Rc;
+
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::texture::{TextureBuffer, TextureRenderElement};
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
-use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size, Transform};
+use smithay::utils::{Buffer, Logical, Point, Rectangle, Size, Transform};
 
 use crate::animation::{AnimationEngine, SpringId};
 use crate::config::{ScalingMode, WallpaperSection};
@@ -22,7 +24,8 @@ use crate::config::{ScalingMode, WallpaperSection};
 /// A single decoded wallpaper image and the spring animating its opacity.
 struct WallpaperLayer {
     /// Tightly packed RGBA8 pixels (`Fourcc::Abgr8888` byte order).
-    pixels: Vec<u8>,
+    pixels: Rc<Vec<u8>>,
+    builtin: bool,
     /// Image dimensions in pixels.
     size: (i32, i32),
     /// GPU texture, imported lazily on first render and cached thereafter.
@@ -81,10 +84,24 @@ impl WallpaperManager {
     /// Swap to a new wallpaper, crossfading from the current one. Decoding happens here (CPU
     /// only); the GPU upload is deferred to the next render.
     pub fn set_wallpaper(&mut self, path: Option<&str>, animation: &mut AnimationEngine) {
-        let (pixels, size) = match decode(path) {
-            Ok(v) => v,
+        // Replaying Afterlight should only start a fade. Decoding it again would
+        // block input and both output clocks for the duration of a JPEG decode.
+        let builtin = path.is_none();
+        let cached = self
+            .current
+            .as_ref()
+            .filter(|layer| builtin && layer.builtin);
+        let image = match cached {
+            Some(layer) => Ok((layer.pixels.clone(), layer.size)),
+            None => decode(path).map(|(pixels, size)| (Rc::new(pixels), size)),
+        };
+        let (pixels, size) = match image {
+            Ok(image) => image,
             Err(e) => {
-                tracing::warn!("failed to load wallpaper '{}': {e}", path.unwrap_or("Afterlight"));
+                tracing::warn!(
+                    "failed to load wallpaper '{}': {e}",
+                    path.unwrap_or("Afterlight")
+                );
                 return;
             }
         };
@@ -98,7 +115,13 @@ impl WallpaperManager {
             }
             self.previous = Some(current);
         }
-        self.current = Some(new_layer(pixels, size, self.fade_params, animation));
+        self.current = Some(new_layer(
+            pixels,
+            builtin,
+            size,
+            self.fade_params,
+            animation,
+        ));
     }
 
     /// Current scaling mode (read by tests and the hot-reload diff).
@@ -114,7 +137,11 @@ impl WallpaperManager {
 
     /// Retune the fade spring's params on every existing layer. Used by the config
     /// hot-reload path when `[wallpaper].fade_*` changes.
-    pub fn retune_fade(&mut self, params: crate::animation::SpringParams, animation: &mut AnimationEngine) {
+    pub fn retune_fade(
+        &mut self,
+        params: crate::animation::SpringParams,
+        animation: &mut AnimationEngine,
+    ) {
         self.fade_params = params;
         if let Some(layer) = &self.current {
             if let Some(s) = animation.spring_mut(layer.fade) {
@@ -154,15 +181,32 @@ impl WallpaperManager {
         renderer: &mut GlesRenderer,
         animation: &AnimationEngine,
         output: (i32, i32),
+        scale: f64,
     ) -> Vec<TextureRenderElement<GlesTexture>> {
         let mode = self.mode;
         let mut elements = Vec::new();
         // `current` first → drawn on top of `previous` while crossfading in.
         if let Some(layer) = self.current.as_mut() {
-            push_layer(layer, mode, output, renderer, animation, &mut elements);
+            push_layer(
+                layer,
+                mode,
+                output,
+                scale,
+                renderer,
+                animation,
+                &mut elements,
+            );
         }
         if let Some(layer) = self.previous.as_mut() {
-            push_layer(layer, mode, output, renderer, animation, &mut elements);
+            push_layer(
+                layer,
+                mode,
+                output,
+                scale,
+                renderer,
+                animation,
+                &mut elements,
+            );
         }
         elements
     }
@@ -183,20 +227,21 @@ fn decode(path: Option<&str>) -> anyhow::Result<(Vec<u8>, (i32, i32))> {
 
 /// Create a layer with a fresh fade-in spring (0 → 100).
 fn new_layer(
-    pixels: Vec<u8>,
+    pixels: Rc<Vec<u8>>,
+    builtin: bool,
     size: (i32, i32),
     params: crate::animation::SpringParams,
     animation: &mut AnimationEngine,
 ) -> WallpaperLayer {
     // Tagged `Fade` so the hot-reload path retunes wallpaper springs from
     // `[wallpaper].fade_*`, not from `[spring]`.
-    let fade =
-        animation.create_spring_kind(0, 0, params, crate::animation::SpringKind::Fade);
+    let fade = animation.create_spring_kind(0, 0, params, crate::animation::SpringKind::Fade);
     if let Some(spring) = animation.spring_mut(fade) {
         spring.set_target(100, 0);
     }
     WallpaperLayer {
         pixels,
+        builtin,
         size,
         texture: None,
         fade,
@@ -208,6 +253,7 @@ fn push_layer(
     layer: &mut WallpaperLayer,
     mode: ScalingMode,
     output: (i32, i32),
+    scale: f64,
     renderer: &mut GlesRenderer,
     animation: &AnimationEngine,
     out: &mut Vec<TextureRenderElement<GlesTexture>>,
@@ -225,7 +271,7 @@ fn push_layer(
     };
     for (location, src, size) in placements(mode, image, output) {
         out.push(TextureRenderElement::from_texture_buffer(
-            location,
+            location.to_physical(scale),
             buffer,
             Some(alpha),
             src,
@@ -236,13 +282,13 @@ fn push_layer(
 }
 
 type Placement = (
-    Point<f64, Physical>,
+    Point<f64, Logical>,
     Option<Rectangle<f64, Logical>>,
     Option<Size<i32, Logical>>,
 );
 
 /// Compute destination placement(s) for an image of `image` size on an `output` of the given
-/// size, per the scaling mode. Output scale is 1, so logical == physical here.
+/// logical size, per the scaling mode.
 fn placements(mode: ScalingMode, image: (i32, i32), output: (i32, i32)) -> Vec<Placement> {
     let (iw, ih) = (image.0 as f64, image.1 as f64);
     let (ow, oh) = (output.0 as f64, output.1 as f64);
@@ -277,11 +323,7 @@ fn placements(mode: ScalingMode, image: (i32, i32), output: (i32, i32)) -> Vec<P
             let dest_w = (iw * scale).round();
             let dest_h = (ih * scale).round();
             let loc = Point::from(((ow - dest_w) / 2.0, (oh - dest_h) / 2.0));
-            vec![(
-                loc,
-                None,
-                Some(Size::from((dest_w as i32, dest_h as i32))),
-            )]
+            vec![(loc, None, Some(Size::from((dest_w as i32, dest_h as i32))))]
         }
         ScalingMode::Center => {
             // Original size, centred (may overflow and be clipped to the output).
@@ -338,8 +380,16 @@ mod tests {
         assert_eq!((size.w, size.h), (1920, 1080));
         let src = src.expect("fill should crop a source region");
         // scale = max(1920/4000, 1080/2000) = 0.54 → full height, cropped width.
-        assert!(src.size.h >= 1999.0, "source height should be full: {}", src.size.h);
-        assert!(src.size.w < 4000.0, "source width should be cropped: {}", src.size.w);
+        assert!(
+            src.size.h >= 1999.0,
+            "source height should be full: {}",
+            src.size.h
+        );
+        assert!(
+            src.size.w < 4000.0,
+            "source width should be cropped: {}",
+            src.size.w
+        );
         assert!(src.loc.x > 0.0, "crop should be horizontally centred");
     }
 

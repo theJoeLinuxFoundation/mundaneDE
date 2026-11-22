@@ -56,7 +56,7 @@ impl MundaneConfigFile {
     pub fn spring(&self) -> (f64, f64, f64) {
         (
             self.f64("spring", "stiffness").unwrap_or(100.0),
-            self.f64("spring", "damping").unwrap_or(10.0),
+            self.f64("spring", "damping").unwrap_or(20.0),
             self.f64("spring", "mass").unwrap_or(1.0),
         )
     }
@@ -190,7 +190,7 @@ mod tests {
         let f = doc("[spring]\nstiffness = 200.0\n");
         let (s, d, m) = f.spring();
         assert_eq!(s, 200.0);
-        assert_eq!(d, 10.0); // default
+        assert_eq!(d, 20.0); // default
         assert_eq!(m, 1.0); // default
     }
 

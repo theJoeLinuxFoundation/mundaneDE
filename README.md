@@ -4,10 +4,10 @@ mundaneDE is an early Wayland desktop for the x86 edition of joe Linux. Its Rust
 compositor uses Smithay. Drag a window near a screen edge or another window and
 release it to see a damped spring move it into place.
 
-The compositor runs in a host window or directly on a single DRM/KMS output.
+The compositor runs in a host window or directly on multiple DRM/KMS outputs.
 It runs native Wayland applications and rootless X11 windows, negotiates
 client-side decorations and supports IBus text composition. The GPUI settings panel is a separate application.
-A desktop shell, session lock and multi-monitor support are still missing.
+It supports mixed refresh rates, fractional scaling and hotplug. The desktop shell and session lock are upcoming milestones.
 The [roadmap](ROADMAP.md) describes when mundaneDE can become the default joe Linux session.
 
 ## Build and run in a window
@@ -54,7 +54,7 @@ The [isolated application tests](tests/nested/README.md#everyday-applications)
 exercise this configuration.
 
 For direct rendering on a free seat, omit `--winit`. The repository includes
-a [manual DRM/KMS test in QEMU](tests/qemu/README.md).
+an [automated two-output DRM/KMS test in QEMU](tests/qemu/README.md#automated-output-test).
 
 ## Configuration
 
@@ -64,6 +64,21 @@ Afterlight wallpaper works without configuration. To use another PNG or JPEG,
 set `path` in the `[wallpaper]` section. Spring parameters, snap distances and
 wallpaper settings can be changed while the compositor runs. See the
 [example configuration](config.example.toml).
+
+Set `reduced_motion = true` to keep the same magnetic snap targets and switch
+wallpapers immediately. In a DRM session, use `wayland-info` to find connector
+names and advertised modes. For example, if DP-1 advertises 1920×1080 at
+60.000 Hz, these commands try it at 150% scale to the left of the primary
+display, then save it after the first page flip.
+
+```sh
+mundane-de output test DP-1 1920 1080 60000 1.5 0 --position -1280 0
+mundane-de output confirm
+```
+
+Use `mundane-de output revert` or wait 15 seconds to recover the previous
+layout. Confirmed preferences are stored in `$XDG_STATE_HOME/mundane/displays.toml`
+(default `~/.local/state/mundane/displays.toml`) and restored on reconnect.
 
 The optional settings panel builds from its own Cargo workspace. Once its binary
 is on your path, `Super+,` opens it. You can also point `MUNDANE_SETTINGS` at

@@ -150,6 +150,24 @@ mod tests {
     }
 
     #[test]
+    fn final_tick_reaches_the_exact_target_after_a_dropped_frame() {
+        let mut engine = AnimationEngine::new();
+        let id = engine.create_spring(0, 0, SpringParams::default());
+        engine.spring_mut(id).unwrap().set_target(17, 93);
+        for dt in [16, 180, 8, 33].into_iter().cycle().take(1000) {
+            if !engine.has_active_animations() {
+                break;
+            }
+            engine.tick(Duration::from_millis(dt));
+            let s = engine.spring(id).unwrap();
+            assert!((0.0..=17.0).contains(&s.x.position));
+            assert!((0.0..=93.0).contains(&s.y.position));
+        }
+        let s = engine.spring(id).unwrap();
+        assert_eq!((s.x.position, s.y.position), (17., 93.));
+    }
+
+    #[test]
     fn engine_clamps_large_dt() {
         let mut engine = AnimationEngine::new();
         let id = engine.create_spring(0, 0, SpringParams::default());
@@ -158,6 +176,9 @@ mod tests {
         // A huge dt should not cause NaN or explosion
         engine.tick(Duration::from_secs(1));
         let (x, y) = engine.spring(id).unwrap().rounded_position();
-        assert!(x.abs() < 10000 && y.abs() < 10000, "position exploded: ({x}, {y})");
+        assert!(
+            x.abs() < 10000 && y.abs() < 10000,
+            "position exploded: ({x}, {y})"
+        );
     }
 }

@@ -227,7 +227,7 @@ impl XwmHandler for State {
             })
             .unwrap_or_else(|| {
                 self.wm
-                    .initial_placement(geo.size, self.output_logical_size(), &self.space)
+                    .initial_placement(geo.size, self.pointer_bounds(), &self.space)
             });
         if x.set_mapped(true).is_ok() && x.configure(geo).is_ok() {
             self.space

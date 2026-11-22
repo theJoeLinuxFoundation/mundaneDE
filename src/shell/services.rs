@@ -105,12 +105,16 @@ impl InputMethodHandler for State {
                     let size =
                         smithay::desktop::utils::bbox_from_surface_tree(s.wl_surface(), (0, 0))
                             .size;
-                    let output = self.output_logical_size();
-                    if origin.y + pos.y + size.h > output.h {
+                    let output = self.window_bounds(&window);
+                    if origin.y + pos.y + size.h > output.loc.y + output.size.h {
                         pos.y = caret.loc.y - size.h;
                     }
-                    pos.x = (origin.x + pos.x).clamp(0, (output.w - size.w).max(0)) - origin.x;
-                    pos.y = (origin.y + pos.y).clamp(0, (output.h - size.h).max(0)) - origin.y;
+                    pos.x = (origin.x + pos.x)
+                        .clamp(output.loc.x, output.loc.x + (output.size.w - size.w).max(0))
+                        - origin.x;
+                    pos.y = (origin.y + pos.y)
+                        .clamp(output.loc.y, output.loc.y + (output.size.h - size.h).max(0))
+                        - origin.y;
                 }
             }
         }

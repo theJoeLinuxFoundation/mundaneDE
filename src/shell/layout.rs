@@ -1,6 +1,6 @@
 use smithay::desktop::Window;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as Flag;
-use smithay::utils::{Logical, Point, Rectangle};
+use smithay::utils::{Logical, Rectangle};
 use smithay::wayland::shell::xdg::ToplevelSurface;
 use std::cell::Cell;
 
@@ -20,6 +20,7 @@ impl State {
         w.user_data().insert_if_missing(Layout::default);
         let layout = w.user_data().get::<Layout>().unwrap();
         let geometry = self.space.element_geometry(&w);
+        let size = self.window_bounds(&w).size;
         surface.with_pending_state(|s| {
             if enabled {
                 s.states.set(flag);
@@ -30,7 +31,7 @@ impl State {
                 if layout.normal.get().is_none() {
                     layout.normal.set(geometry);
                 }
-                s.size = Some(self.output_logical_size());
+                s.size = Some(size);
             } else {
                 s.size = layout.normal.get().map(|g| g.size);
             }
@@ -40,10 +41,26 @@ impl State {
         }
     }
 
+    pub(crate) fn rehome_expanded(
+        &self,
+        w: &Window,
+        delta: smithay::utils::Point<i32, Logical>,
+        bounds: Rectangle<i32, Logical>,
+    ) -> bool {
+        let Some(layout) = w.user_data().get::<Layout>() else {
+            return false;
+        };
+        if let Some(mut saved) = layout.normal.get() {
+            saved.loc = crate::outputs::clamp_window(saved.loc + delta, saved.size, bounds);
+            layout.normal.set(Some(saved));
+        }
+        layout.expanded.get()
+    }
+
     pub fn resize_expanded_windows(&self) {
-        let size = self.output_logical_size();
         for window in self.space.elements().chain(&self.minimized) {
             if let Some(t) = window.toplevel() {
+                let size = self.window_bounds(window).size;
                 t.with_pending_state(|s| {
                     if s.states.contains(Flag::Maximized) || s.states.contains(Flag::Fullscreen) {
                         s.size = Some(size);
@@ -66,7 +83,7 @@ impl State {
             return;
         }
         let position = if expanded {
-            Point::from((0, 0))
+            self.window_bounds(w).loc
         } else {
             layout.normal.take().map(|g| g.loc).unwrap_or_default()
         };

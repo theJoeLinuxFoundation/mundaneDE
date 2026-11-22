@@ -4,9 +4,11 @@ mod config;
 mod cursor;
 mod focus;
 mod hot_reload;
+mod outputs;
 mod render;
 mod shell;
 mod state;
+mod tearing;
 mod wallpaper;
 mod wm;
 mod x11;
@@ -17,12 +19,23 @@ use tracing::info;
 #[derive(Parser)]
 #[command(name = "mundane-de", about = "mundaneDE — one of everything")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
     /// Use the Winit development backend instead of DRM/KMS
     #[arg(long)]
     winit: bool,
     /// Ask a running mundaneDE session to start Xwayland and print its DISPLAY.
     #[arg(long, conflicts_with = "winit")]
     x11_display: bool,
+}
+
+#[derive(clap::Subcommand)]
+enum Command {
+    /// Test, confirm or revert a DRM output configuration.
+    Output {
+        #[command(subcommand)]
+        action: backend::output_control::Command,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -34,7 +47,12 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    if cli.x11_display { return x11::print_display(); }
+    if let Some(Command::Output { action }) = cli.command {
+        return backend::output_control::request(action);
+    }
+    if cli.x11_display {
+        return x11::print_display();
+    }
     let config = config::MundaneConfig::load(None);
 
     info!("starting mundaneDE");

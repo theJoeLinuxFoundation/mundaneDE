@@ -1,23 +1,4 @@
-//! The DRM/KMS production backend (single output).
-//!
-//! Drives real hardware: a [`LibSeatSession`] for the seat/VT, udev to find the primary GPU,
-//! a GBM allocator, an EGL [`GlesRenderer`], and libinput for input. Rendering goes through a
-//! [`DrmCompositor`], which owns its own damage tracker and page-flip queue. Because it needs
-//! a free TTY/seat it can only run on real hardware or in the bundled QEMU (see
-//! `tests/qemu/`); for everyday development use `--winit`.
-//!
-//! This is deliberately a *single-output* backend: it picks the first connected connector on
-//! the primary GPU and drives that one CRTC. Multi-output and hotplug are future work.
-//!
-//! ## Frame scheduling
-//!
-//! The calloop loop runs with a ~16 ms timeout, so the main callback fires roughly every
-//! frame. Each tick, unless a page flip is still in flight (`pending_flip`), we advance the
-//! springs and ask the compositor to render. If anything was drawn we queue the flip and set
-//! `pending_flip`; the DRM VBlank event then calls `frame_submitted` and clears the flag,
-//! letting the next tick render again. When nothing changed `render_frame` reports empty and
-//! we simply try again next tick — cheap, and it naturally picks up new client buffers and
-//! ongoing animations without a separate repaint timer.
+//! Multi-connector DRM/KMS on the active GPU. Each CRTC owns its scanout queue.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -48,28 +29,53 @@ use smithay::wayland::socket::ListeningSocketSource;
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 
 use crate::config::MundaneConfig;
-use crate::state::{BackendIdentity, ClientState, State};
+use crate::outputs::Head;
+use crate::state::{ClientState, State};
+use smithay::backend::udev::{UdevBackend, UdevEvent};
+use smithay::desktop::utils::OutputPresentationFeedback;
+use smithay::reexports::drm::control::{connector, crtc};
+use std::collections::HashMap;
 
-/// The concrete compositor type for our single GBM-backed GLES output.
-type Compositor =
-    DrmCompositor<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>;
+type Compositor = DrmCompositor<
+    GbmAllocator<DrmDeviceFd>,
+    GbmFramebufferExporter<DrmDeviceFd>,
+    OutputPresentationFeedback,
+    DrmDeviceFd,
+>;
 
-/// Backend objects that live outside [`State`] (which stays backend-agnostic) and are shared
-/// between the loop callback and the DRM/session event sources via `Rc<RefCell<…>>`.
-struct DrmBackend {
-    // Kept alive for the lifetime of the backend (own the device fd / seat connection).
-    #[allow(dead_code)]
-    session: LibSeatSession,
-    #[allow(dead_code)]
-    drm: DrmDevice,
-    #[allow(dead_code)]
-    gbm: GbmDevice<DrmDeviceFd>,
-
-    renderer: GlesRenderer,
+struct Scanout {
+    head: Head,
+    connector: connector::Info,
     compositor: Compositor,
+    pending: bool,
+    generation: u64,
+    next_frame: Instant,
+    submitted_generation: u64,
+}
+
+struct DrmBackend {
+    session: LibSeatSession,
+    drm: DrmDevice,
+    gbm: GbmDevice<DrmDeviceFd>,
+    renderer: GlesRenderer,
+    scanner: DrmScanner,
+    heads: HashMap<crtc::Handle, Scanout>,
     last_frame: Instant,
-    /// True while a queued page flip is awaiting its VBlank; suppresses rendering until then.
-    pending_flip: bool,
+    active: bool,
+    trial: Option<Trial>,
+}
+
+struct Trial {
+    key: crtc::Handle,
+    previous: (
+        smithay::reexports::drm::control::Mode,
+        smithay::output::Scale,
+        Transform,
+    ),
+    requested: crate::config::DisplayConfig,
+    deadline: Instant,
+    previous_position: Option<[i32; 2]>,
+    generation: u64,
 }
 
 pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
@@ -103,7 +109,7 @@ pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to open {}: {e}", gpu_path.display()))?;
     let fd = DrmDeviceFd::new(DeviceFd::from(fd));
 
-    let (mut drm, drm_notifier) = DrmDevice::new(fd.clone(), true)
+    let (drm, drm_notifier) = DrmDevice::new(fd.clone(), true)
         .map_err(|e| anyhow::anyhow!("DrmDevice init failed: {e}"))?;
     let gbm = GbmDevice::new(fd).map_err(|e| anyhow::anyhow!("GbmDevice init failed: {e}"))?;
 
@@ -117,101 +123,41 @@ pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
     let renderer = unsafe { GlesRenderer::new(egl_context) }
         .map_err(|e| anyhow::anyhow!("GLES renderer: {e}"))?;
 
-    // --- Pick the first connected connector + its CRTC and preferred mode ------------------
-    let mut scanner: DrmScanner = DrmScanner::new();
-    let scan = scanner
-        .scan_connectors(&drm)
-        .map_err(|e| anyhow::anyhow!("connector scan failed: {e}"))?;
-    let (connector, crtc) = scan
-        .into_iter()
-        .find_map(|event| match event {
-            DrmScanEvent::Connected {
-                connector,
-                crtc: Some(crtc),
-            } => Some((connector, crtc)),
-            _ => None,
-        })
-        .ok_or_else(|| anyhow::anyhow!("no connected output found"))?;
-
-    let output_name = format!(
-        "{}-{}",
-        connector.interface().as_str(),
-        connector.interface_id()
-    );
-    let mode_id = connector
-        .modes()
-        .iter()
-        .position(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
-        .unwrap_or(0);
-    let drm_mode = connector.modes()[mode_id];
-    let (phys_w, phys_h) = connector.size().unwrap_or((0, 0));
-    let wl_mode = WlMode::from(drm_mode);
-    tracing::info!(
-        "output {output_name}: {}x{} @ {} mHz",
-        wl_mode.size.w,
-        wl_mode.size.h,
-        wl_mode.refresh
-    );
-
-    // --- Wayland socket + compositor State -------------------------------------------------
     let socket = ListeningSocketSource::new_auto()?;
     let socket_name = socket.socket_name().to_string_lossy().into_owned();
     std::env::set_var("WAYLAND_DISPLAY", &socket_name);
-
-    let loop_signal = event_loop.get_signal();
-    let identity = BackendIdentity {
-        seat_name: seat_name.clone(),
-        output_name: output_name.clone(),
-        mode: wl_mode,
-        transform: Transform::Normal,
-        physical: PhysicalProperties {
-            size: (phys_w as i32, phys_h as i32).into(),
-            subpixel: connector.subpixel().into(),
-            make: "Unknown".to_string(),
-            model: output_name.clone(),
-        },
-    };
-    let mut state = State::new(&dh, config, identity, loop_signal, event_loop.handle(), socket_name.clone())?;
-    let _x11_listener = crate::x11::listen(&state)?;
-
-    // --- DRM surface + compositor ----------------------------------------------------------
-    let cursor_size = drm.cursor_size();
-    let surface = drm
-        .create_surface(crtc, drm_mode, &[connector.handle()])
-        .map_err(|e| anyhow::anyhow!("create_surface failed: {e}"))?;
-    let allocator = GbmAllocator::new(
-        gbm.clone(),
-        GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+    let mut state = State::new(
+        &dh,
+        config,
+        seat_name.clone(),
+        event_loop.get_signal(),
+        event_loop.handle(),
+        socket_name.clone(),
+    )?;
+    state.advertise_dmabuf(
+        &renderer,
+        smithay::backend::drm::DrmNode::from_dev_id(drm.device_id()).ok(),
     );
-    let exporter = GbmFramebufferExporter::new(gbm.clone(), None);
-    let render_formats: Vec<DrmFormat> = renderer
-        .egl_context()
-        .dmabuf_render_formats()
-        .iter()
-        .copied()
-        .collect();
-    let compositor: Compositor = DrmCompositor::new(
-        &state.output,
-        surface,
-        None,
-        allocator,
-        exporter,
-        [Fourcc::Argb8888, Fourcc::Abgr8888],
-        render_formats,
-        cursor_size,
-        Some(gbm.clone()),
-    )
-    .map_err(|e| anyhow::anyhow!("DrmCompositor init failed: {e}"))?;
-
-    let backend = Rc::new(RefCell::new(DrmBackend {
+    let _x11_listener = crate::x11::listen(&state)?;
+    let mut backend = DrmBackend {
         session,
         drm,
         gbm,
         renderer,
-        compositor,
+        scanner: DrmScanner::new(),
+        heads: HashMap::new(),
         last_frame: Instant::now(),
-        pending_flip: false,
-    }));
+        active: true,
+        trial: None,
+    };
+    let monitor = UdevBackend::new(&seat_name)?;
+    backend.rescan(&mut state)?;
+    let backend = Rc::new(RefCell::new(backend));
+
+    let control = backend.clone();
+    let _control_socket = super::output_control::listen(&state, move |state, command| {
+        control.borrow_mut().control(state, command)
+    })?;
 
     // --- libinput --------------------------------------------------------------------------
     let mut libinput_context = Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(
@@ -227,10 +173,14 @@ pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
 
     handle
         .insert_source(socket, move |stream, _, state: &mut State| {
-            if let Err(e) = state
-                .display_handle
-                .insert_client(stream, Arc::new(ClientState { on_exit: state.client_exit.clone(), role: Default::default(), compositor_state: Default::default() }))
-            {
+            if let Err(e) = state.display_handle.insert_client(
+                stream,
+                Arc::new(ClientState {
+                    on_exit: state.client_exit.clone(),
+                    role: Default::default(),
+                    compositor_state: Default::default(),
+                }),
+            ) {
                 tracing::warn!("failed to add wayland client: {e}");
             }
         })
@@ -243,6 +193,7 @@ pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
                 // SAFETY: we only dispatch clients; we never drop/close the display fd.
                 unsafe {
                     display.get_mut().dispatch_clients(state)?;
+                    state.generation += 1;
                 }
                 Ok(PostAction::Continue)
             },
@@ -255,41 +206,79 @@ pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
         })
         .map_err(|e| anyhow::anyhow!("failed to insert libinput source: {e}"))?;
 
-    {
-        let backend = backend.clone();
-        handle
-            .insert_source(drm_notifier, move |event, _meta, _state: &mut State| {
-                match event {
-                    DrmEvent::VBlank(_crtc) => {
-                        let mut b = backend.borrow_mut();
-                        if let Err(e) = b.compositor.frame_submitted() {
-                            tracing::error!("frame_submitted: {e}");
-                        }
-                        b.pending_flip = false;
-                    }
-                    DrmEvent::Error(e) => tracing::error!("DRM error: {e}"),
-                }
-            })
-            .map_err(|e| anyhow::anyhow!("failed to insert drm source: {e}"))?;
-    }
-
+    let gpu = backend.borrow().drm.device_id();
+    let devices = backend.clone();
     handle
-        .insert_source(
-            session_notifier,
-            move |event, _, _state: &mut State| match event {
+        .insert_source(monitor, move |event, _, state| {
+            if matches!(event,UdevEvent::Changed{device_id} if device_id==gpu) {
+                if let Err(err) = devices.borrow_mut().rescan(state) {
+                    tracing::error!(%err,"connector rescan failed");
+                }
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("register udev: {e}"))?;
+    let flips = backend.clone();
+    handle.insert_source(drm_notifier, move |event, metadata, state| {
+        use smithay::backend::drm::DrmEventTime;
+        use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind;
+        use smithay::wayland::presentation::Refresh;
+        match event {
+            DrmEvent::VBlank(crtc) => {
+                let mut backend = flips.borrow_mut();
+                let Some(head) = backend.heads.get_mut(&crtc) else { return };
+                if !head.pending { return; }
+                head.pending = false;
+                head.next_frame = Instant::now();
+                match head.compositor.frame_submitted() {
+                    Ok(Some(mut feedback)) => {
+                        let mut time = state.clock.now();
+                        let mut flags = Kind::Vsync;
+                        let sequence = metadata.as_ref().map_or(0, |m| u64::from(m.sequence));
+                        if let Some(DrmEventTime::Monotonic(stamp)) = metadata.as_ref().map(|m| m.time) {
+                            time = stamp.into();
+                            flags |= Kind::HwClock | Kind::HwCompletion;
+                            tracing::debug!(target: "mundane_present", output = head.head.output.name(),
+                                seq = sequence, ns = stamp.as_nanos() as u64, "DRM page flip");
+                        }
+                        head.submitted_generation = head.generation;
+                        feedback.presented(time, Refresh::fixed(head.period()), sequence, flags);
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!(%e, "complete DRM frame"),
+                }
+            }
+            DrmEvent::Error(e) => tracing::error!(%e, "DRM event error"),
+        }
+    }).map_err(|e| anyhow::anyhow!("register DRM events: {e}"))?;
+    let seat_backend = backend.clone();
+    handle
+        .insert_source(session_notifier, move |event, _, state| {
+            let mut b = seat_backend.borrow_mut();
+            match event {
                 SessionEvent::PauseSession => {
-                    tracing::info!("session paused");
+                    b.active = false;
                     libinput_context.suspend();
+                    b.drm.pause();
                 }
                 SessionEvent::ActivateSession => {
-                    tracing::info!("session resumed");
+                    if let Err(e) = b.drm.activate(false) {
+                        tracing::error!(%e,"resume DRM");
+                        return;
+                    }
+                    b.active = true;
+                    for head in b.heads.values_mut() {
+                        head.pending = false;
+                        head.compositor.reset_buffers();
+                    }
+                    let _ = b.rescan(state);
+                    state.generation += 1;
                     if let Err(e) = libinput_context.resume() {
-                        tracing::warn!("failed to resume libinput: {e:?}");
+                        tracing::warn!(?e, "resume input");
                     }
                 }
-            },
-        )
-        .map_err(|e| anyhow::anyhow!("failed to insert session source: {e}"))?;
+            }
+        })
+        .map_err(|e| anyhow::anyhow!("register seat: {e}"))?;
 
     // Hot-reload watcher (best-effort).
     let _hot_reload = match crate::hot_reload::install(&handle) {
@@ -302,59 +291,364 @@ pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
 
     tracing::info!("mundaneDE DRM backend running on WAYLAND_DISPLAY={socket_name}");
 
-    // --- Run -------------------------------------------------------------------------------
+    let mut wake = crate::outputs::FrameWake::default();
     event_loop
-        .run(Some(Duration::from_millis(16)), &mut state, move |state| {
-            render(&backend, state);
+        .run(None, &mut state, move |state| {
+            backend.borrow_mut().render(state, &mut wake);
+            state.popups.cleanup();
+            state.space.refresh();
+            let _ = state.display_handle.flush_clients();
         })
-        .map_err(|e| anyhow::anyhow!("event loop error: {e}"))?;
-
-    Ok(())
+        .map_err(|e| anyhow::anyhow!("event loop: {e}"))
 }
 
-/// Advance animations and present one frame, unless a page flip is still pending. Always sends
-/// frame callbacks and flushes clients so they keep producing buffers.
-fn render(backend: &Rc<RefCell<DrmBackend>>, state: &mut State) {
-    {
-        let mut guard = backend.borrow_mut();
-        let b = &mut *guard;
-        if !b.pending_flip {
-            let now = Instant::now();
-            let dt = now - b.last_frame;
-            b.last_frame = now;
+impl Scanout {
+    fn period(&self) -> Duration {
+        Duration::from_secs_f64(
+            1000. / self.head.output.current_mode().unwrap().refresh.max(1000) as f64,
+        )
+    }
+}
 
-            if state.animation.tick(dt) {
-                crate::render::sync_spring_positions(state);
+impl DrmBackend {
+    fn control(
+        &mut self,
+        state: &mut State,
+        cmd: super::output_control::Command,
+    ) -> anyhow::Result<()> {
+        use super::output_control::{save, Command};
+        match cmd {
+            Command::Test {
+                name,
+                width,
+                height,
+                refresh,
+                scale,
+                rotation,
+                position,
+            } => {
+                anyhow::ensure!(
+                    self.active && self.trial.is_none(),
+                    "another display trial is active or the seat is paused"
+                );
+                anyhow::ensure!(
+                    crate::outputs::valid_scale(scale),
+                    "scale must be between 0.5 and 4"
+                );
+                let transform = crate::outputs::rotation(rotation)
+                    .ok_or_else(|| anyhow::anyhow!("unsupported rotation"))?;
+                let (key, h) = self
+                    .heads
+                    .iter_mut()
+                    .find(|(_, h)| h.head.output.name() == name)
+                    .ok_or_else(|| anyhow::anyhow!("unknown connector"))?;
+                let mode = h
+                    .connector
+                    .modes()
+                    .iter()
+                    .copied()
+                    .find(|m| {
+                        let wl = WlMode::from(*m);
+                        [wl.size.w, wl.size.h, wl.refresh] == [width, height, refresh]
+                    })
+                    .ok_or_else(|| anyhow::anyhow!("mode is not advertised"))?;
+                let o = &h.head.output;
+                let previous_position = crate::outputs::position(o);
+                let position = match position.as_slice() {
+                    [] => previous_position,
+                    &[x, y] if crate::outputs::valid_position([x, y]) => Some([x, y]),
+                    _ => anyhow::bail!("invalid display position"),
+                };
+                let previous = (
+                    h.compositor.pending_mode(),
+                    o.current_scale(),
+                    o.current_transform(),
+                );
+                h.compositor.use_mode(mode)?;
+                h.compositor.reset_buffers();
+                crate::outputs::set_position(o, position);
+                o.change_current_state(
+                    Some(mode.into()),
+                    Some(transform),
+                    Some(smithay::output::Scale::Fractional(scale)),
+                    None,
+                );
+                self.trial = Some(Trial {
+                    key: *key,
+                    previous,
+                    previous_position,
+                    generation: state.generation + 1,
+                    requested: crate::config::DisplayConfig {
+                        position,
+                        mode: Some([width, height, refresh]),
+                        scale: Some(scale),
+                        rotation: Some(rotation),
+                    },
+                    deadline: Instant::now() + Duration::from_secs(15),
+                });
             }
-            state.wallpaper.cleanup(&mut state.animation);
-
-            let (elements, clear_color) =
-                crate::render::collect_elements(&mut b.renderer, state, true);
-            match b.compositor.render_frame(
-                &mut b.renderer,
-                &elements,
-                clear_color,
-                FrameFlags::DEFAULT,
-            ) {
-                Ok(result) => {
-                    if !result.is_empty {
-                        match b.compositor.queue_frame(()) {
-                            Ok(()) => b.pending_flip = true,
-                            Err(e) => tracing::error!("queue_frame: {e}"),
-                        }
+            Command::Confirm => {
+                let t = self
+                    .trial
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("no display trial"))?;
+                anyhow::ensure!(Instant::now() < t.deadline, "display trial expired");
+                anyhow::ensure!(
+                    self.heads[&t.key].submitted_generation >= t.generation,
+                    "waiting for the trial page flip"
+                );
+                save(&self.heads[&t.key].head.output.name(), t.requested.clone())?;
+                self.trial = None;
+            }
+            Command::Revert => {
+                let t = self
+                    .trial
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("no display trial"))?;
+                let h = self.heads.get_mut(&t.key).unwrap();
+                let (mode, scale, transform) = t.previous;
+                h.compositor.use_mode(mode)?;
+                h.compositor.reset_buffers();
+                crate::outputs::set_position(&h.head.output, t.previous_position);
+                h.head.output.change_current_state(
+                    Some(mode.into()),
+                    Some(transform),
+                    Some(scale),
+                    None,
+                );
+                self.trial = None;
+            }
+        }
+        state.arrange_heads();
+        Ok(())
+    }
+    fn rescan(&mut self, state: &mut State) -> anyhow::Result<()> {
+        for event in self.scanner.scan_connectors(&self.drm)? {
+            match event {
+                DrmScanEvent::Connected {
+                    connector,
+                    crtc: Some(crtc),
+                } => {
+                    if let Err(e) = self.connect(state, connector, crtc) {
+                        tracing::error!(%e,"connect output");
                     }
                 }
-                Err(e) => tracing::error!("render_frame: {e}"),
+                DrmScanEvent::Disconnected {
+                    crtc: Some(crtc), ..
+                } => {
+                    if self.trial.as_ref().is_some_and(|t| t.key == crtc) {
+                        self.trial = None;
+                    }
+                    if let Some(head) = self.heads.remove(&crtc) {
+                        tracing::info!(output = head.head.output.name(), "output disconnected");
+                        state.remove_head(head.head);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    fn connect(
+        &mut self,
+        state: &mut State,
+        connector: connector::Info,
+        crtc: crtc::Handle,
+    ) -> anyhow::Result<()> {
+        let name = format!(
+            "{}-{}",
+            connector.interface().as_str(),
+            connector.interface_id()
+        );
+        let saved = super::output_control::load().unwrap_or_else(|e| {
+            tracing::warn!(%e,"read confirmed outputs");
+            Default::default()
+        });
+        let selected = saved
+            .get(&name)
+            .or_else(|| state.config.displays.get(&name))
+            .cloned();
+        let pref = selected.as_ref();
+        let modes = connector.modes();
+        let preferred = modes
+            .iter()
+            .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
+            .or(modes.first())
+            .ok_or_else(|| anyhow::anyhow!("connector has no modes"))?;
+        let mode = pref
+            .and_then(|p| p.mode)
+            .and_then(|v| {
+                modes.iter().find(|m| {
+                    let wl = WlMode::from(**m);
+                    [wl.size.w, wl.size.h, wl.refresh] == v
+                })
+            })
+            .unwrap_or(preferred);
+        let transform = crate::outputs::rotation(pref.and_then(|p| p.rotation).unwrap_or(0))
+            .unwrap_or(Transform::Normal);
+        let surface = self
+            .drm
+            .create_surface(crtc, *mode, &[connector.handle()])?;
+        let (w, h) = connector.size().unwrap_or_default();
+        let head = state.add_head(
+            name.clone(),
+            PhysicalProperties {
+                size: (w as i32, h as i32).into(),
+                subpixel: connector.subpixel().into(),
+                make: "Unknown".into(),
+                model: name.clone(),
+            },
+            (*mode).into(),
+            transform,
+        );
+        let formats: Vec<DrmFormat> = self
+            .renderer
+            .egl_context()
+            .dmabuf_render_formats()
+            .iter()
+            .copied()
+            .collect();
+        let comp = DrmCompositor::new(
+            &head.output,
+            surface,
+            None,
+            GbmAllocator::new(
+                self.gbm.clone(),
+                GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+            ),
+            GbmFramebufferExporter::new(self.gbm.clone(), None),
+            [Fourcc::Argb8888, Fourcc::Abgr8888],
+            formats,
+            self.drm.cursor_size(),
+            Some(self.gbm.clone()),
+        );
+        let compositor = match comp {
+            Ok(c) => c,
+            Err(e) => {
+                state.remove_head(head);
+                anyhow::bail!("initialize scanout: {e}");
+            }
+        };
+        crate::outputs::set_position(
+            &head.output,
+            pref.and_then(|p| p.position)
+                .filter(|p| crate::outputs::valid_position(*p)),
+        );
+        if let Some(scale) = pref
+            .and_then(|c| c.scale)
+            .filter(|s| crate::outputs::valid_scale(*s))
+        {
+            head.output.change_current_state(
+                None,
+                None,
+                Some(smithay::output::Scale::Fractional(scale)),
+                None,
+            );
+            state.arrange_heads();
+        }
+        for m in modes {
+            head.output.add_mode((*m).into());
+        }
+        state.arrange_heads();
+        head.output.set_preferred((*preferred).into());
+        tracing::info!(%name,?mode,"output connected");
+        self.heads.insert(
+            crtc,
+            Scanout {
+                head,
+                connector,
+                compositor,
+                pending: false,
+                generation: 0,
+                submitted_generation: 0,
+                next_frame: Instant::now(),
+            },
+        );
+        Ok(())
+    }
+    fn render(&mut self, state: &mut State, wake: &mut crate::outputs::FrameWake) {
+        state.import_buffers(&mut self.renderer);
+        if !self.active {
+            return;
+        }
+        if let Some(t) = &self.trial {
+            if Instant::now() >= t.deadline {
+                if let Err(e) = self.control(state, super::output_control::Command::Revert) {
+                    tracing::error!(%e,"revert display trial");
+                }
+            } else {
+                wake.schedule(&state.handle, t.deadline);
+            }
+        }
+        let now = Instant::now();
+        let animating = state.animation.has_active_animations();
+        let due = self.heads.values().any(|h| {
+            !h.pending && now >= h.next_frame && (animating || h.generation != state.generation)
+        });
+        if due {
+            if animating {
+                state.animate(now - self.last_frame);
+                state.generation += 1;
+            }
+            self.last_frame = now;
+            state.space.refresh();
+            state.update_scales();
+        }
+        for h in self.heads.values_mut() {
+            if h.pending || h.generation == state.generation && !animating {
+                continue;
+            }
+            if now < h.next_frame {
+                wake.schedule(&state.handle, h.next_frame);
+                continue;
+            }
+            let period = h.period();
+            let o = &h.head.output;
+            let (elements, clear) =
+                crate::render::collect_elements(&mut self.renderer, state, o, true);
+            match h.compositor.render_frame(
+                &mut self.renderer,
+                &elements,
+                clear,
+                FrameFlags::DEFAULT,
+            ) {
+                Ok(frame) => {
+                    if frame.needs_sync() {
+                        if let smithay::backend::drm::compositor::PrimaryPlaneElement::Swapchain(
+                            primary,
+                        ) = &frame.primary_element
+                        {
+                            if let Err(e) = primary.sync.wait() {
+                                tracing::warn!(?e, "wait for scanout buffer");
+                                h.next_frame = now + period;
+                                wake.schedule(&state.handle, h.next_frame);
+                                continue;
+                            }
+                        }
+                    }
+                    let feedback = (!frame.is_empty).then(|| state.feedback(o, &frame.states));
+                    drop(frame);
+                    if let Some(feedback) = feedback {
+                        match h.compositor.queue_frame(feedback) {
+                            Ok(()) => {
+                                h.pending = true;
+                                h.generation = state.generation;
+                            }
+                            Err(e) => tracing::warn!(%e,"queue DRM frame"),
+                        }
+                    } else {
+                        h.generation = state.generation;
+                    }
+                }
+                Err(e) => tracing::warn!(%e,"render DRM frame"),
+            }
+            state.send_frames(o);
+            h.next_frame = now + h.period();
+            if !h.pending
+                && (h.generation != state.generation || state.animation.has_active_animations())
+            {
+                wake.schedule(&state.handle, h.next_frame);
             }
         }
     }
-
-    let time = state.start_time.elapsed();
-    let output = state.output.clone();
-    for window in state.space.elements() {
-        window.send_frame(&output, time, None, |_, _| Some(output.clone()));
-    }
-    state.popups.cleanup();
-    state.space.refresh();
-    let _ = state.display_handle.flush_clients();
 }

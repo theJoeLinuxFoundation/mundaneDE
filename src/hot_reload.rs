@@ -6,7 +6,6 @@
 //! compositor continues without it (a restart-only fallback).
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use calloop::channel;
 use notify::{Event as NotifyEvent, EventKind, RecursiveMode, Watcher};
@@ -43,12 +42,15 @@ pub fn install(handle: &LoopHandle<'static, State>) -> anyhow::Result<Option<Hot
     // notify reports raw FS events on its own thread; we just hand a marker through
     // the channel so the calloop callback (running on the main thread) does the actual
     // work against `&mut State`.
+    let watched_file = path.clone();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<NotifyEvent>| {
         if let Ok(ev) = res {
-            if matches!(
-                ev.kind,
-                EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
-            ) {
+            if ev.paths.contains(&watched_file)
+                && matches!(
+                    ev.kind,
+                    EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+                )
+            {
                 let _ = tx.send(());
             }
         }
@@ -57,7 +59,10 @@ pub fn install(handle: &LoopHandle<'static, State>) -> anyhow::Result<Option<Hot
     // Watching the *parent directory* is more reliable than the file itself: many
     // editors (and our own atomic-rename writer) replace the file rather than
     // rewriting in place, which makes a file-level inotify watch lose its target.
-    let watch_target = path.parent().map(|p| p.to_path_buf()).unwrap_or(path.clone());
+    let watch_target = path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or(path.clone());
     if let Err(e) = watcher.watch(&watch_target, RecursiveMode::NonRecursive) {
         warn!("failed to watch {}: {e}", watch_target.display());
         return Ok(None);
@@ -87,10 +92,16 @@ fn apply_reload(state: &mut State, path: &PathBuf) {
     if !path.exists() {
         return;
     }
-    // Small settling delay to coalesce burst writes (e.g. tempfile + rename + chmod).
-    std::thread::sleep(Duration::from_millis(20));
-
-    let new = MundaneConfig::reload();
+    let new: MundaneConfig = match std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| toml::from_str(&s).ok())
+    {
+        Some(config) => config,
+        None => {
+            warn!("keeping previous config after unreadable edit");
+            return;
+        }
+    };
 
     // Spring params for position springs.
     let position_params = new.spring.to_spring_params();
@@ -101,11 +112,15 @@ fn apply_reload(state: &mut State, path: &PathBuf) {
             SpringKind::Fade => spring.params = fade_params,
         }
     }
-    state.wallpaper.retune_fade(fade_params, &mut state.animation);
+    state
+        .wallpaper
+        .retune_fade(fade_params, &mut state.animation);
 
     // Wallpaper path: if it changed, crossfade.
     if new.wallpaper.path != state.config.wallpaper.path {
-        state.wallpaper.set_wallpaper(new.wallpaper.path.as_deref(), &mut state.animation);
+        state
+            .wallpaper
+            .set_wallpaper(new.wallpaper.path.as_deref(), &mut state.animation);
     }
     // Mode update is a swap; no GPU churn.
     if new.wallpaper.mode != state.config.wallpaper.mode {
@@ -113,6 +128,7 @@ fn apply_reload(state: &mut State, path: &PathBuf) {
     }
 
     state.config = new;
+    state.generation += 1;
 
     // Wake the loop so the next iteration redraws with the new settings.
     state.loop_signal.wakeup();

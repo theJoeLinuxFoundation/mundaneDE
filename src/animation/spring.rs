@@ -26,12 +26,11 @@
 //! zeta = damping / (2 * sqrt(stiffness * mass))
 //! ```
 //!
-//! - `zeta < 1.0` — underdamped: springy overshoot (the default at zeta=0.5)
+//! - `zeta < 1.0` — underdamped: springy overshoot
 //! - `zeta = 1.0` — critically damped: fastest convergence without overshoot
 //! - `zeta > 1.0` — overdamped: sluggish return, no overshoot
 //!
-//! Default parameters (stiffness=100, damping=10, mass=1) give zeta=0.5,
-//! a pleasantly springy feel with mild overshoot.
+//! Default parameters (stiffness=100, damping=20, mass=1) give critical damping.
 
 use std::time::Duration;
 
@@ -50,7 +49,7 @@ impl Default for SpringParams {
     fn default() -> Self {
         Self {
             stiffness: 100.0,
-            damping: 10.0,
+            damping: 20.0,
             mass: 1.0,
         }
     }

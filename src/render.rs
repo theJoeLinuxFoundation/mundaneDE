@@ -51,34 +51,34 @@ render_elements! {
 pub fn collect_elements(
     renderer: &mut GlesRenderer,
     state: &mut State,
+    output: &smithay::output::Output,
     draw_cursor: bool,
 ) -> (Vec<MundaneRenderElement>, Color32F) {
     let mut elements: Vec<MundaneRenderElement> = Vec::new();
 
+    let bounds = state.space.output_geometry(output).unwrap();
+    let scale = output.current_scale().fractional_scale();
+    let pointer = state.cursor_location - bounds.loc.to_f64();
     // The cursor draws on top of everything.
     if draw_cursor {
-        elements.extend(cursor_elements(renderer, state));
+        elements.extend(cursor_elements(renderer, state, pointer, scale));
     }
 
     if let Some(icon) = &state.dnd_icon {
         let icon_elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-            render_elements_from_surface_tree(renderer, icon, state.cursor_location.to_physical_precise_round(1.0), 1.0, 1.0, Kind::Unspecified);
+            render_elements_from_surface_tree(renderer, icon, pointer.to_physical_precise_round(scale), scale, 1.0, Kind::Unspecified);
         elements.extend(icon_elements.into_iter().map(MundaneRenderElement::from));
     }
     if let Some(menu) = &state.window_menu {
         if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(renderer,
-            menu.origin.to_f64().to_physical(1.0), &menu.buffer, None, None, None, Kind::Unspecified) {
+            (menu.origin - bounds.loc).to_f64().to_physical(scale), &menu.buffer, None, None, None, Kind::Unspecified) {
             elements.push(MundaneRenderElement::from(element));
         }
     }
     // Snap-preview ghost: shown only during an interactive drag when the snap target
     // would move the window. Drawn above windows so the user sees where it'll land.
-    // Output scale is 1, so logical and physical coordinates coincide and we can
-    // retype the rectangle directly without a scale-aware conversion.
     if let Some(rect) = state.move_state.as_ref().and_then(|mv| mv.snap_preview) {
-        let loc = smithay::utils::Point::<i32, smithay::utils::Physical>::from((rect.loc.x, rect.loc.y));
-        let size = smithay::utils::Size::<i32, smithay::utils::Physical>::from((rect.size.w, rect.size.h));
-        let geo = smithay::utils::Rectangle::new(loc, size);
+        let geo = smithay::utils::Rectangle::new(rect.loc - bounds.loc, rect.size).to_physical_precise_round(scale);
         // Fresh Id each frame matches the cursor pattern in this module — the
         // damage tracker damages both the previous frame's ghost (gone) and this
         // frame's ghost (new), which keeps the preview crisp under any motion.
@@ -93,16 +93,16 @@ pub fn collect_elements(
         elements.push(MundaneRenderElement::from(ghost));
     }
 
-    match space_render_elements::<_, Window, _>(renderer, [&state.space], &state.output, 1.0) {
+    match space_render_elements::<_, Window, _>(renderer, [&state.space], output, 1.0) {
         Ok(windows) => elements.extend(windows.into_iter().map(MundaneRenderElement::from)),
         Err(err) => tracing::warn!("collecting window elements failed: {err:?}"),
     }
 
     // Wallpaper sits behind the windows, so it is appended last (front-to-back order).
-    let output = state.output_logical_size();
+
     let wallpaper = state
         .wallpaper
-        .elements(renderer, &state.animation, (output.w, output.h));
+        .elements(renderer, &state.animation, (bounds.size.w, bounds.size.h), scale);
     elements.extend(wallpaper.into_iter().map(MundaneRenderElement::from));
 
     // Background clear colour, visible before the wallpaper fades in or if a custom image fails to load.
@@ -111,9 +111,8 @@ pub fn collect_elements(
 }
 
 /// Build the cursor render element(s): a client-provided surface if set, otherwise the
-/// built-in arrow. Output scale is 1, so logical and physical coordinates coincide.
-fn cursor_elements(renderer: &mut GlesRenderer, state: &State) -> Vec<MundaneRenderElement> {
-    let pos = state.cursor_location;
+/// built-in arrow, positioned in output-local coordinates.
+fn cursor_elements(renderer: &mut GlesRenderer, state: &State, pos: smithay::utils::Point<f64, smithay::utils::Logical>, scale: f64) -> Vec<MundaneRenderElement> {
 
     match &state.cursor_status {
         CursorImageStatus::Hidden => Vec::new(),
@@ -125,14 +124,14 @@ fn cursor_elements(renderer: &mut GlesRenderer, state: &State) -> Vec<MundaneRen
                     .map(|attrs| attrs.lock().unwrap().hotspot)
                     .unwrap_or_default()
             });
-            let location = (pos - hotspot.to_f64()).to_physical(1.0).to_i32_round();
+            let location = (pos - hotspot.to_f64()).to_physical(scale).to_i32_round();
             // Kind::Unspecified, NOT Kind::Cursor: the cursor-plane direct-scanout path
             // (gated by Kind::Cursor in DrmCompositor) is unreliable on virtio-gpu in QEMU
             // and leaves cursor trails when its fallback fails to damage the old position.
             // Compositing on the primary plane like a regular element damages prev+new
             // correctly. We give up the cursor-plane perf optimisation.
             let surface_elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-                render_elements_from_surface_tree(renderer, surface, location, 1.0, 1.0, Kind::Unspecified);
+                render_elements_from_surface_tree(renderer, surface, location, scale, 1.0, Kind::Unspecified);
             surface_elements
                 .into_iter()
                 .map(MundaneRenderElement::from)
@@ -141,7 +140,7 @@ fn cursor_elements(renderer: &mut GlesRenderer, state: &State) -> Vec<MundaneRen
         CursorImageStatus::Named(_) => {
             match MemoryRenderBufferRenderElement::from_buffer(
                 renderer,
-                (pos - state.named_cursor.hotspot.to_f64()).to_physical(1.0),
+                (pos - state.named_cursor.hotspot.to_f64()).to_physical(scale),
                 &state.named_cursor.buffer,
                 None,
                 None,

@@ -5,7 +5,7 @@ use smithay::{
     backend::{allocator::Fourcc, renderer::element::memory::MemoryRenderBuffer},
     input::keyboard::keysyms,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State as Flag,
-    utils::{Logical, Point, Size, Transform},
+    utils::{Logical, Point, Rectangle, Transform},
     wayland::shell::xdg::{ToplevelSurface, XdgShellHandler},
 };
 
@@ -24,11 +24,11 @@ impl WindowMenu {
     pub fn new(
         surface: ToplevelSurface,
         at: Point<i32, Logical>,
-        output: Size<i32, Logical>,
+        output: Rectangle<i32, Logical>,
     ) -> anyhow::Result<Self> {
         let origin = (
-            at.x.clamp(0, (output.w - WIDTH).max(0)),
-            at.y.clamp(0, (output.h - ROWS * ROW).max(0)),
+            at.x.clamp(output.loc.x, output.loc.x + (output.size.w - WIDTH).max(0)),
+            at.y.clamp(output.loc.y, output.loc.y + (output.size.h - ROWS * ROW).max(0)),
         )
             .into();
         let buffer = Self::draw(&surface, 0)?;

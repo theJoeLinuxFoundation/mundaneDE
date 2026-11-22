@@ -19,15 +19,23 @@ use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
 use smithay::output::{Mode, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode as CalloopMode, PostAction};
+use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind;
 use smithay::reexports::wayland_server::Display;
+use smithay::wayland::presentation::Refresh;
 use smithay::utils::{Logical, Physical, Point, Serial, Size, Transform, SERIAL_COUNTER};
 use smithay::wayland::socket::ListeningSocketSource;
 
 use crate::config::MundaneConfig;
-use crate::state::{BackendIdentity, ClientState, MoveState, State};
+use crate::state::{ClientState, MoveState, State};
 
 /// Left mouse button (from `linux/input-event-codes.h`).
 const BTN_LEFT: u32 = 0x110;
+
+fn thread_cpu_time() -> Duration {
+    use smithay::reexports::rustix::time::{clock_gettime, ClockId};
+    let time = clock_gettime(ClockId::ThreadCPUTime);
+    Duration::new(time.tv_sec as u64, time.tv_nsec as u32)
+}
 
 pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
     // NOTE: calloop's `InsertError<Source>` and winit/xkb error types embed non-Send/Sync
@@ -38,41 +46,61 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
     let display: Display<State> = Display::new()?;
     let dh = display.handle();
 
-    let (mut backend, winit) =
-        winit::init::<GlesRenderer>().map_err(|e| anyhow::anyhow!("winit init failed: {e}"))?;
+    use smithay::reexports::winit::{dpi::LogicalSize, window::Window};
+    let size = LogicalSize::new(config.output.width.max(1), config.output.height.max(1));
+    let attributes = Window::default_attributes()
+        .with_title("mundaneDE")
+        .with_inner_size(size);
+    let (mut backend, winit) = winit::init_from_attributes::<GlesRenderer>(attributes)
+        .map_err(|e| anyhow::anyhow!("winit init failed: {e}"))?;
 
     let socket = ListeningSocketSource::new_auto()?;
     let socket_name = socket.socket_name().to_string_lossy().into_owned();
     std::env::set_var("WAYLAND_DISPLAY", &socket_name);
 
     let loop_signal = event_loop.get_signal();
-    let identity = BackendIdentity {
-        seat_name: "winit".to_string(),
-        output_name: "winit".to_string(),
-        mode: Mode {
-            size: (config.output.width, config.output.height).into(),
-            refresh: config.output.refresh,
-        },
-        // The winit host window presents upside-down without this flip.
-        transform: Transform::Flipped180,
-        physical: PhysicalProperties {
+    let mode = Mode {
+        size: backend.window_size(),
+        refresh: config.output.refresh.max(1000),
+    };
+    let mut state = State::new(
+        &dh,
+        config,
+        "winit".into(),
+        loop_signal,
+        event_loop.handle(),
+        socket_name.clone(),
+    )?;
+    let head = state.add_head(
+        "winit".into(),
+        PhysicalProperties {
             size: (0, 0).into(),
             subpixel: Subpixel::Unknown,
-            make: "mundaneDE".to_string(),
-            model: "Winit".to_string(),
+            make: "mundaneDE".into(),
+            model: "Winit".into(),
         },
-    };
-    let mut state = State::new(&dh, config, identity, loop_signal, event_loop.handle(), socket_name.clone())?;
+        mode,
+        Transform::Flipped180,
+    );
+    state.advertise_dmabuf(backend.renderer(), None);
+    let output = head.output;
+    let mut damage_tracker =
+        smithay::backend::renderer::damage::OutputDamageTracker::from_output(&output);
+    let nested_output = output.clone();
     let _x11_listener = crate::x11::listen(&state)?;
 
     let handle = event_loop.handle();
 
     handle
         .insert_source(socket, move |stream, _, state: &mut State| {
-            if let Err(e) = state
-                .display_handle
-                .insert_client(stream, Arc::new(ClientState { on_exit: state.client_exit.clone(), role: Default::default(), compositor_state: Default::default() }))
-            {
+            if let Err(e) = state.display_handle.insert_client(
+                stream,
+                Arc::new(ClientState {
+                    on_exit: state.client_exit.clone(),
+                    role: Default::default(),
+                    compositor_state: Default::default(),
+                }),
+            ) {
                 tracing::warn!("failed to add wayland client: {e}");
             }
         })
@@ -85,6 +113,7 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
                 // SAFETY: we only dispatch clients; we never drop/close the display fd.
                 unsafe {
                     display.get_mut().dispatch_clients(state)?;
+                    state.generation += 1;
                 }
                 Ok(PostAction::Continue)
             },
@@ -95,14 +124,13 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
         .insert_source(winit, move |event, _, state: &mut State| match event {
             WinitEvent::Resized { size, .. } => {
                 let refresh = state.config.output.refresh;
-                state
-                    .output
-                    .change_current_state(Some(Mode { size, refresh }), None, None, None);
-                state.resize_expanded_windows();
+                nested_output.change_current_state(Some(Mode { size, refresh }), None, None, None);
+                state.arrange_heads();
             }
             WinitEvent::Input(ev) => state.handle_input(ev),
             WinitEvent::CloseRequested => state.loop_signal.stop(),
-            WinitEvent::Focus(_) | WinitEvent::Redraw => {}
+            WinitEvent::Redraw => state.generation += 1,
+            WinitEvent::Focus(_) => {}
         })
         .map_err(|e| anyhow::anyhow!("failed to insert winit source: {e}"))?;
 
@@ -120,25 +148,46 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
 
     let mut last_frame = Instant::now();
     let mut presented_size = None;
-    event_loop.run(Some(Duration::from_millis(16)), &mut state, |state| {
+    let period = Duration::from_secs_f64(1000. / mode.refresh as f64);
+    let mut deadline = Instant::now();
+    let mut generation = 0;
+    let mut wake = crate::outputs::FrameWake::default();
+    let mut sequence = 0;
+    event_loop.run(None, &mut state, |state| {
+        state.import_buffers(backend.renderer());
         let now = Instant::now();
-        let dt = now - last_frame;
-        last_frame = now;
-
-        if state.animation.tick(dt) {
-            crate::render::sync_spring_positions(state);
+        let active = state.animation.has_active_animations();
+        if (active || generation != state.generation) && now >= deadline {
+            tracing::trace!(target:"mundane_frame","repaint");
+            let dt = (now - last_frame).min(period * 3);
+            last_frame = now;
+            let start_cpu = tracing::enabled!(target: "mundane_frame", tracing::Level::TRACE).then(thread_cpu_time);
+            state.animate(dt);
+            let spring_cpu = start_cpu.map(|start| thread_cpu_time() - start);
+            state.space.refresh();
+            state.update_scales();
+            match render(&mut backend,state,&output,&mut damage_tracker,&mut presented_size) {
+                Ok(Some(mut feedback)) => {
+                    sequence += 1;
+                    feedback.presented(state.clock.now(), Refresh::fixed(period), sequence, Kind::empty());
+                    tracing::trace!(target: "mundane_frame",
+                        frame = sequence,
+                        spring_us = spring_cpu.unwrap_or_default().as_micros() as u64,
+                        cpu_us = start_cpu.map(|start| thread_cpu_time() - start).unwrap_or_default().as_micros() as u64,
+                        submit_us = now.elapsed().as_micros() as u64,
+                        time_us = state.start_time.elapsed().as_micros() as u64,
+                        "submitted"
+                    );
+                }
+                Ok(None)=>{}
+                Err(e)=>{presented_size=None;tracing::error!("render error: {e}");}
+            }
+            generation = state.generation;
+            state.send_frames(&output);
+            deadline = if now.duration_since(deadline) >= period { now + period } else { deadline + period };
         }
-        state.wallpaper.cleanup(&mut state.animation);
-
-        if let Err(e) = render(&mut backend, state, &mut presented_size) {
-            presented_size = None;
-            tracing::error!("render error: {e}");
-        }
-
-        let time = state.start_time.elapsed();
-        let output = state.output.clone();
-        for window in state.space.elements() {
-            window.send_frame(&output, time, None, |_, _| Some(output.clone()));
+        if state.animation.has_active_animations() || generation != state.generation {
+            wake.schedule(&state.handle,deadline);
         }
         state.popups.cleanup();
         state.space.refresh();
@@ -152,11 +201,15 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
 fn render(
     backend: &mut WinitGraphicsBackend<GlesRenderer>,
     state: &mut State,
+    output: &smithay::output::Output,
+    damage_tracker: &mut smithay::backend::renderer::damage::OutputDamageTracker,
     presented_size: &mut Option<Size<i32, Physical>>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<smithay::desktop::utils::OutputPresentationFeedback>> {
     use smithay::input::pointer::CursorImageStatus;
     let draw_cursor = matches!(state.cursor_status, CursorImageStatus::Surface(_));
-    backend.window().set_cursor_visible(matches!(state.cursor_status, CursorImageStatus::Named(_)));
+    backend
+        .window()
+        .set_cursor_visible(matches!(state.cursor_status, CursorImageStatus::Named(_)));
     if let CursorImageStatus::Named(icon) = state.cursor_status {
         backend.window().set_cursor(icon);
     }
@@ -170,16 +223,16 @@ fn render(
     } else {
         0
     };
-    let damage = {
+    let (damage, states) = {
         let (renderer, mut framebuffer) =
             backend.bind().map_err(|e| anyhow::anyhow!("bind: {e}"))?;
         // Named cursors belong to the host. Render application cursor surfaces ourselves.
-        let (elements, clear_color) = crate::render::collect_elements(renderer, state, draw_cursor);
-        let res = state
-            .damage_tracker
+        let (elements, clear_color) =
+            crate::render::collect_elements(renderer, state, output, draw_cursor);
+        let res = damage_tracker
             .render_output(renderer, &mut framebuffer, age, &elements, clear_color)
             .map_err(|e| anyhow::anyhow!("render_output: {e:?}"))?;
-        res.damage.cloned()
+        (res.damage.cloned(), res.states)
     };
 
     if let Some(damage) = damage {
@@ -187,8 +240,9 @@ fn render(
             .submit(Some(&damage))
             .map_err(|e| anyhow::anyhow!("submit: {e}"))?;
         *presented_size = Some(size);
+        return Ok(Some(state.feedback(output, &states)));
     }
-    Ok(())
+    Ok(None)
 }
 
 impl State {
@@ -196,6 +250,7 @@ impl State {
     /// move. Generic over [`InputBackend`] so the winit (absolute pointer) and DRM (libinput,
     /// relative pointer) backends share one handler.
     pub fn handle_input<B: InputBackend>(&mut self, event: InputEvent<B>) {
+        self.generation += 1;
         match event {
             InputEvent::Keyboard { event } => {
                 let keyboard = self.seat.get_keyboard().unwrap();
@@ -214,7 +269,9 @@ impl State {
                     |state, mods, handle| {
                         let sym = handle.modified_sym().raw();
                         if state.window_menu.is_some() {
-                            if press { state.menu_key(sym); }
+                            if press {
+                                state.menu_key(sym);
+                            }
                             return FilterResult::Intercept(());
                         }
                         if press {
@@ -257,7 +314,12 @@ impl State {
 
             // Winit reports absolute pointer positions.
             InputEvent::PointerMotionAbsolute { event } => {
-                let pos = event.position_transformed(self.output_logical_size());
+                let pos = {
+                    let bounds = self.desktop_bounds();
+                    self.clamp_pointer(
+                        bounds.loc.to_f64() + event.position_transformed(bounds.size),
+                    )
+                };
                 self.cursor_location = pos;
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = event.time_msec();
@@ -268,12 +330,7 @@ impl State {
             // pointer position; the seat's `current_location` freezes during interactive
             // drags) and clamp to the output.
             InputEvent::PointerMotion { event } => {
-                let size = self.output_logical_size();
-                let next = self.cursor_location + event.delta();
-                let pos = Point::from((
-                    next.x.clamp(0.0, size.w as f64),
-                    next.y.clamp(0.0, size.h as f64),
-                ));
+                let pos = self.clamp_pointer(self.cursor_location + event.delta());
                 self.cursor_location = pos;
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = event.time_msec();
@@ -289,7 +346,10 @@ impl State {
                 let mods = self.seat.get_keyboard().unwrap().modifier_state();
 
                 if button_state == ButtonState::Pressed && self.window_menu.is_some() {
-                    let row = self.window_menu.as_ref().and_then(|m| m.row(self.cursor_location));
+                    let row = self
+                        .window_menu
+                        .as_ref()
+                        .and_then(|m| m.row(self.cursor_location));
                     self.menu_action(if button == BTN_LEFT { row } else { None });
                     return;
                 }
@@ -322,7 +382,9 @@ impl State {
                     if let Some(mv) = self.move_state.take() {
                         let forward_release = mv.client_grab;
                         self.finish_move(mv);
-                        if !forward_release { return; }
+                        if !forward_release {
+                            return;
+                        }
                     }
                     if let Some(r) = self.resize.take() {
                         if let Some(t) = r.window.toplevel() {
@@ -363,7 +425,7 @@ impl State {
 
     /// Apply a new pointer position: while dragging, move the grabbed window (pinning its
     /// spring to the cursor); otherwise forward motion to the focused surface.
-    fn pointer_moved(&mut self, pos: Point<f64, Logical>, serial: Serial, time: u32) {
+    pub(crate) fn pointer_moved(&mut self, pos: Point<f64, Logical>, serial: Serial, time: u32) {
         let pointer = self.seat.get_pointer().unwrap();
         if let Some(menu) = self.window_menu.as_mut() {
             menu.hover(pos);
@@ -386,17 +448,7 @@ impl State {
                 .map(|g| g.size)
                 .or_else(|| self.wm.size_of(&window))
                 .unwrap_or_else(|| (0, 0).into());
-            let output = self.output_logical_size();
-            let neighbors = self.wm.neighbors_except(&window, &self.space);
-            let snapped = crate::wm::snap(
-                Point::from((x, y)),
-                size,
-                output,
-                &neighbors,
-                self.config.wm.attraction_radius,
-                self.config.wm.outer_gap,
-                self.config.wm.inner_gap,
-            );
+            let snapped = self.snap_target(&window, (x, y).into(), size);
             let preview = if snapped.x != x || snapped.y != y {
                 Some(smithay::utils::Rectangle::new(snapped, size))
             } else {
@@ -406,14 +458,19 @@ impl State {
                 mv.snap_preview = preview;
             }
         } else {
-            let focus = self
-                .space
-                .element_under(pos)
-                .and_then(|(w, loc)| {
-                    w.surface_under(pos - loc.to_f64(), smithay::desktop::WindowSurfaceType::ALL)
-                        .map(|(s, offset)| (s, (loc + offset).to_f64()))
-                });
-            pointer.motion(self, focus, &MotionEvent { location: pos, serial, time });
+            let focus = self.space.element_under(pos).and_then(|(w, loc)| {
+                w.surface_under(pos - loc.to_f64(), smithay::desktop::WindowSurfaceType::ALL)
+                    .map(|(s, offset)| (s, (loc + offset).to_f64()))
+            });
+            pointer.motion(
+                self,
+                focus,
+                &MotionEvent {
+                    location: pos,
+                    serial,
+                    time,
+                },
+            );
             pointer.frame(self);
         }
     }
@@ -430,17 +487,12 @@ impl State {
             .map(|g| g.size)
             .or_else(|| self.wm.size_of(&window))
             .unwrap_or_else(|| (0, 0).into());
-        let output_size = self.output_logical_size();
-        let neighbors = self.wm.neighbors_except(&window, &self.space);
-        let target = crate::wm::snap(
-            desired,
-            size,
-            output_size,
-            &neighbors,
-            self.config.wm.attraction_radius,
-            self.config.wm.outer_gap,
-            self.config.wm.inner_gap,
-        );
+        let target = self.snap_target(&window, desired, size);
+        if self.config.reduced_motion {
+            self.place_window(&window, target);
+            return;
+        }
+
         if let Some(id) = self.wm.spring_id(&window) {
             if let Some(h) = self.animation.spring_mut(id) {
                 h.set_target(target.x, target.y);
@@ -468,7 +520,10 @@ impl State {
             return;
         };
         if let Some(surface) = keyboard.current_focus() {
-            if let Some(x) = &surface.x11 { let _ = x.close(); return; }
+            if let Some(x) = &surface.x11 {
+                let _ = x.close();
+                return;
+            }
             if let Some(window) = self.wm.window_for_surface(&surface.surface) {
                 if let Some(toplevel) = window.toplevel() {
                     toplevel.send_close();
@@ -482,7 +537,13 @@ impl State {
     /// Honours `$MUNDANE_TERMINAL` if set; otherwise tries a built-in list (GNOME
     /// Console `kgx` / `gnome-terminal` first) and launches the first one that starts.
     pub fn spawn_terminal(&self) {
-        const DEFAULTS: &[&str] = &["kgx", "gnome-terminal", "weston-terminal", "foot", "alacritty"];
+        const DEFAULTS: &[&str] = &[
+            "kgx",
+            "gnome-terminal",
+            "weston-terminal",
+            "foot",
+            "alacritty",
+        ];
         let candidates: Vec<&str> = match self.spawn_command.as_deref() {
             Some(cmd) => vec![cmd],
             None => DEFAULTS.to_vec(),

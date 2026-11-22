@@ -17,19 +17,19 @@ use std::collections::VecDeque;
 use std::os::unix::io::OwnedFd;
 use std::time::Instant;
 
-use smithay::backend::renderer::damage::OutputDamageTracker;
+
 use smithay::desktop::{Space, Window};
 use smithay::input::pointer::CursorImageStatus;
 use smithay::input::{Seat, SeatHandler, SeatState};
-use smithay::output::{Mode, Output, PhysicalProperties};
+
 use smithay::reexports::calloop::{LoopHandle, LoopSignal, RegistrationToken};
 use smithay::reexports::wayland_server::backend::{
-    ClientData, ClientId, DisconnectReason, GlobalId,
+    ClientData, ClientId, DisconnectReason,
 };
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, DisplayHandle};
-use smithay::utils::{Logical, Point, Transform};
+use smithay::utils::{Logical, Point};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{CompositorClientState, CompositorHandler, CompositorState};
 use smithay::wayland::output::{OutputHandler, OutputManagerState};
@@ -49,19 +49,6 @@ use crate::animation::AnimationEngine;
 use crate::config::MundaneConfig;
 use crate::wallpaper::WallpaperManager;
 use crate::wm::WindowManager;
-
-/// Backend-supplied identity for the seat and the single output.
-///
-/// `State::new` is backend-agnostic, so the winit and DRM backends each pass the names,
-/// mode, transform and physical properties appropriate to their device. winit synthesises
-/// these from `[output]` config; DRM derives them from the seat and the chosen connector.
-pub struct BackendIdentity {
-    pub seat_name: String,
-    pub output_name: String,
-    pub mode: Mode,
-    pub transform: Transform,
-    pub physical: PhysicalProperties,
-}
 
 /// An in-progress interactive window move (Super + left drag).
 pub struct MoveState {
@@ -120,9 +107,12 @@ pub struct State {
 
     // Desktop layout + output.
     pub space: Space<Window>,
-    pub output: Output,
-    pub damage_tracker: OutputDamageTracker,
-    _output_global: GlobalId,
+    pub generation: u64,
+    pub output_order: Vec<String>,
+    pub layout: Vec<(smithay::output::Output,smithay::utils::Rectangle<i32,Logical>)>,
+    pub dmabuf: smithay::wayland::dmabuf::DmabufState,
+    pub imports: Vec<(smithay::backend::allocator::dmabuf::Dmabuf, smithay::wayland::dmabuf::ImportNotifier)>,
+    pub clock: smithay::utils::Clock<smithay::utils::Monotonic>,
 
     // mundaneDE-specific.
     pub animation: AnimationEngine,
@@ -161,11 +151,16 @@ impl State {
     pub fn new(
         dh: &DisplayHandle,
         config: MundaneConfig,
-        identity: BackendIdentity,
+        seat_name: String,
         loop_signal: LoopSignal,
         handle: LoopHandle<'static, Self>,
         socket_name: String,
     ) -> anyhow::Result<Self> {
+        let clock = smithay::utils::Clock::<smithay::utils::Monotonic>::new();
+        crate::tearing::register(dh);
+        smithay::wayland::presentation::PresentationState::new::<Self>(dh, clock.id() as u32);
+        smithay::wayland::viewporter::ViewporterState::new::<Self>(dh);
+        smithay::wayland::fractional_scale::FractionalScaleManagerState::new::<Self>(dh);
         let compositor_state = CompositorState::new::<Self>(dh);
         let xdg_shell_state = XdgShellState::new::<Self>(dh);
         XdgDecorationState::new::<Self>(dh);
@@ -176,27 +171,11 @@ impl State {
         let data_device_state = DataDeviceState::new::<Self>(dh);
 
         let mut seat_state = SeatState::new();
-        let mut seat = seat_state.new_wl_seat(dh, identity.seat_name);
+        let mut seat = seat_state.new_wl_seat(dh, seat_name);
         // KeyboardError embeds non-Send/Sync xkb handles, so map it to a string error.
         seat.add_keyboard(Default::default(), 200, 200)
             .map_err(|e| anyhow::anyhow!("failed to add keyboard: {e}"))?;
         seat.add_pointer();
-
-        // Output identity comes from the backend; mapped at the space origin.
-        let mode = identity.mode;
-        let output = Output::new(identity.output_name, identity.physical);
-        let output_global = output.create_global::<Self>(dh);
-        output.change_current_state(
-            Some(mode),
-            Some(identity.transform),
-            None,
-            Some((0, 0).into()),
-        );
-        output.set_preferred(mode);
-
-        let mut space = Space::<Window>::default();
-        space.map_output(&output, (0, 0));
-        let damage_tracker = OutputDamageTracker::from_output(&output);
 
         let spawn_command = std::env::var("MUNDANE_TERMINAL").ok();
         let spawn_settings_command = std::env::var("MUNDANE_SETTINGS").ok();
@@ -208,6 +187,7 @@ impl State {
         let clipboard_control = crate::shell::services::globals(dh, &primary);
         let (client_exit, receiver) = calloop::ping::make_ping()?;
         handle.insert_source(receiver, |_,_,state| {
+            state.generation += 1;
             if state.native_offers.iter().all(Option::is_none) { return; }
             // The source can die after the focused window receives its last offer.
             // Re-offer both selections after Wayland has torn down the client's resources.
@@ -229,10 +209,13 @@ impl State {
             seat_state,
             data_device_state,
             seat,
-            space,
-            output,
-            damage_tracker,
-            _output_global: output_global,
+            space: Space::default(),
+            generation: 1,
+            output_order: Vec::new(),
+            layout: Vec::new(),
+            dmabuf: smithay::wayland::dmabuf::DmabufState::new(),
+            imports: Vec::new(),
+            clock,
             handle,
             xwayland_shell: XWaylandShellState::new::<Self>(dh),
             xwm: None,
@@ -267,6 +250,7 @@ impl State {
 
     /// Reload the configured wallpaper, crossfading from the current one (Super+W).
     pub fn reload_wallpaper(&mut self) {
+        tracing::trace!(target: "mundane_frame", "wallpaper reload");
         self.wallpaper
             .set_wallpaper(self.config.wallpaper.path.as_deref(), &mut self.animation);
     }
@@ -285,6 +269,7 @@ impl CompositorHandler for State {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
+        self.generation += 1;
         self.handle_commit(surface);
     }
 }

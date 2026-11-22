@@ -87,7 +87,12 @@ def client_frame(frame, requested):
     return all(pixels.startswith(row, first + y * width * 3) for y in range(h))
 
 
-def scenario(base, binary, gpu, env, everyday):
+def scenario(base, binary, gpu, env, everyday, frame_rate):
+    if frame_rate:
+        cfg = Path(env["XDG_CONFIG_HOME"]) / "mundane"
+        cfg.mkdir()
+        (cfg / "config.toml").write_text(f"[output]\nrefresh={frame_rate*1000}\n")
+        env["RUST_LOG"] = "info,smithay::backend::winit=debug,mundane_frame=trace,mundane_de::backend::winit=trace"
     host_log = base / "sway.log"
     server_log = base / "mundane.log"
     trace = base / "client.log"
@@ -110,7 +115,7 @@ def scenario(base, binary, gpu, env, everyday):
         bus = launch(["dbus-daemon", "--nofork", "--config-file",
                       str(Path(__file__).with_name("bus.conf"))], base / "bus.log", env)
         wait_for("private bus", (runtime / "bus").is_socket, [bus])
-        host = launch(["sway", "--unsupported-gpu", "-c", str(config)], host_log, host_env)
+        host = launch(["sway", "-d", "--unsupported-gpu", "-c", str(config)], host_log, host_env)
         ipc = wait_for("private Sway IPC", lambda: next(runtime.glob(f"sway-ipc.*.{host.pid}.sock"), None), [host])
         # Discover only sockets inside our initially empty runtime directory.
         host_socket = wait_for("private Wayland socket",
@@ -136,6 +141,8 @@ def scenario(base, binary, gpu, env, everyday):
         (base / "registry.txt").write_text(registry)
         globals_found = sorted(re.findall(r"^interface: '([^']+)'.*?version:\s+(\d+)", registry, re.M))
         baseline = Path(__file__).with_name("registry.txt").read_text().splitlines()
+        if gpu:
+            baseline = [line.replace("zwp_linux_dmabuf_v1 3", "zwp_linux_dmabuf_v1 5") for line in baseline]
         assert [f"{name} {version}" for name, version in globals_found] == baseline, "ordinary client registry changed"
 
         def capture(label):
@@ -173,6 +180,23 @@ def scenario(base, binary, gpu, env, everyday):
         assert configure and re.search(rf"ack_configure\({configure[1]}\)", protocol[configure.end():])
         for w, h in [(120, 80), (200, 110)]:
             assert re.search(rf"create_buffer\([^\n]+, {w}, {h},", protocol), f"missing {w}x{h} shm buffer"
+        probe = binary.parent / "examples/nested-capabilities"
+        if probe.is_file():
+            result = run([probe, runtime / socket, "--presentation"],inner).decode()
+            assert "superseded commit discarded" in result
+            (base / "presentation.log").write_text(result)
+        if gpu:
+            egl_trace = base / "egl-client.log"
+            egl_app = launch([sys.executable, str(Path(__file__).with_name("client.py"))], egl_trace,
+                             dict(app_env,GSK_RENDERER="gl"),stdin=subprocess.PIPE,text=True)
+            wait_for("EGL client matches shm reference",lambda:client_frame(capture("egl"),(120,80)),[egl_app])
+            assert "create_immed(" in egl_trace.read_text() or ".created(" in egl_trace.read_text(), "expected a DMA-BUF-backed EGL client"
+            egl_app.stdin.write("close\n")
+            egl_app.stdin.close()
+            assert egl_app.wait(timeout=5)==0
+        if frame_rate:
+            from budget import measure
+            measure(base,binary,inner,host_client,launch,swaymsg,frame_rate)
         if everyday:
             from everyday import exercise
             exercise(base, binary, inner, host_client, launch, capture, background, server.pid)
@@ -191,6 +215,7 @@ def main():
     parser.add_argument("--gpu", metavar="RENDER_NODE", help="test an isolated NVIDIA GBM output")
     parser.add_argument("--binary", type=Path, default=ROOT / "target/debug/mundane-de")
     parser.add_argument("--everyday", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--frame-rate",type=int,choices=[60,120],help="run the one-minute release frame budget workload")
     args = parser.parse_args()
     if args.everyday and (Path("/proc/1/comm").read_text().strip() != "bwrap" or Path("/run/user").exists() or Path("/dev/dri").exists()
                           or Path("/sys/class/net").exists()):
@@ -204,6 +229,11 @@ def main():
         if not node.is_char_device() or not re.fullmatch(r"renderD\d+", node.name):
             parser.error("--gpu requires a DRM render node")
         args.gpu = str(node)
+        if Path("/proc/1/comm").read_text().strip() != "bwrap":
+            wrapper = Path(__file__).with_name("render-node.sh")
+            flags = ["--frame-rate", str(args.frame_rate)] if args.frame_rate else []
+            os.execv(wrapper, [str(wrapper), args.gpu, "--binary", str(args.binary), *flags])
+        assert all(os.statvfs(card).f_flag & os.ST_NODEV for card in node.parent.glob("card*")), "primary device must be inert"
     artifacts = ROOT / "target/nested-tests"
     artifacts.mkdir(parents=True, exist_ok=True)
     base = Path(tempfile.mkdtemp(dir=artifacts))
@@ -219,6 +249,8 @@ def main():
     env.update(LC_ALL="C", RUST_LOG="info,smithay::backend::egl::surface=debug,smithay::backend::winit=trace,mundane_de::backend::winit=trace")
     env.update(DBUS_SYSTEM_BUS_ADDRESS="unix:path=/nonexistent", GSETTINGS_BACKEND="memory",
                GIO_USE_VFS="local")
+    if args.gpu:
+        env["__EGL_VENDOR_LIBRARY_FILENAMES"] = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
     if not args.gpu:
         # On GLVND machines with both drivers installed, select Mesa directly
         # so probing a different vendor cannot pollute the software EGL trace.
@@ -229,7 +261,7 @@ def main():
                 break
         env.update(LIBGL_ALWAYS_SOFTWARE="1", GALLIUM_DRIVER="llvmpipe")
     env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + str(Path(env["XDG_RUNTIME_DIR"]) / "bus")
-    scenario(base, args.binary.resolve(), args.gpu, env, args.everyday)
+    scenario(base, args.binary.resolve(), args.gpu, env, args.everyday, args.frame_rate)
 
 
 if __name__ == "__main__":

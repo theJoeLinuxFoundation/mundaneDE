@@ -148,7 +148,7 @@ impl CompositorPage {
             PageState::Loaded { data, .. } => data.clone(),
             _ => CompositorData {
                 stiffness: 100.0,
-                damping: 10.0,
+                damping: 20.0,
                 mass: 1.0,
                 attraction_radius: 24,
                 outer_gap: 8,

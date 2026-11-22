@@ -5,8 +5,13 @@ wl_seat 9
 wl_shm 2
 wl_subcompositor 1
 wp_cursor_shape_manager_v1 2
+wp_fractional_scale_manager_v1 1
+wp_presentation 2
+wp_tearing_control_manager_v1 1
+wp_viewporter 1
 xdg_activation_v1 1
 xdg_wm_base 6
+zwp_linux_dmabuf_v1 3
 zwp_primary_selection_device_manager_v1 1
 zwp_text_input_manager_v3 1
 zxdg_decoration_manager_v1 1

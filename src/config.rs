@@ -8,6 +8,8 @@ use crate::animation::SpringParams;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct MundaneConfig {
+    pub reduced_motion: bool,
+    pub displays: std::collections::BTreeMap<String, DisplayConfig>,
     pub spring: SpringSection,
     pub wm: WmSection,
     pub output: OutputSection,
@@ -76,9 +78,21 @@ pub struct WallpaperSection {
     pub fade_mass: f64,
 }
 
+/// Preferred scanout mode and logical layout for a named connector.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DisplayConfig {
+    pub position: Option<[i32; 2]>,
+    pub mode: Option<[i32; 3]>, // width, height, refresh in millihertz
+    pub scale: Option<f64>,
+    pub rotation: Option<u16>,
+}
+
 impl Default for MundaneConfig {
     fn default() -> Self {
         Self {
+            reduced_motion: false,
+            displays: Default::default(),
             spring: SpringSection::default(),
             wm: WmSection::default(),
             output: OutputSection::default(),
@@ -91,7 +105,7 @@ impl Default for SpringSection {
     fn default() -> Self {
         Self {
             stiffness: 100.0,
-            damping: 10.0,
+            damping: 20.0,
             mass: 1.0,
         }
     }
@@ -156,9 +170,7 @@ impl MundaneConfig {
     pub fn load(path: Option<&Path>) -> Self {
         let path = path
             .map(|p| p.to_path_buf())
-            .or_else(|| {
-                dirs_path().map(|d| d.join("config.toml"))
-            });
+            .or_else(|| dirs_path().map(|d| d.join("config.toml")));
 
         let Some(path) = path else {
             return Self::default();
@@ -175,12 +187,6 @@ impl MundaneConfig {
             Err(_) => Self::default(),
         }
     }
-
-    /// Re-load the config from disk (same path resolution as the initial [`load`]).
-    /// Used by the hot-reload watcher when the file changes.
-    pub fn reload() -> Self {
-        Self::load(None)
-    }
 }
 
 /// Path the compositor watches for hot reloads. None on the rare system where neither
@@ -192,9 +198,7 @@ pub fn config_file_path() -> Option<std::path::PathBuf> {
 fn dirs_path() -> Option<std::path::PathBuf> {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
-        })
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
         .map(|p| p.join("mundane"))
 }
 

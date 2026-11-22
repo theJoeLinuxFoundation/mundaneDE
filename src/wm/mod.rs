@@ -123,9 +123,10 @@ impl WindowManager {
     pub fn initial_placement(
         &self,
         size: Size<i32, Logical>,
-        output: Size<i32, Logical>,
+        bounds: Rectangle<i32, Logical>,
         space: &Space<Window>,
     ) -> Point<i32, Logical> {
+        let output = bounds.size;
         let base_x = (output.w - size.w).max(0) / 2;
         let base_y = (output.h - size.h).max(0) / 2;
         let occupied: Vec<Rectangle<i32, Logical>> = self
@@ -140,9 +141,9 @@ impl WindowManager {
             if x < 0 || y < 0 || x + size.w > output.w || y + size.h > output.h {
                 return None;
             }
-            let cand = Rectangle::new(Point::from((x, y)), size);
+            let cand = Rectangle::new(bounds.loc + Point::from((x, y)), size);
             let collides = occupied.iter().any(|r| rects_overlap(&cand, r));
-            if collides { None } else { Some(Point::from((x, y))) }
+            if collides { None } else { Some(cand.loc) }
         };
 
         // Centre first; then a 4-ring 32 px spiral.
@@ -157,7 +158,7 @@ impl WindowManager {
 
         // Legacy cascade fallback.
         let cascade = 32 * (self.mapped.len() as i32 % 6);
-        Point::from(((base_x + cascade).max(0), (base_y + cascade).max(0)))
+        bounds.loc + Point::from(((base_x + cascade).clamp(0,(output.w-size.w).max(0)), (base_y + cascade).clamp(0,(output.h-size.h).max(0))))
     }
 
 

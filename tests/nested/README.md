@@ -17,10 +17,18 @@ explicitly. It needs no desktop login, display server or VT on the host.
 
 To run the same regression against the NVIDIA driver, supply its accessible
 DRM render node. This uses a headless GLES host and verifies the nested GL
-renderer identifies as NVIDIA. Both runs use only virtual outputs.
+renderer identifies as NVIDIA. Both runs use only virtual outputs. The NVIDIA wrapper needs
+bubblewrap. It exposes the selected DRM render node and NVIDIA rendering
+devices inside a private namespace. Primary DRM device entries are visible for
+driver discovery on a nodev mount. No host display or seat socket is mounted.
+The GPU run compares a GTK EGL DMA-BUF against the shared-memory reference.
+The render node advertises linux-dmabuf v5 feedback and the llvmpipe run
+advertises v3 formats. The presentation probe checks two increasing timestamps
+and a discarded commit on each backend.
 
 ```sh
-python3 tests/nested/run.py --gpu /dev/dri/renderD128
+cargo build --locked --bins --examples
+tests/nested/render-node.sh /dev/dri/renderD128
 ```
 
 Each cold start checks the ordinary-client registry against the checked-in
@@ -76,3 +84,44 @@ frames under `target/nested-tests/`. The application run used GTK 4.24.1,
 Text Editor 51.0, Nautilus 51.1, Firefox 158.0.1, IBus 1.5.34, foot 1.28
 and Xwayland 24.1.14. The baseline NVIDIA run uses its separate render-node
 invocation above.
+
+## Frame and idle budgets
+
+Build with stable Rust in release mode. Run the two refresh rates separately.
+
+```sh
+cargo build --locked --release --bins --examples
+tests/nested/render-node.sh /dev/dri/renderD128 --binary target/release/mundane-de --frame-rate 60
+tests/nested/render-node.sh /dev/dri/renderD128 --binary target/release/mundane-de --frame-rate 120
+```
+
+Each run starts a private headless Sway GLES host at 1920×1080, warms up for
+three seconds and drives ten GTK windows for one minute. The fixture staggers
+window mapping to keep placement springs active, drags and releases windows
+and triggers wallpaper crossfades. It then stops client updates, allows three
+seconds for settling and counts redraws and submissions over ten idle seconds.
+
+The `budget.json` in the run directory contains nearest-rank p50/p95/p99.
+Thread CPU time covers spring updates and composition through EGL submission.
+Elapsed submission time also includes waits. The submission interval comes
+from the nested monotonic clock. Missed virtual deadlines count elapsed
+refresh periods beyond the first, rounded to the nearest period. The QEMU
+test separately measures kernel presentation timestamps on both virtual CRTCs.
+
+The reference run on 2026-11-22 used an Intel Core Ultra 7 265KF, GeForce
+RTX 5070 through `/dev/dri/renderD128`, NVIDIA EGL 615.78.08, Linux
+7.2.15-1-omarchy and stable Rust 1.100.0. The separate software-rendered
+application run used llvmpipe (LLVM 23.1.3). All figures below are milliseconds
+in p50 / p95 / p99 order unless otherwise labeled.
+
+| Measurement | 60 Hz | 120 Hz |
+| --- | ---: | ---: |
+| Spring update CPU | 0.003 / 0.008 / 0.013 | 0.002 / 0.007 / 0.012 |
+| Composition and submission CPU | 0.320 / 0.539 / 2.136 | 0.210 / 0.450 / 2.028 |
+| Total update and submission CPU | 0.324 / 0.544 / 2.140 | 0.213 / 0.454 / 2.032 |
+| Total update and submission elapsed | 0.354 / 0.623 / 2.195 | 0.235 / 4.996 / 8.331 |
+| Submission interval | 16.663 / 16.945 / 18.476 | 8.331 / 8.553 / 10.135 |
+| Frames submitted | 3643 | 7286 |
+| Measured seconds | 60.700 | 60.717 |
+| Missed virtual deadlines (%) | 0.000 | 0.014 |
+| Repaints / submissions during 10 s idle | 0 / 0 | 0 / 0 |

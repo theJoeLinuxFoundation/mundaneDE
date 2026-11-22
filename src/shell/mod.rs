@@ -21,7 +21,7 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{protocol::wl_output::WlOutput, Resource};
-use smithay::utils::{Logical, Serial, Size};
+use smithay::utils::{Logical, Serial};
 use smithay::wayland::compositor::{get_parent, is_sync_subsurface};
 use smithay::wayland::input_method::{InputMethodHandler, InputMethodSeat};
 use smithay::wayland::shell::xdg::{
@@ -154,7 +154,7 @@ impl XdgShellHandler for State {
             return;
         };
         if let Some(pos) = self.space.element_location(&w) {
-            self.window_menu = menu::WindowMenu::new(t, pos + loc, self.output_logical_size()).ok();
+            self.window_menu = menu::WindowMenu::new(t, pos + loc, self.window_bounds(&w)).ok();
         }
     }
 
@@ -241,19 +241,18 @@ impl State {
         let Some(geo) = self.space.element_geometry(&window) else {
             return;
         };
-        let Some(mut bounds) = self.space.output_geometry(&self.output) else {
-            return;
-        };
-        bounds.loc -= geo.loc + get_popup_toplevel_coords(&kind);
-        popup.with_pending_state(|s| s.geometry = s.positioner.get_unconstrained_geometry(bounds));
-    }
-
-    /// Logical size of the output (scale 1 in the winit MVP).
-    pub fn output_logical_size(&self) -> Size<i32, Logical> {
-        self.output
-            .current_mode()
-            .map(|m| m.size.to_logical(1))
-            .unwrap_or_else(|| (1920, 1080).into())
+        let parent = geo.loc + get_popup_toplevel_coords(&kind);
+        let fallback = self.window_bounds(&window);
+        popup.with_pending_state(|s| {
+            let anchor = s.positioner.anchor_rect;
+            let point = parent + anchor.loc
+                + smithay::utils::Point::from((anchor.size.w / 2, anchor.size.h / 2));
+            let mut bounds = self.space.output_under(point.to_f64()).next()
+                .and_then(|output| self.space.output_geometry(output))
+                .unwrap_or(fallback);
+            bounds.loc -= parent;
+            s.geometry = s.positioner.get_unconstrained_geometry(bounds);
+        });
     }
 
     /// Drive buffer management, the initial-configure handshake, and first-buffer mapping.
@@ -336,7 +335,7 @@ impl State {
     /// Place a newly buffered window, give it a spring, and animate it into view.
     fn map_new_window(&mut self, window: Window) {
         let size = window.geometry().size;
-        let output_size = self.output_logical_size();
+        let bounds = self.pointer_bounds();
         let parent = window
             .toplevel()
             .and_then(|t| t.parent())
@@ -350,7 +349,7 @@ impl State {
                 )
                     .into()
             })
-            .unwrap_or_else(|| self.wm.initial_placement(size, output_size, &self.space));
+            .unwrap_or_else(|| self.wm.initial_placement(size, bounds, &self.space));
 
         // Spring in from just below the target for a gentle entrance.
         let params = self.config.spring.to_spring_params();

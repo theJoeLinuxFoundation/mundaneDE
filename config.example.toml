@@ -10,12 +10,15 @@
 # Every key is optional — a missing or malformed file just falls back to the defaults
 # shown below.
 
+# Set true to land directly at the same snap target and skip wallpaper fades.
+reduced_motion = false
+
 # Spring physics for window animations (position, snap). The damping ratio
 # zeta = damping / (2 * sqrt(stiffness * mass)) sets the feel:
 #   zeta < 1 springy/overshoot · zeta = 1 critical (fastest, no overshoot) · zeta > 1 sluggish
 [spring]
 stiffness = 100.0
-damping = 10.0
+damping = 20.0
 mass = 1.0
 
 # Magnetic window manager. On drop, a window within `attraction_radius` px of an output
@@ -35,6 +38,13 @@ inner_gap = 8
 width = 1920
 height = 1080
 refresh = 60000
+
+# Optional per-connector DRM defaults. Outputs are arranged left to right.
+# [displays."DP-1"]
+# mode = [1920, 1080, 60000] # use the exact advertised millihertz
+# position = [1920, 0]      # logical coordinates, automatic when omitted
+# scale = 1.5
+# rotation = 0              # 0, 90, 180 or 270
 
 # The built-in Afterlight wallpaper fades in on startup. Super+W reloads the image.
 [wallpaper]
