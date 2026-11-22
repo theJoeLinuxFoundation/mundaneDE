@@ -99,6 +99,20 @@ An unlock requires successful PAM authentication **and account validation** for 
 
 The authentication dialog now dims the desktop on every output and blocks background input. It shows the person’s initials, full name and login, and offers Change when the authority supplies several administrators. Details starts collapsed. Enter submits, Escape cancels, and a failed attempt shows an inline error beside the new password field. QMP observed the field move during a retry with animations enabled and remain still with reduced motion. [Three before/after comparisons and lock screens](screenshots/gpui-step5/README.md)
 
+### Step 6 in the GPUI preview
+
+Each output has a bottom-layer GPUI surface for Home, Trash and the user’s XDG Desktop directory. GIO watches the directory and opens its entries with the user’s default handler. The surface uses only the space its icon columns need. Super+D focuses Home on the pointer’s display, arrows select an icon, and Enter opens it. A second Super+D restores the previous windows. The guest exercised hotplug, rename and removal, opened a text file in Text Editor, and opened Home and Trash in Files. [Desktop gate](../tests/qemu/session/qualify_gpui_desktop.py)
+
+The preview’s portal routing sends FileChooser and AppChooser to the GPUI shell. It handles open, save, overwrite confirmation, batches of save names, file-type filters, application selection and cancellation. The public frontend and document portal issue grants. A locally built Flatpak with no filesystem permission opened a selected document under its private document mount and verified the contents. The GTK Notification backend forwards actions to the originating application through the GPUI notification service. The shell draws the banner and history. Capture consent, indicators, and all Firefox capture teardown paths passed again. Other portal interfaces continue to follow the installed defaults, including GTK Print and the keyring Secret backend. [Routing](../session/mundane-gpui-portals.conf) · [Portal gate](../tests/qemu/session/qualify_portals.py)
+
+On joe the GPUI session can use standalone `ibus-wayland` for inline preedit. The supervised shell receives lookup tables on the IBus private bus and anchors a keyboard-inactive GPUI list to the active client’s committed caret. Switching fields or clients clears the old popup. In the guest, the engine produced Japanese preedit in GTK, committed by keyboard and candidate click at two measured caret positions, then composed in a Firefox form. The guest used the upstream 1.5.34 Wayland frontend with beta1’s IBus daemon. [Guest procedure](../tests/qemu/session/README.md#gpui-shell-step-6) · [Packaging handoff](plan.md#joe-packaging-handoff)
+
+### Lock screen at rest
+
+The compositor draws the current wallpaper over its opaque mask, dims it and admits the locker on top. It draws its own arrow while the prompt is awake. On a missing or unready locker surface, the display shows the opaque mask. Each screen has a clock and date. Only the pointer’s screen has the session user’s initials, name, password field, primary Unlock button and current keyboard layout. After 30 seconds of seat inactivity the prompt clears and fades to the clock. A pointer movement or key wakes it. The wake key is consumed. Reduced motion makes the transition immediate.
+
+The lock gate checks backdrop samples against an independent rendering of Afterlight and checks for the background application’s distinctive pixels across whole scanouts. It samples the primary action during the idle transition with animations enabled and disabled. It also exercises three outputs, pointer transfer, shell and locker replacement, suspend, VT switching, Orca and real PAM. [Light, dark and high-contrast comparisons](screenshots/gpui-step6/README.md) · [Lock gate](../tests/qemu/session/qualify_gpui_lock.py)
+
 ## Performance acceptance
 
 Measure these release ceilings on each candidate shell. Use production binaries with symbols recorded, one 1920×1080 output, the established eight-vCPU/6 GiB headless joe guest and its recorded Mesa Vulkan ICD. Repeat with two outputs and Orca, and report deltas. Keep hardware results from the isolated render-node harness separate from software-renderer figures. Retain the existing compositor frame and idle budgets. [Measurement setup](../tests/nested/README.md#frame-and-idle-budgets)
@@ -183,6 +197,18 @@ The eight-vCPU, 6 GiB enforcing beta1 guest used headless virtio-vga and Mesa la
 
 The secondary output was 1024×768. Orca itself used 69.6 MiB PSS. The one-output shell produced zero buffer submissions and zero DRM redraws in the ten-second windows before and after a clock change, with animations both enabled and disabled. On the final binary the cold-cache Start measurement was 0.440 s. The 20 warm logins had a median of 0.258 s and p95 of 0.275 s. A separate run concurrent with a full host Rust rebuild reached 0.619 s p95. Both idle-host runs passed the 0.5 s gate. [Measurement driver](../tests/qemu/session/qualify_gpui_budget.py)
 
+### Step 6 measurements
+
+The headless enforcing joe beta1 guest used eight vCPUs, 6 GiB RAM, virtio-vga and the Mesa lavapipe Vulkan ICD. The primary scanout was 1920×1080 and the secondary was 1024×768. On the step 6 preview the initial 20 warm logins reached a populated Start menu in 0.292 s median and 0.346 s p95. The cold-cache login took 0.540 s. A repeat on the committed release binaries reached **0.496 s cold, 0.295 s warm median and 0.319 s warm p95** over 20 logins. The shell ELF build ID was `24ac424994c79b724bfae065f57f6dc7b88a83da` and the compositor’s was `ecab3d269781b3c28988cae7f4b68455fa756b27`. With both motion preferences, the one-output shell made zero buffer submissions and the compositor made zero DRM redraws in the two ten-second windows around a visible clock update.
+
+| Settled configuration | Shell PSS | Shell RSS | CPU, one vCPU |
+| --- | ---: | ---: | ---: |
+| One display | 146.8 MiB | 181.8 MiB | 0.000% |
+| Two displays | 169.7 MiB | 205.5 MiB | 0.000% |
+| Two displays and Orca | 169.6 MiB | 205.8 MiB | 0.000% |
+
+Orca used an additional 69.4 MiB PSS. The compositor used 96.4 MiB PSS on one display. A second display now also has its own GPUI icon surface. On the committed lock build the first protected frame on a normal lock appeared at 40 ms and the prompt at 260 ms. The additional locker used 132.4 MiB PSS. The three-output test sampled 664 pairs of primary and secondary scanouts across the idle transitions and process loss, with separate checks on the third head, VT return and wake.
+
 ## joe packaging handoff
 
 The step 1 archive from `0edad6f` built the compositor, GPUI shell and Settings with stable Rust 1.100.0 and `--release --locked --offline` in a fresh extraction, using an empty Cargo home and a network namespace with only a down loopback device. On Linux x86_64 the shell and Settings resolve one GPUI family at the shared Zed revision. The recursive Nix source hash was updated from the exported suite tree. Cargo and the GDM installation were exercised on this host and guest. The Nix derivation still needs a Nix build. [Source archive recipe](../tools/dist.sh) · [Dependency notices](../THIRD-PARTY-NOTICES.md)
@@ -194,6 +220,8 @@ The step 3 source at `3a66c87` produced two byte-identical archives with SHA-256
 The step 4 release source at `3f63784` produced two identical archives with SHA-256 `3937d26db4e6f28abc8af03e09473e8f1723f806be10669b268fc5ea3bc64f81`. The compositor, shell and Settings built from a fresh extraction with an empty Cargo home, stable Rust, `--locked --offline` and networking disabled. The shell ELF links the system’s `libpolkit-agent-1.so.0` and `libpolkit-gobject-1.so.0`.
 
 The step 5 source at `1be63b4` produced two identical archives (SHA-256 `70c565b6b220ed44de6ed948738d81c9af292c4c8572a9f3921efd2ace6035d7`). From a fresh extraction, stable Rust built all four release binaries with an empty Cargo home, networking disabled and `--locked --offline`. The preview adds an unprivileged `mundane-lock` binary and vendor service `/usr/lib/pam.d/mundane-lock`. It needs Linux-PAM at runtime and PAM headers and libclang at build time. The GTK reference still uses swaylock. [Installer](../session/install.sh) · [PAM service](../session/mundane-lock.pam)
+
+The step 6 release source at `9ce2c4e` produced two identical archives with SHA-256 `cb7fcc480f5d54586cb90d81fe400fbf7abce6785235bed7bfb2bdbe72da2845`. Stable Rust built all four release binaries from a fresh extraction with an empty Cargo home, `--locked --offline` and networking disabled. The shell, locker and Settings continue to share one mundane-ui and GPUI revision. The GPUI preview installs an additional portal routing file and desktop-specific MIME defaults. The test Flatpak and its runtime are guest fixtures.
 
 The [existing manifest](plan.md#joe-packaging-handoff) describes the reviewed GTK package. Apply these changes as the corresponding gates pass:
 

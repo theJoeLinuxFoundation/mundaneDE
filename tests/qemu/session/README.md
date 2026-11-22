@@ -293,3 +293,16 @@ python3 "$driver/qualify_gpui_lock.py" "$run" "$run/locker-screenshots"
 ```
 
 The driver checks whole scanouts, monitors delivery to a background client, examines the protected AT-SPI field and records Orca’s speech. It verifies both wrong-password and PAM account denial, fresh conversations after VT and S3, and actual focus restoration after success. The compositor’s Rust tests also exercise public, shell, legacy and replacement locker connections, replayed tickets, a queued completion from a closed peer and obsolete generations. [Protocol and measurements](../../../docs/shell-gpui.md#step-5-gpui-lock)
+
+### GPUI shell step 6
+
+Use the headless preview overlay described above. Install the release binaries and run the session installer with the preview enabled. Install the preview portal routing in the portal frontend’s data path and its MIME defaults in the applications data directory. The guest needs Nautilus, Text Editor, Firefox, the IBus daemon, its Python GI typelib and standalone `ibus-wayland`. Frozen beta1 omits the Wayland frontend, so supply a compatible upstream binary in the overlay. The desktop driver registers its own conversion engine for the session. The portal grant test needs Flatpak, Bubblewrap, the document portal and the guest’s own dynamic libraries. It constructs and removes a tiny local Flatpak and runtime without using an external app remote.
+
+```sh
+cc -O2 "$driver/portals/grant.c" -o "$run/file-grant" $(pkg-config --cflags --libs gio-2.0)
+python3 "$driver/qualify_gpui_desktop.py" "$run" "$run/step6-screenshots"
+python3 "$driver/qualify_portals.py" "$run" --gpui-screenshots "$run/step6-screenshots" --flatpak-client "$run/file-grant"
+python3 "$driver/qualify_gpui_lock.py" "$run" "$run/step6-screenshots"
+```
+
+Use a clean login between drivers. Run the lock driver last because it suspends the guest. It uses ImageMagick on the host to compare the virtual scanouts with the expected dimmed wallpaper. The desktop driver exercises live directory updates, focus restoration and real default handlers, followed by Japanese conversion in two GTK inputs and a Firefox form. The portal driver checks both the chosen URI and the data read from the Flatpak’s document grant.

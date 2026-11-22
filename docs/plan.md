@@ -94,7 +94,7 @@ mundane-apps each submit a buffer. The ordinary registry, negotiated versions,
 traces and screenshots are recorded by the [application tests](../tests/nested/README.md#everyday-applications).
 
 **Distribution handoff.** Package Xwayland on PATH. The launcher can obtain
-`DISPLAY` from `mundane-de --x11-display`. Ship the upstream GTK 3 IBus panel
+`DISPLAY` from `mundane-de --x11-display`. For the GTK reference session, ship the upstream GTK 3 IBus panel
 built with its Wayland input-method-v2 frontend, start the session's IBus daemon
 with the automatic panel disabled, and set `MUNDANE_IBUS_PANEL` to the panel
 executable. The compositor launches it with `--enable-wayland-im`. This panel
@@ -212,11 +212,11 @@ and [Settings shell](../settings-panel/shell.nix).
 | --- | --- |
 | `/usr/bin/` | `mundane-de`, `mundane-settings`, `mundane-session`, `mundane-panel`. The first two are native executables. |
 | `/usr/share/wayland-sessions/` | `mundane.desktop`, generated with both `Exec` and `TryExec` pointing to `/usr/bin/mundane-session`. |
-| GPUI preview additions | `/usr/bin/mundane-shell`, `/usr/bin/mundane-lock`, `/usr/share/wayland-sessions/mundane-gpui.desktop` and `/usr/lib/pam.d/mundane-lock`. Both binaries run unprivileged. |
+| GPUI preview additions | `/usr/bin/mundane-shell`, `/usr/bin/mundane-lock`, `/usr/share/wayland-sessions/mundane-gpui.desktop` and `/usr/lib/pam.d/mundane-lock`. Both binaries run unprivileged. Install the preview’s directory and Trash defaults at `/usr/share/applications/mundane-gpui-mimeapps.list`. User MIME choices take precedence. |
 | `/usr/lib/systemd/user/` | `mundane-session.target`, `mundane-ibus.service`. The launcher starts the target after publishing the session environment. |
 | `/usr/share/mundane/shell/` | `appearance.py`, `applications.py`, `authentication.py`, `bluetooth.py`, `bus.py`, `cast.py`, `devices.py`, `panel.py`, `portals.py`, `quick_settings.py`, `reader.py`, `tray_menu.py`, `upgrades.py`. |
 | `/usr/share/glib-2.0/schemas/` | `50-mundane.gschema.override`, `org.joelinux.mundane.shell.gschema.xml` (taskbar favourites). Run joe’s `glib-compile-schemas` trigger before sealing the image. |
-| `/usr/share/xdg-desktop-portal/` | `mundane-portals.conf`, `portals/mundane.portal`. |
+| `/usr/share/xdg-desktop-portal/` | `mundane-portals.conf`, `mundane-gpui-portals.conf`, `portals/mundane.portal`. The preview selects its own routing with `XDG_CURRENT_DESKTOP=mundane-gpui:mundane`. |
 | `/usr/share/licenses/mundaneDE/` | `LICENSE`, `THIRD-PARTY-NOTICES.md`, `licenses/Smithay-MIT.txt`, `settings-panel/LICENSE`. Upstream crate licences accompany their sources in the archive. |
 
 The compositor embeds the Afterlight wallpaper. User configuration is created
@@ -228,8 +228,8 @@ under XDG paths. [Session installer](../session/install.sh)
 | Wayland, libseat with logind support (joe’s seatd package), libinput, udev, libdrm, Mesa GBM/EGL/GLES and the device driver, Cairo, libxkbcommon, xkeyboard-config, Xcursor theme, Xwayland | Compositor, VT switch and DRM resume. The launcher holds logind’s sleep delay inhibitor until scanout stops. Use the display from `mundane-de --x11-display` for X11 clients. GPUI Settings also needs a Vulkan loader and working ICD, Fontconfig/FreeType and the X11/XCB/xkbcommon-x11 libraries for its compiled backends. |
 | Python 3, PyGObject, GLib/Gio and GTK4/Gdk typelibs, gtk4-layer-shell (both `libgtk4-layer-shell.so.0` and `Gtk4LayerShell-1.0` typelib), gsettings-desktop-schemas, dconf, fonts and desktop icon theme | The panel, launcher, Quick Settings and live themes. Include Fontconfig’s `fc-list`, XDG user directories, MIME data, desktop entries and registered browser/file handlers. Provide a terminal (set `MUNDANE_TERMINAL=mundane-terminal` to select the suite’s Terminal). |
 | polkit (`polkitd`, Polkit and PolkitAgent 1.0 typelibs, `polkit-agent-helper-1`, `polkit-1` PAM service, `pkexec`), joe administrator policy, swaylock with its PAM service | The panel is the graphical authentication agent for its logind session. The GPUI preview links the system’s `libpolkit-agent-1` and `libpolkit-gobject-1`. Include their runtime libraries and retain the typelibs for the GTK reference session. Both sessions provide their own agent. The reference session needs swaylock. The GPUI locker runs as the session user and dynamically links libpam. Ship its vendor PAM service with joe’s `system-auth` and `system-account` includes and their normal modules/helpers. Building the locker needs PAM development headers and libclang for bindgen. |
-| xdg-desktop-portal with implementation XML, xdg-desktop-portal-gtk, gnome-keyring with its Secret backend, xdg-desktop-portal-wlr 0.9.0, grim 1.5.0, `dbus-run-session`, PipeWire and WirePlumber | The shell handles capture consent, revocation and appearance. The wlr helper runs on a private bus. GTK provides chooser and notification interfaces, and keyring handles secrets. See milestone 6 for helper lookup and routing. |
-| IBus with its GTK3 Wayland panel and an installed conversion engine | Supply `ibus-daemon` and `ibus-ui-gtk3 --enable-wayland-im` in `/usr/libexec` or `/usr/lib/ibus` (override the executable with `MUNDANE_IBUS_PANEL`). The session unit runs the daemon with `--panel=disable`. The compositor connects its own frontend for preedit and candidate selection in GTK and Firefox. |
+| xdg-desktop-portal with implementation XML, xdg-desktop-portal-gtk, gnome-keyring with its Secret backend, xdg-desktop-portal-wlr 0.9.0, grim 1.5.0, `dbus-run-session`, PipeWire and WirePlumber | The shell handles capture consent, revocation and appearance. The wlr helper runs on a private bus. The preview implements FileChooser and AppChooser in the supervised shell. Install the upstream `org.freedesktop.impl.portal.{FileChooser,AppChooser}.xml` files in `share/dbus-1/interfaces` alongside the capture and request interfaces. The document portal exports selected files to sandboxes. GTK forwards portal notifications to the shell. Keyring handles secrets. The GTK reference session retains GTK file and app choosers. See milestone 6 for helper lookup and routing. |
+| IBus daemon, `ibus` CLI, Wayland frontend and conversion engine | Build IBus with Wayland enabled. For the GPUI preview ship standalone `ibus-wayland` in `/usr/libexec` or `/usr/lib/ibus`. The compositor supplies its private input-method connection. The client presents inline preedit and the GPUI shell owns `org.freedesktop.IBus.Panel` on the IBus bus for the candidate page. Keep `ibus-ui-gtk3 --enable-wayland-im` for the GTK reference and as a migration fallback. Both use `ibus-daemon --panel=disable`. `MUNDANE_IBUS_PANEL` can select the frontend explicitly. |
 | AT-SPI2 2.62.1 or compatible, Orca (qualified with 51.1), Speech Dispatcher and a voice such as eSpeak NG | The shell starts `/usr/bin/orca` and grants its session-bus connection the keyboard monitor needed for typing echo. |
 | NetworkManager and `nmcli`, BlueZ and `bluetoothctl`, UPower, WirePlumber’s `wpctl`, PipeWire Pulse service and `pactl` client | Network, Bluetooth, battery and audio controls in the shell and Settings. Brightness uses sysfs and logind on machines with a backlight. |
 | timedated / `timedatectl`, shadow’s `chpasswd`, Flatpak for the remotes page, the suite’s `mundane-packages` | Settings’ time, accounts, software and System pages. Protected actions use joe’s polkit/PAM policy. |
@@ -373,13 +373,13 @@ as an ordinary user. [Deployment VM scenarios](https://github.com/theJoeLinuxFou
 
 ## 6. Deliver portals that work outside GNOME Shell
 
-The GDM session sets `XDG_CURRENT_DESKTOP=mundane`. Install
+The reference GDM session sets `XDG_CURRENT_DESKTOP=mundane`. Install
 `share/xdg-desktop-portal/mundane-portals.conf` and
 `share/xdg-desktop-portal/portals/mundane.portal`. The frontend routes
 ScreenCast and Screenshot to the shell, Settings to both the shell and GTK,
 FileChooser, AppChooser and Notification to GTK, and Secret to GNOME Keyring. OpenURI uses the
 preferred desktop handler. The shell owns its implementation bus name for the
-life of the session. [Portal routing](https://flatpak.github.io/xdg-desktop-portal/docs/portals.conf.html)
+life of the session. The step 6 GPUI preview selects `mundane-gpui-portals.conf` for GPUI file and application choosers, and presents notifications forwarded by the GTK backend. [Portal routing](https://flatpak.github.io/xdg-desktop-portal/docs/portals.conf.html)
 
 The shell names the requesting application when the frontend supplies its ID.
 Its chooser lists connected displays and individual windows and initially

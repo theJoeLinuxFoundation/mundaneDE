@@ -37,6 +37,11 @@ files are included in the vendored archive. Bindgen uses libclang at build time.
 The installed locker dynamically links system libpam.so.0 (Linux-PAM’s BSD
 licence option). The distribution supplies PAM modules and their notices.
 
+The lock clock uses the MIT-licensed glib Rust binding and the system GLib
+library. The input-method view exchanges messages using the IBus panel D-Bus
+interface. The distribution ships the IBus daemon, conversion engines and
+`ibus-wayland` as separate programs with their upstream notices.
+
 To list the packages, versions and declared licences in both locked dependency
 graphs, run the following from the repository root with Cargo and jq installed.
 
