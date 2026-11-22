@@ -99,8 +99,7 @@ against joe’s own PipeWire, WirePlumber and desktop portal frontend.
 
 ### Headless shell qualification
 
-Use a dedicated guest because the test controls its virtual devices, logs in
-and out of the locker and temporarily substitutes shell-only dave fixtures.
+Use a dedicated guest because the test changes its audio routes, virtual Wi-Fi radio, application windows and workspaces.
 Run these commands from the repository root.
 
 ```sh
@@ -246,7 +245,7 @@ python3 "$driver/qualify_portals.py" "$portal_run" --screenshots "$portal_run/sc
 
 The feedback driver checks notification ownership, actions, expiration, bounded history, Do Not Disturb, typing through a volume OSD and persistent dave notice IDs. The step 2 laptop and Orca cases also check a brightness key on a virtual keyboard and speech for a notification in history. Use mundane-apps at the desktop’s pin for the live Terminal test.
 
-The portal driver compares an occluded window and a second monitor against the pixels delivered through the public portal. It checks cancellation, Stop on both taskbars, window close, browser exit, hot-unplug, lock and loss of either service. It changes the monitor pattern on a live stream and again after revocation, checks the PipeWire graph and worker exit, and observes an appearance change through the recovered frontend. It also opens and cancels the GPUI file chooser, follows an associated URI and invokes a notification action. The budget driver measures the idle session with all three backends registered.
+The portal driver compares an occluded window and a second monitor against the pixels delivered through the public portal. It checks cancellation, Stop on both taskbars, window close, browser exit, hot-unplug, lock and loss of either service. It changes the monitor pattern on a live stream and again after revocation, checks the PipeWire graph and worker exit, and observes an appearance change through the recovered frontend. Its static-window sampler uses GStreamer 1.0, its GI bindings and appsink in the test guest. It opens and cancels the GPUI file chooser, follows an associated URI and invokes a notification action. The budget driver measures the idle session with all three backends registered.
 
 ### GPUI shell step 4
 

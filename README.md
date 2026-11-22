@@ -49,12 +49,9 @@ Set `WAYLAND_DISPLAY` to the mundaneDE socket first. With the compositor
 binary on your path, run `DISPLAY=$(mundane-de --x11-display) xterm`.
 The command waits for Xwayland and its window manager to be ready.
 
-To use IBus, point `MUNDANE_IBUS_PANEL` at the upstream `ibus-ui-gtk3`
-executable before starting mundaneDE. The compositor gives the panel a private
-Wayland connection and passes `--enable-wayland-im`. It needs a running IBus
-daemon in the same session. GTK and Firefox can then use text-input-v3.
-The [isolated application tests](tests/nested/README.md#everyday-applications)
-exercise this configuration.
+In the GDM session, the compositor connects the standalone `ibus-wayland`
+frontend to IBus. GTK and Firefox display inline preedit. The GPUI shell draws
+the candidate list at the text caret.
 
 For direct rendering on a free seat, omit `--winit`. The repository includes
 an [automated two-output DRM/KMS test in QEMU](tests/qemu/README.md#automated-output-test).
@@ -64,7 +61,7 @@ an [automated two-output DRM/KMS test in QEMU](tests/qemu/README.md#automated-ou
 Run `./tests/try-mundane.sh` for a persistent 1920×1080 joe Linux test guest. The launcher uses the frozen beta1 image as read-only backing.
 [Guest setup](tests/qemu/session/README.md#try-the-desktop)
 
-The optional GDM entry runs the compositor on the logged-in user's logind seat.
+The **mundaneDE** GDM entry starts the native session leader, compositor and GPUI shell on the logged-in user’s seat.
 Super+Shift+Q returns to GDM. The session and its packaging dependencies are
 qualified on the beta1 x86 joe Linux image in a headless KVM guest.
 [Packaging handoff](docs/plan.md#4-enter-and-leave-a-real-session) · [GDM test](tests/qemu/session/README.md)

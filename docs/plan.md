@@ -94,16 +94,11 @@ mundane-apps each submit a buffer. The ordinary registry, negotiated versions,
 traces and screenshots are recorded by the [application tests](../tests/nested/README.md#everyday-applications).
 
 **Distribution handoff.** Package Xwayland on PATH. The launcher can obtain
-`DISPLAY` from `mundane-de --x11-display`. For the GTK reference session, ship the upstream GTK 3 IBus panel
-built with its Wayland input-method-v2 frontend, start the session's IBus daemon
-with the automatic panel disabled, and set `MUNDANE_IBUS_PANEL` to the panel
-executable. The compositor launches it with `--enable-wayland-im`. This panel
-draws the candidate list and auxiliary text in an input-method popup. mundaneDE
-positions that surface by the focused field’s caret, keeping it on the output.
-The panel relays preedit and commits through input-method-v2 and text-input-v3.
-GTK and Firefox draw inline preedit in the field and insert the committed text.
-Keep the existing joe IBus daemon and engines. The compositor gives
-input-method and virtual-keyboard access to that frontend’s private connection.
+`DISPLAY` from `mundane-de --x11-display`. Ship standalone `ibus-wayland` with the IBus daemon and a conversion engine.
+The session starts the daemon with its automatic panel disabled. The compositor gives the
+frontend a private input-method connection. GTK and Firefox display inline preedit through
+text-input-v3. The GPUI shell implements the IBus panel and places candidates by the
+focused field’s caret.
 An optional session clipboard manager named by `MUNDANE_CLIPBOARD_MANAGER`
 receives ext-data-control on its own connection. GTK and GPUI should use
 client-side controls according to the negotiated mode and xdg-toplevel
@@ -171,10 +166,7 @@ logged-in user. [systemd session targets](https://www.freedesktop.org/software/s
 
 ### joe packaging handoff
 
-The [GPUI shell migration](shell-gpui.md) has a separate preview entry. To package the preview for testing, pass the release `mundane-shell` binary as the second argument to `session/install.sh`. Build the preview from the archive with `cargo build --release --locked --offline --workspace --manifest-path settings-panel/Cargo.toml`. The installer takes the sibling `mundane-lock` binary or its path as the third argument. It installs both programs under `$prefix/bin`, the vendor PAM service at `/usr/lib/pam.d/mundane-lock` and the GDM entry at `/usr/share/wayland-sessions/mundane-gpui.desktop`. The existing mundaneDE entry selects the Python reference. The preview uses GIO, the desktop and favourite schemas, dconf, the icon theme, fonts and the same Mesa Vulkan loader/ICD as Settings. Quick Settings uses the device services and clients listed below, including the Pulse-compatible PipeWire service, and publishes the appearance Settings backend on the session bus. Native Settings dialogs use the shared GPUI text and password fields. Settings, shell and locker share the workspace lockfile. [Build the preview](../tests/qemu/session/README.md#gpui-shell-step-1) · [Qualify Quick Settings](../tests/qemu/session/README.md#gpui-shell-step-2)
-
-In the step 3 preview, the same shell binary owns notifications, the ScreenCast and Screenshot backends and their GPUI consent UI. For an approved stream it starts `dbus-run-session -- mundane-shell --cast-worker …` with a source-limited Wayland fd and invokes xdg-desktop-portal-wlr on that private bus. For a still it invokes grim. Install the portal implementation XML, routing files, PipeWire/WirePlumber and helpers in the table below. The preview reads the same published dave status and notice state as the reference. [Preview portal and notification tests](../tests/qemu/session/README.md#gpui-shell-step-3)
-
+GDM’s **mundaneDE** entry starts the Rust session leader, compositor and supervised GPUI shell. The locker runs on demand. The same desktop name selects the session’s portal routing and MIME defaults. The choice of distribution default still requires packaged-image qualification and the maintainer’s real-machine sign-off. [Cut-over and measurements](shell-gpui.md#step-7-cut-over)
 
 **Vendored source archive.** Run `tools/dist.sh` in a Git checkout. It exports
 the committed HEAD, reads the compositor version and writes
@@ -192,9 +184,8 @@ From the extracted archive root, with an absolute staging directory in
 
 ```sh
 cargo build --release --locked --offline
-(cd settings-panel && cargo build --release --locked --offline)
-PREFIX=/usr DESTDIR="$pkgdir" session/install.sh target/release/mundane-de
-install -Dm755 settings-panel/target/release/mundane-settings "$pkgdir/usr/bin/mundane-settings"
+cargo build --release --locked --offline --workspace --manifest-path settings-panel/Cargo.toml
+PREFIX=/usr DESTDIR="$pkgdir" session/install.sh target/release/mundane-de settings-panel/target/release
 for f in LICENSE THIRD-PARTY-NOTICES.md licenses/Smithay-MIT.txt settings-panel/LICENSE; do
     install -Dm644 "$f" "$pkgdir/usr/share/licenses/mundaneDE/$f"
 done
@@ -204,20 +195,22 @@ Supply stable Rust/Cargo, a C/C++ build toolchain, pkg-config and clang/libclang
 in the joe build root. Provide native development files for the runtime
 libraries below, including Wayland protocols/scanner, EGL/GLES/GBM, libdrm,
 libinput, libudev, libseat, Cairo, xkbcommon, Fontconfig/FreeType, X11/XCB,
-ALSA, D-Bus and OpenSSL. The archive supplies the Rust sources. The native
+ALSA, D-Bus, OpenSSL, GLib/GIO, polkit-agent and Linux-PAM. The archive supplies the Rust sources. The native
 development environments are listed in the [compositor shell](../shell.nix)
 and [Settings shell](../settings-panel/shell.nix).
 
 | Package-owned directory | Files to install |
 | --- | --- |
-| `/usr/bin/` | `mundane-de`, `mundane-settings`, `mundane-session`, `mundane-panel`. The first two are native executables. |
-| `/usr/share/wayland-sessions/` | `mundane.desktop`, generated with both `Exec` and `TryExec` pointing to `/usr/bin/mundane-session`. |
-| GPUI preview additions | `/usr/bin/mundane-shell`, `/usr/bin/mundane-lock`, `/usr/share/wayland-sessions/mundane-gpui.desktop` and `/usr/lib/pam.d/mundane-lock`. Both binaries run unprivileged. Install the preview’s directory and Trash defaults at `/usr/share/applications/mundane-gpui-mimeapps.list`. User MIME choices take precedence. |
-| `/usr/lib/systemd/user/` | `mundane-session.target`, `mundane-ibus.service`. The launcher starts the target after publishing the session environment. |
-| `/usr/share/mundane/shell/` | `appearance.py`, `applications.py`, `authentication.py`, `bluetooth.py`, `bus.py`, `cast.py`, `devices.py`, `panel.py`, `portals.py`, `quick_settings.py`, `reader.py`, `tray_menu.py`, `upgrades.py`. |
-| `/usr/share/glib-2.0/schemas/` | `50-mundane.gschema.override`, `org.joelinux.mundane.shell.gschema.xml` (taskbar favourites). Run joe’s `glib-compile-schemas` trigger before sealing the image. |
-| `/usr/share/xdg-desktop-portal/` | `mundane-portals.conf`, `mundane-gpui-portals.conf`, `portals/mundane.portal`. The preview selects its own routing with `XDG_CURRENT_DESKTOP=mundane-gpui:mundane`. |
+| `/usr/bin/` | `mundane-session`, `mundane-de`, `mundane-shell`, `mundane-lock`, `mundane-settings`. Keep these native executables together. The locker and shell run as the logged-in user. |
+| `/usr/share/wayland-sessions/` | `mundane.desktop`. Both Exec and TryExec name the native session leader. |
+| `/usr/lib/pam.d/` | `mundane-lock`, including joe’s `system-auth` and `system-account` stacks. |
+| `/usr/lib/systemd/user/` | `mundane-session.target`, `mundane-ibus.service`. |
+| `/usr/share/applications/` | `mundane-mimeapps.list` for directories and Trash. User preferences take precedence. |
+| `/usr/share/glib-2.0/schemas/` | `50-mundane.gschema.override`, `org.joelinux.mundane.shell.gschema.xml`. Run the distro’s schema compilation trigger. |
+| `/usr/share/xdg-desktop-portal/` | `mundane-portals.conf`, `portals/mundane.portal`. The frontend selects this routing with `XDG_CURRENT_DESKTOP=mundane`. |
 | `/usr/share/licenses/mundaneDE/` | `LICENSE`, `THIRD-PARTY-NOTICES.md`, `licenses/Smithay-MIT.txt`, `settings-panel/LICENSE`. Upstream crate licences accompany their sources in the archive. |
+
+On upgrade, retire the former `mundane-panel` executable, its `share/mundane/shell/` Python modules, the `mundane-gpui.desktop` preview entry, `mundane-gpui-portals.conf` and `mundane-gpui-mimeapps.list`. Replace the old `mundane-session` script at the same path. Drop mundane-de’s dependencies on Python, PyGObject, GTK/GDK and polkit GI typelibs, gtk4-layer-shell (library, preload and typelib), swaylock and its PAM service, the GTK IBus panel, and polkit-gnome. Keep the independent dependencies of GNOME, Orca, portal backends and GTK applications. The host archive generator and test drivers still use Python.
 
 The compositor embeds the Afterlight wallpaper. User configuration is created
 under XDG paths. [Session installer](../session/install.sh)
@@ -226,10 +219,10 @@ under XDG paths. [Session installer](../session/install.sh)
 | --- | --- |
 | GDM, AccountsService, PAM (`gdm-password`, `gdm-autologin`, pam_systemd), systemd-logind and user manager, system and user D-Bus, GLib | Keep GNOME selectable. Opt in per user with AccountsService `Session=mundane` and `SessionType=wayland`. Supply `systemctl`, `busctl`, `dbus-update-activation-environment` and `gdbus`. The launcher publishes `WAYLAND_DISPLAY`, desktop/session type and session ID. Logout stops both session targets and clears activation state. |
 | Wayland, libseat with logind support (joe’s seatd package), libinput, udev, libdrm, Mesa GBM/EGL/GLES and the device driver, Cairo, libxkbcommon, xkeyboard-config, Xcursor theme, Xwayland | Compositor, VT switch and DRM resume. The launcher holds logind’s sleep delay inhibitor until scanout stops. Use the display from `mundane-de --x11-display` for X11 clients. GPUI Settings also needs a Vulkan loader and working ICD, Fontconfig/FreeType and the X11/XCB/xkbcommon-x11 libraries for its compiled backends. |
-| Python 3, PyGObject, GLib/Gio and GTK4/Gdk typelibs, gtk4-layer-shell (both `libgtk4-layer-shell.so.0` and `Gtk4LayerShell-1.0` typelib), gsettings-desktop-schemas, dconf, fonts and desktop icon theme | The panel, launcher, Quick Settings and live themes. Include Fontconfig’s `fc-list`, XDG user directories, MIME data, desktop entries and registered browser/file handlers. Provide a terminal (set `MUNDANE_TERMINAL=mundane-terminal` to select the suite’s Terminal). |
-| polkit (`polkitd`, Polkit and PolkitAgent 1.0 typelibs, `polkit-agent-helper-1`, `polkit-1` PAM service, `pkexec`), joe administrator policy, swaylock with its PAM service | The panel is the graphical authentication agent for its logind session. The GPUI preview links the system’s `libpolkit-agent-1` and `libpolkit-gobject-1`. Include their runtime libraries and retain the typelibs for the GTK reference session. Both sessions provide their own agent. The reference session needs swaylock. The GPUI locker runs as the session user and dynamically links libpam. Ship its vendor PAM service with joe’s `system-auth` and `system-account` includes and their normal modules/helpers. Building the locker needs PAM development headers and libclang for bindgen. |
-| xdg-desktop-portal with implementation XML, xdg-desktop-portal-gtk, gnome-keyring with its Secret backend, xdg-desktop-portal-wlr 0.9.0, grim 1.5.0, `dbus-run-session`, PipeWire and WirePlumber | The shell handles capture consent, revocation and appearance. The wlr helper runs on a private bus. The preview implements FileChooser and AppChooser in the supervised shell. Install the upstream `org.freedesktop.impl.portal.{FileChooser,AppChooser}.xml` files in `share/dbus-1/interfaces` alongside the capture and request interfaces. The document portal exports selected files to sandboxes. GTK forwards portal notifications to the shell. Keyring handles secrets. The GTK reference session retains GTK file and app choosers. See milestone 6 for helper lookup and routing. |
-| IBus daemon, `ibus` CLI, Wayland frontend and conversion engine | Build IBus with Wayland enabled. For the GPUI preview ship standalone `ibus-wayland` in `/usr/libexec` or `/usr/lib/ibus`. The compositor supplies its private input-method connection. The client presents inline preedit and the GPUI shell owns `org.freedesktop.IBus.Panel` on the IBus bus for the candidate page. Keep `ibus-ui-gtk3 --enable-wayland-im` for the GTK reference and as a migration fallback. Both use `ibus-daemon --panel=disable`. `MUNDANE_IBUS_PANEL` can select the frontend explicitly. |
+| Native GLib/GIO, gsettings-desktop-schemas, dconf, Fontconfig/FreeType, fonts and desktop icon theme | Shell, Settings and locker use GPUI, Wayland and a working Vulkan loader/ICD. Include `fc-list`, XDG user directories, MIME data, desktop entries, directory/Trash handlers and a terminal. |
+| polkitd, libpolkit-agent-1, libpolkit-gobject-1, polkit-agent-helper-1 and its polkit-1 PAM policy, pkexec, Linux-PAM and joe administrator policy | The GPUI shell registers its agent with the session’s authority. The GPUI locker runs authentication and account checks on its own live channel. |
+| xdg-desktop-portal with implementation XML, xdg-desktop-portal-gtk, gnome-keyring with its Secret backend, xdg-desktop-portal-wlr 0.9.0, grim 1.5.0, `dbus-run-session`, PipeWire and WirePlumber | The shell handles capture consent, revocation and appearance. The wlr helper runs on a private bus. The shell implements FileChooser and AppChooser in the supervised shell. Install the upstream `org.freedesktop.impl.portal.{FileChooser,AppChooser}.xml` files in `share/dbus-1/interfaces` alongside the capture and request interfaces. The document portal exports selected files to sandboxes. Ship the GTK backend’s systemd user service. The session queues it on login, and GTK forwards portal notifications to the shell. Keyring handles secrets. See milestone 6 for helper lookup and routing. |
+| IBus daemon, `ibus` CLI, Wayland frontend and conversion engine | Build IBus with Wayland enabled. Ship standalone `ibus-wayland` in `/usr/libexec` or `/usr/lib/ibus`. The compositor supplies its private input-method connection. The client presents inline preedit and the GPUI shell owns `org.freedesktop.IBus.Panel` on the IBus bus for the candidate page. Use `ibus-daemon --panel=disable`. `MUNDANE_IBUS_PANEL` can select the frontend explicitly. |
 | AT-SPI2 2.62.1 or compatible, Orca (qualified with 51.1), Speech Dispatcher and a voice such as eSpeak NG | The shell starts `/usr/bin/orca` and grants its session-bus connection the keyboard monitor needed for typing echo. |
 | NetworkManager and `nmcli`, BlueZ and `bluetoothctl`, UPower, WirePlumber’s `wpctl`, PipeWire Pulse service and `pactl` client | Network, Bluetooth, battery and audio controls in the shell and Settings. Brightness uses sysfs and logind on machines with a backlight. |
 | timedated / `timedatectl`, shadow’s `chpasswd`, Flatpak for the remotes page, the suite’s `mundane-packages` | Settings’ time, accounts, software and System pages. Protected actions use joe’s polkit/PAM policy. |
@@ -297,21 +290,7 @@ input isolation until a recovered locker authenticates. Include a suspend/lid
 cycle with the session locked before sleep. Exercise service failures on a
 private test bus and repeat device actions on a laptop.
 
-**Implementation and joe packaging.** Install the panel launcher and its Python
-modules with `session/install.sh`. Supply GTK 4, PyGObject, the
-gtk4-layer-shell shared library and typelib, icon themes, GIO desktop and MIME
-databases and the distribution’s preferred file handlers. The session launches
-the panel on a compositor-issued Wayland connection. It uses a second,
-ordinary connection for ext-foreign-toplevel enumeration. Window activation,
-close and workspace moves travel on a private socket inherited by the panel.
-A replacement panel enumerates the existing windows again.
-
-For the reference session, ship swaylock with its PAM service (`auth include system-auth` on the test
-image), NetworkManager and nmcli, PipeWire, WirePlumber and wpctl, BlueZ
-and bluetoothctl, UPower, polkit and logind. The compositor launches the PAM
-locker on its own connection. It masks every output, checks page-flip completion
-and keeps drawing that mask if the locker exits. The session handles logind’s
-Lock and PrepareForSleep signals. Explicit lock overrides an idle inhibitor.
+The compositor supervises the GPUI shell and relaunches it with a fresh private connection after a crash. Task and workspace updates restore the panel on each output. The compositor launches the PAM locker separately, masks each output and keeps it covered through client loss. The session handles logind Lock and PrepareForSleep. Explicit lock overrides idle inhibition. [Package files and dependencies](#joe-packaging-handoff)
 
 Milestone 6’s portal backend owns `org.freedesktop.impl.portal.desktop.mundane`.
 Export its active sessions through ObjectManager at
@@ -373,13 +352,7 @@ as an ordinary user. [Deployment VM scenarios](https://github.com/theJoeLinuxFou
 
 ## 6. Deliver portals that work outside GNOME Shell
 
-The reference GDM session sets `XDG_CURRENT_DESKTOP=mundane`. Install
-`share/xdg-desktop-portal/mundane-portals.conf` and
-`share/xdg-desktop-portal/portals/mundane.portal`. The frontend routes
-ScreenCast and Screenshot to the shell, Settings to both the shell and GTK,
-FileChooser, AppChooser and Notification to GTK, and Secret to GNOME Keyring. OpenURI uses the
-preferred desktop handler. The shell owns its implementation bus name for the
-life of the session. The step 6 GPUI preview selects `mundane-gpui-portals.conf` for GPUI file and application choosers, and presents notifications forwarded by the GTK backend. [Portal routing](https://flatpak.github.io/xdg-desktop-portal/docs/portals.conf.html)
+The GDM session sets `XDG_CURRENT_DESKTOP=mundane`. The public portal routes ScreenCast, Screenshot, FileChooser and AppChooser to the GPUI shell, merges the shell and GTK Settings backends, and uses GNOME Keyring for Secret. GTK forwards Notification to the shell and supplies Print. OpenURI uses the preferred desktop handler. [Portal routing](https://flatpak.github.io/xdg-desktop-portal/docs/portals.conf.html)
 
 The shell names the requesting application when the frontend supplies its ID.
 Its chooser lists connected displays and individual windows and initially
@@ -389,10 +362,10 @@ Ordinary and sandboxed clients see no capture globals. A window capture
 renders that window’s surface tree, including when another app covers it.
 The compositor revokes grants before drawing the lock surface and on source
 removal or panel loss. [Compositor capture](../src/capture/mod.rs) ·
-[Desktop backend](../session/shell/portals.py)
+[Desktop backend](../settings-panel/mundane-shell/src/portals.rs)
 
 For joe packaging, provide **xdg-desktop-portal-wlr 0.9.0**, grim 1.5.0,
-`dbus-run-session`, PyGObject, the xdg-desktop-portal implementation XML and
+`dbus-run-session`, the xdg-desktop-portal implementation XML and
 the session’s PipeWire service and WirePlumber policy. Keep the executable
 available on PATH or in the backend’s usual libexec directory. Each approved
 stream gets its own wlr process and private D-Bus session. It uses
@@ -527,7 +500,7 @@ session client and verify it receives no keys during the typing trial.
 
 Install Orca and its speech backend (Speech Dispatcher and a voice), AT-SPI2
 2.62.1 or compatible, GSettings desktop schemas, dconf, fontconfig and the
-desktop icon theme. Ship the Polkit and PolkitAgent typelibs, polkitd and its
+desktop icon theme. Ship the native polkit agent libraries, polkitd and its
 distribution-provided authentication helper and PAM files. The unprivileged
 panel registers for its own logind session on the system bus. Super+Alt+S
 toggles the session-owned Orca process. The screen reader's unique session-bus
@@ -575,7 +548,7 @@ services from this gate.
 
 | joe image test | Pass condition and evidence |
 | --- | --- |
-| Build and install | From the pinned archive and SHA-256, build both crates offline in joe. Compare the sealed image’s package manifest with the handoff above. Check executable/shared-library resolution, compiled schemas, GI imports, session units, portal XML/routing and PAM services before first login. Record desktop/suite/dave revisions, image deployment ID, kernel, Mesa, driver and display modes. |
+| Build and install | From the pinned archive and SHA-256, build both locked workspaces offline in joe. Compare the sealed image’s package manifest with the handoff above. Check executable/shared-library resolution, compiled schemas, the native session leader and GPUI shell, session units, portal XML/routing and PAM services before first login. Record desktop/suite/dave revisions, image deployment ID, kernel, Mesa, driver and display modes. |
 | Clean and upgraded x86 | Extend `tests/vm/release.tomlx` / `make test-release` for first-account creation, GDM session selection and a second boot. Separately start with a supported previous joe desktop, prepare the real upgrade with dave and reboot into the packaged candidate. Verify the existing account, files, MIME associations and explicit appearance preferences survive. |
 | Session and apps | Add a mundaneDE scenario alongside the GNOME rows of `tests/vm/desktop.tomlx` / `make test-desktop` in both logging and enforcing modes. Discover the user’s published Wayland display. Verify the bottom taskbar, Start, tray, desktop icons and window buttons, then the application matrix with GTK, suite apps, X11 clipboard in both directions and IBus conversion in Firefox and GTK. Open, edit and save a removable file through its handler. Play Firefox audio. |
 | Displays, sharing and privacy | With two virtual outputs, test scale, mode rollback, snap and reduced motion. In Firefox start a PipeWire share, verify its pixels and indicator, exercise the stop paths in milestone 6 and confirm the lock screen stays private. Accept and cancel a screenshot. Keep QMP screendumps and portal/PipeWire journal evidence. |
