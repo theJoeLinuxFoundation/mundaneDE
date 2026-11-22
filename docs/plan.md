@@ -354,6 +354,17 @@ on private buses and check Orca’s speech for a Settings toggle. [Shared contro
 Provide a keyboard path to enable accessibility at login and retain it after
 lock and logout.
 
+Implement the Wayland keyboard monitor that libatspi discovers on the session
+bus. The compositor owns `org.freedesktop.a11y.Manager` and exports
+`org.freedesktop.a11y.KeyboardMonitor` at `/org/freedesktop/a11y/Manager`.
+Orca uses the matching printable key event to distinguish typing from an edit
+made by the application. Restrict monitoring to the authorized accessibility
+service. Bind the authorization to its D-Bus connection, deliver events only
+to that connection on the active seat, and revoke the watch when the owner
+disconnects or the session ends. An ordinary app must be unable to acquire a
+watch by claiming Orca’s bus name or receive key events by subscribing to
+signals. [libatspi device selection](https://github.com/GNOME/at-spi2-core/blob/2.62.1/atspi/atspi-device.c#L246) · [Sway keyboard monitor](https://github.com/swaywm/sway/pull/9331)
+
 **Acceptance.** Open a GTK/libadwaita app, Settings and a GPUI suite app side
 by side. Change light/dark, accent, high contrast, text scale and reduced
 motion. Check live updates, legibility, focus rings and lack of clipping at
@@ -362,6 +373,16 @@ pointer unused, launch an app, adjust a setting, dismiss a dialog and unlock.
 Orca must announce the focused role, name, value and state changes, with
 passwords masked. Inspect the AT-SPI tree and activate the control through
 its accessible action. Restart the session and check persistence.
+
+Run Orca with character echo enabled on mundaneDE with private session and
+accessibility buses and a recording speech server. Focus a GTK entry containing
+`Tokyo` and type `z` at the end. Require the insert event, the new value
+`Tokyoz` and exactly one spoken “z”. In a fresh trial, have the application
+append the same character to the same focused field without a keypress. Require
+the same insert and value and zero spoken “z” responses. Repeat both trials in
+a GPUI/AccessKit entry. Also attempt to watch and subscribe from an ordinary
+session client and verify it receives no keys during the typing trial.
+[GPUI speech fixture](https://github.com/theJoeLinuxFoundation/mundane-apps/blob/59982d6/tests/wayland/accessibility.py)
 
 ## 8. Qualify the default session
 
