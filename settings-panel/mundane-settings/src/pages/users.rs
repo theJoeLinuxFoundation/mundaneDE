@@ -3,11 +3,11 @@
 use crate::pages::{Page, PageState};
 use crate::theme;
 use crate::widgets::prompt;
-use mundane_settings_core::dbus::accounts::{self as backend, AccountType, UserAccount};
 use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window, div, px, rgb,
+    div, px, rgb, Context, InteractiveElement, IntoElement, ParentElement, Render,
+    StatefulInteractiveElement, Styled, Window,
 };
+use mundane_settings_core::dbus::accounts::{self as backend, AccountType, UserAccount};
 
 pub struct UsersPage {
     state: PageState<UserAccount>,
@@ -36,11 +36,15 @@ impl UsersPage {
             let result = backend::current().await;
             weak.update(async_cx, |this, cx| {
                 this.state = match result {
-                    Ok(u) => PageState::Loaded { data: u, fetched_at: std::time::Instant::now() },
+                    Ok(u) => PageState::Loaded {
+                        data: u,
+                        fetched_at: std::time::Instant::now(),
+                    },
                     Err(e) => PageState::Error(e.to_string()),
                 };
                 cx.notify();
-            }).ok();
+            })
+            .ok();
         })
         .detach();
     }
@@ -91,7 +95,8 @@ impl UsersPage {
             if new != confirm {
                 weak.update(async_cx, |this, cx| {
                     this.password_pending = false;
-                    this.password_status = Some(PasswordStatus::Err("Passwords didn't match.".into()));
+                    this.password_status =
+                        Some(PasswordStatus::Err("Passwords didn't match.".into()));
                     cx.notify();
                 })
                 .ok();
@@ -120,23 +125,44 @@ impl Render for UsersPage {
         let pending = self.password_pending;
         let change_password_button = div()
             .id("change-password")
+            .role(gpui::Role::Button)
+            .aria_label("Change password")
+            .tab_index(0)
+            .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
             .px_4()
             .py_2()
-            .bg(rgb(if pending { theme::SIDEBAR } else { theme::ACCENT }))
+            .bg(rgb(if pending {
+                theme::palette().panel
+            } else {
+                theme::palette().focus
+            }))
             .rounded(px(8.))
-            .text_color(rgb(theme::BG))
+            .text_color(rgb(theme::palette().surface))
             .cursor_pointer()
             .on_click(cx.listener(|this, _event, _window, cx| this.start_change_password(cx)))
-            .child(if pending { "Changing…" } else { "Change password…" }.to_string());
+            .child(
+                if pending {
+                    "Changing…"
+                } else {
+                    "Change password…"
+                }
+                .to_string(),
+            );
 
         let status_line = match &self.password_status {
-            Some(PasswordStatus::Ok) => Some((theme::ACCENT, "Password updated.".to_string())),
-            Some(PasswordStatus::Err(e)) => Some((theme::TEXT_MUTED, format!("Couldn't update: {e}"))),
+            Some(PasswordStatus::Ok) => {
+                Some((theme::palette().focus, "Password updated.".to_string()))
+            }
+            Some(PasswordStatus::Err(e)) => {
+                Some((theme::palette().secondary, format!("Couldn't update: {e}")))
+            }
             None => None,
         };
 
         let body = match &self.state {
-            PageState::Loaded { data, .. } => account_view(data, change_password_button, status_line),
+            PageState::Loaded { data, .. } => {
+                account_view(data, change_password_button, status_line)
+            }
             PageState::Error(e) => error_view(e),
             _ => skeleton(),
         };
@@ -151,7 +177,10 @@ impl Render for UsersPage {
 }
 
 fn skeleton() -> gpui::Div {
-    div().h(px(180.)).bg(rgb(theme::SURFACE)).rounded(px(10.))
+    div()
+        .h(px(180.))
+        .bg(rgb(theme::palette().panel))
+        .rounded(px(10.))
 }
 
 fn error_view(msg: &str) -> gpui::Div {
@@ -160,9 +189,9 @@ fn error_view(msg: &str) -> gpui::Div {
         .px_4()
         .flex()
         .items_center()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
-        .text_color(rgb(theme::TEXT_MUTED))
+        .text_color(rgb(theme::palette().secondary))
         .child(format!("Couldn't read accounts: {msg}"))
 }
 
@@ -188,7 +217,7 @@ fn account_view(
         .gap_4()
         .px_6()
         .py_6()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(12.))
         .child(
             div()
@@ -201,20 +230,32 @@ fn account_view(
                         .w(px(64.))
                         .h(px(64.))
                         .rounded_full()
-                        .bg(rgb(theme::ACCENT))
+                        .bg(rgb(theme::palette().focus))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_color(rgb(theme::BG))
+                        .text_color(rgb(theme::palette().surface))
                         .child(initials),
                 )
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .child(div().text_color(rgb(theme::TEXT)).child(user.real_name.clone()))
-                        .child(div().text_color(rgb(theme::TEXT_MUTED)).child(user.username.clone()))
-                        .child(div().text_color(rgb(theme::TEXT_MUTED)).child(type_label.to_string())),
+                        .child(
+                            div()
+                                .text_color(rgb(theme::palette().text))
+                                .child(user.real_name.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(theme::palette().secondary))
+                                .child(user.username.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(theme::palette().secondary))
+                                .child(type_label.to_string()),
+                        ),
                 ),
         )
         .child(change_password_button)

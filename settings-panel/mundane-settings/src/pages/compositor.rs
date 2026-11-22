@@ -7,11 +7,11 @@
 
 use crate::pages::{Page, PageState};
 use crate::theme;
-use mundane_settings_core::compositor as backend;
 use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px, rgb,
+    div, px, rgb, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Window,
 };
+use mundane_settings_core::compositor as backend;
 
 /// Snapshot of the on-disk config the page renders against. The "current" values are
 /// updated optimistically on every step, then synced from disk after a successful write.
@@ -48,7 +48,11 @@ const MODES: &[&str] = &["fill", "fit", "stretch", "center", "tile"];
 
 impl CompositorPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let s = Self { state: PageState::Empty, in_flight: 0, last_error: None };
+        let s = Self {
+            state: PageState::Empty,
+            in_flight: 0,
+            last_error: None,
+        };
         s.spawn_refresh(cx);
         s
     }
@@ -174,7 +178,11 @@ fn clone_edit(e: &Edit) -> Edit {
 /// Damping ratio ζ = damping / (2 * sqrt(stiffness * mass)).
 fn zeta(stiffness: f64, damping: f64, mass: f64) -> f64 {
     let denom = 2.0 * (stiffness * mass).sqrt();
-    if denom <= 0.0 { 0.0 } else { damping / denom }
+    if denom <= 0.0 {
+        0.0
+    } else {
+        damping / denom
+    }
 }
 
 impl Render for CompositorPage {
@@ -201,7 +209,7 @@ impl Render for CompositorPage {
                     .mt_3()
                     .px_4()
                     .py_2()
-                    .text_color(rgb(theme::TEXT_MUTED))
+                    .text_color(rgb(theme::palette().secondary))
                     .child(format!("Couldn't save: {err}")),
             );
         }
@@ -231,10 +239,20 @@ fn skel_row(label: &'static str) -> gpui::Div {
         .justify_between()
         .h(px(56.))
         .px_4()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
-        .child(div().text_color(rgb(theme::TEXT_MUTED)).child(label))
-        .child(div().w(px(180.)).h(px(28.)).bg(rgb(theme::SIDEBAR)).rounded(px(6.)))
+        .child(
+            div()
+                .text_color(rgb(theme::palette().secondary))
+                .child(label),
+        )
+        .child(
+            div()
+                .w(px(180.))
+                .h(px(28.))
+                .bg(rgb(theme::palette().panel))
+                .rounded(px(6.)),
+        )
 }
 
 fn data_view(d: CompositorData, in_flight: bool, cx: &mut Context<CompositorPage>) -> gpui::Div {
@@ -274,7 +292,7 @@ fn data_view(d: CompositorData, in_flight: bool, cx: &mut Context<CompositorPage
         div()
             .px_4()
             .py_2()
-            .text_color(rgb(theme::TEXT_MUTED))
+            .text_color(rgb(theme::palette().secondary))
             .child(format!(
                 "ζ (damping ratio) = {:.2}",
                 zeta(d.stiffness, d.damping, d.mass)
@@ -322,7 +340,7 @@ fn data_view(d: CompositorData, in_flight: bool, cx: &mut Context<CompositorPage
 fn section_header(label: &'static str) -> gpui::Div {
     div()
         .mt_2()
-        .text_color(rgb(theme::TEXT_MUTED))
+        .text_color(rgb(theme::palette().secondary))
         .child(label)
 }
 
@@ -333,8 +351,8 @@ fn stepper_button_style() -> gpui::Div {
         .flex()
         .items_center()
         .justify_center()
-        .bg(rgb(theme::SIDEBAR))
-        .text_color(rgb(theme::TEXT))
+        .bg(rgb(theme::palette().panel))
+        .text_color(rgb(theme::palette().text))
         .rounded(px(6.))
         .cursor_pointer()
 }
@@ -353,12 +371,20 @@ fn stepper_row_f64(
     let up_v = (value + step).min(max);
     let down_btn = stepper_button_style()
         .id(SharedString::from(format!("dn:{label}")))
-        .hover(|s| s.bg(rgb(theme::BG)))
+        .role(gpui::Role::Button)
+        .aria_label(format!("Decrease {label}, {value}"))
+        .tab_index(0)
+        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
+        .hover(|s| s.bg(rgb(theme::palette().surface)))
         .on_click(cx.listener(move |this, _e, _w, cx| this.apply(edit(down_v), cx)))
         .child("−");
     let up_btn = stepper_button_style()
         .id(SharedString::from(format!("up:{label}")))
-        .hover(|s| s.bg(rgb(theme::BG)))
+        .role(gpui::Role::Button)
+        .aria_label(format!("Increase {label}, {value}"))
+        .tab_index(0)
+        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
+        .hover(|s| s.bg(rgb(theme::palette().surface)))
         .on_click(cx.listener(move |this, _e, _w, cx| this.apply(edit(up_v), cx)))
         .child("+");
     let mut row = div()
@@ -368,9 +394,13 @@ fn stepper_row_f64(
         .justify_between()
         .h(px(56.))
         .px_4()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
-        .child(div().text_color(rgb(theme::TEXT_MUTED)).child(label))
+        .child(
+            div()
+                .text_color(rgb(theme::palette().secondary))
+                .child(label),
+        )
         .child(
             div()
                 .flex()
@@ -380,14 +410,37 @@ fn stepper_row_f64(
                 .child(down_btn)
                 .child(
                     div()
+                        .id(SharedString::from(format!("range:{label}")))
+                        .role(gpui::Role::SpinButton)
+                        .aria_label(label)
+                        .aria_numeric_value(value as f64)
+                        .aria_min_numeric_value(min as f64)
+                        .aria_max_numeric_value(max as f64)
+                        .aria_numeric_value_step(step as f64)
+                        .on_a11y_action(gpui::AccessibleAction::Increment, {
+                            let entity = cx.weak_entity();
+                            move |_, _, cx| {
+                                entity
+                                    .update(cx, |this, cx| this.apply(edit(up_v), cx))
+                                    .ok();
+                            }
+                        })
+                        .on_a11y_action(gpui::AccessibleAction::Decrement, {
+                            let entity = cx.weak_entity();
+                            move |_, _, cx| {
+                                entity
+                                    .update(cx, |this, cx| this.apply(edit(down_v), cx))
+                                    .ok();
+                            }
+                        })
                         .w(px(72.))
-                        .text_color(rgb(theme::TEXT))
+                        .text_color(rgb(theme::palette().text))
                         .child(format!("{value:.1}")),
                 )
                 .child(up_btn),
         );
     if in_flight {
-        row = row.border_b_2().border_color(rgb(theme::ACCENT));
+        row = row.border_b_2().border_color(rgb(theme::palette().focus));
     }
     row
 }
@@ -406,12 +459,20 @@ fn stepper_row_i32(
     let up_v = (value + step).min(max);
     let down_btn = stepper_button_style()
         .id(SharedString::from(format!("dn:{label}")))
-        .hover(|s| s.bg(rgb(theme::BG)))
+        .role(gpui::Role::Button)
+        .aria_label(format!("Decrease {label}, {value}"))
+        .tab_index(0)
+        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
+        .hover(|s| s.bg(rgb(theme::palette().surface)))
         .on_click(cx.listener(move |this, _e, _w, cx| this.apply(edit(down_v), cx)))
         .child("−");
     let up_btn = stepper_button_style()
         .id(SharedString::from(format!("up:{label}")))
-        .hover(|s| s.bg(rgb(theme::BG)))
+        .role(gpui::Role::Button)
+        .aria_label(format!("Increase {label}, {value}"))
+        .tab_index(0)
+        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
+        .hover(|s| s.bg(rgb(theme::palette().surface)))
         .on_click(cx.listener(move |this, _e, _w, cx| this.apply(edit(up_v), cx)))
         .child("+");
     let mut row = div()
@@ -421,9 +482,13 @@ fn stepper_row_i32(
         .justify_between()
         .h(px(56.))
         .px_4()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
-        .child(div().text_color(rgb(theme::TEXT_MUTED)).child(label))
+        .child(
+            div()
+                .text_color(rgb(theme::palette().secondary))
+                .child(label),
+        )
         .child(
             div()
                 .flex()
@@ -433,23 +498,42 @@ fn stepper_row_i32(
                 .child(down_btn)
                 .child(
                     div()
+                        .id(SharedString::from(format!("range:{label}")))
+                        .role(gpui::Role::SpinButton)
+                        .aria_label(label)
+                        .aria_numeric_value(value as f64)
+                        .aria_min_numeric_value(min as f64)
+                        .aria_max_numeric_value(max as f64)
+                        .aria_numeric_value_step(step as f64)
+                        .on_a11y_action(gpui::AccessibleAction::Increment, {
+                            let entity = cx.weak_entity();
+                            move |_, _, cx| {
+                                entity
+                                    .update(cx, |this, cx| this.apply(edit(up_v), cx))
+                                    .ok();
+                            }
+                        })
+                        .on_a11y_action(gpui::AccessibleAction::Decrement, {
+                            let entity = cx.weak_entity();
+                            move |_, _, cx| {
+                                entity
+                                    .update(cx, |this, cx| this.apply(edit(down_v), cx))
+                                    .ok();
+                            }
+                        })
                         .w(px(72.))
-                        .text_color(rgb(theme::TEXT))
+                        .text_color(rgb(theme::palette().text))
                         .child(format!("{value}")),
                 )
                 .child(up_btn),
         );
     if in_flight {
-        row = row.border_b_2().border_color(rgb(theme::ACCENT));
+        row = row.border_b_2().border_color(rgb(theme::palette().focus));
     }
     row
 }
 
-fn mode_picker_row(
-    current: &str,
-    in_flight: bool,
-    cx: &mut Context<CompositorPage>,
-) -> gpui::Div {
+fn mode_picker_row(current: &str, in_flight: bool, cx: &mut Context<CompositorPage>) -> gpui::Div {
     let mut row = div()
         .flex()
         .flex_row()
@@ -457,21 +541,37 @@ fn mode_picker_row(
         .justify_between()
         .h(px(56.))
         .px_4()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
-        .child(div().text_color(rgb(theme::TEXT_MUTED)).child("Scaling mode"));
+        .child(
+            div()
+                .text_color(rgb(theme::palette().secondary))
+                .child("Scaling mode"),
+        );
     let mut picker = div().flex().flex_row().gap_2();
     for &m in MODES {
         let is_cur = m == current;
         let mode_owned = m.to_string();
         let chip = div()
             .id(SharedString::from(format!("mode:{m}")))
+            .role(gpui::Role::Button)
+            .aria_label(format!("Wallpaper mode {m}"))
+            .tab_index(0)
+            .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
             .px_3()
             .py_1()
             .rounded(px(6.))
             .cursor_pointer()
-            .bg(rgb(if is_cur { theme::ACCENT } else { theme::SIDEBAR }))
-            .text_color(rgb(if is_cur { theme::BG } else { theme::TEXT }))
+            .bg(rgb(if is_cur {
+                theme::palette().focus
+            } else {
+                theme::palette().panel
+            }))
+            .text_color(rgb(if is_cur {
+                theme::palette().surface
+            } else {
+                theme::palette().text
+            }))
             .on_click(cx.listener(move |this, _e, _w, cx| {
                 this.apply(Edit::WallpaperMode(mode_owned.clone()), cx);
             }))
@@ -480,7 +580,7 @@ fn mode_picker_row(
     }
     row = row.child(picker);
     if in_flight {
-        row = row.border_b_2().border_color(rgb(theme::ACCENT));
+        row = row.border_b_2().border_color(rgb(theme::palette().focus));
     }
     row
 }

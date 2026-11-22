@@ -5,9 +5,16 @@ qualification passes on clean and upgraded joe Linux images. Use a recoverable
 test installation for the boot recovery cases. Extend the checklist when a
 milestone lands. Each row describes the expected release behaviour.
 
-For an earlier desktop trial, run `./tests/try-mundane.sh` from the checkout.
-It opens the persistent joe test guest at 1920×1080. Log in or unlock as
-`joe` with password `joe`. Quit with **System menu → Power off**.
+For an earlier desktop trial, run `./tests/try-mundane.sh` in a clean clone.
+It fetches `origin/main`, prints the full commit ID and builds an export of
+that commit in the cache. Use `--revision COMMIT` to repeat a specific
+committed build. The launcher refuses a checkout with pending changes.
+Developers can opt into those changes with `--from-working-tree`.
+
+The visible guest keeps its disk in `~/.cache/mundane-try/desktop`. Headless
+qualification defaults to `~/.cache/mundane-try/qualification`. The guest
+opens at 1920×1080. Log in or unlock as `joe` with password `joe`. Quit with
+**System menu → Power off**.
 [Guest setup and controls](../tests/qemu/session/README.md#try-the-desktop)
 
 Record the date, tester, candidate image ID, compositor and suite revisions,
@@ -35,6 +42,9 @@ automated qualification results. For each row, record **pass**, **fail** or
 | Laptop controls | Switch between two audio outputs, unplug the selected one and toggle Wi-Fi. Pair a Bluetooth device, first cancelling and then confirming its passkey. Check battery percentage and reconnect the device. | The selected sink and radio agree with the system services. Missing hardware and cancellation leave the menu usable. The battery reading and Bluetooth connection match the machine. | |
 | Lock and input isolation | With video inhibiting idle, press Super+L. Enter an incorrect password and type an identifiable string. Disconnect the locker on the recoverable test machine, attach a display, close and reopen the lid and enter the correct password. | No application pixels appear on any locked output. Only the locker sees the password and test string. The recovered prompt authenticates through PAM and the previous app accepts input again. | |
 | Appearance and accessibility | Change contrast, text size, appearance and reduced motion with GTK and GPUI apps open. Use only the keyboard and Orca to launch an app, change a setting and dismiss a dialog. | Both toolkits update live, all text fits and focus stays visible. Orca announces the focused control’s name, role, value and changes. Preferences persist after login. | |
+| Reader at login | Press Super+Alt+S, open Start with Super+Space and type an app name. Open Settings with Super+comma. Tab through Appearance, activate High contrast with Space and log back in. | Orca reads the launcher search, focused toggle and state. The focus ring is visible and the reader and preference survive login. | |
+| Shell authentication | Request a timezone change. Read Details and the offered administrator identities. Cancel, try again, lock during entry and unlock. Make a fresh request and authenticate. | Cancellation and lock leave the timezone unchanged. Orca identifies the masked entry. The password stays private, the fresh change succeeds and Settings regains focus. | |
+| Live appearance | With a libadwaita window, Settings and a suite app open, change accent, contrast and text size. Repeat at 100%, 150% and 200% display scale. Enable Reduce motion during a snap or wallpaper change. | Each open window updates, text fits, controls remain reachable and the motion settles on the next frame. | |
 | Orca character echo | Enable character echo. In the GTK test entry, type `z` after `Tokyo`. Start a fresh trial and let the app append `z` to the focused entry without touching the keyboard. Repeat in the GPUI entry. | Both trials show `Tokyoz`. In each toolkit, Orca speaks “z” once for the typed character and stays silent about the application-inserted character. | |
 | GDM session lifecycle | Select mundaneDE in GDM. Open Settings and cancel a protected timezone change, then repeat and authenticate. Type in a window before and after a VT switch and suspend. Log out twice, open an app each time, then select GNOME. | Cancel keeps the timezone and authentication applies it. Each login has working input and freshly drawn windows. Each logout returns to GDM. GNOME opens normally. | |
 | Seat, lock and power | Switch VTs and back. Lock two displays, attach another and exercise locker loss/recovery. Suspend while locked, resume, authenticate and log out. Log in twice. | Every display stays covered through locker loss and resume. Only the locker receives input until authentication. Input, display and app launching work on each new login. | |

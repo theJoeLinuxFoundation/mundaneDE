@@ -61,6 +61,13 @@ impl AnimationEngine {
         self.springs.values_mut()
     }
 
+    pub fn settle_all(&mut self) {
+        for spring in self.springs.values_mut() {
+            spring.x.snap_to_target();
+            spring.y.snap_to_target();
+        }
+    }
+
     /// Advance all springs by `dt`. Returns `true` if any spring is still animating.
     ///
     /// Each axis settles independently: once x is at rest we snap it to target and stop
@@ -112,6 +119,23 @@ mod tests {
         assert!(engine.spring(id).is_some());
         engine.remove_spring(id);
         assert!(engine.spring(id).is_none());
+    }
+
+    #[test]
+    fn reducing_motion_finishes_a_snap_and_crossfade_in_one_frame() {
+        let mut engine = AnimationEngine::new();
+        let ids = [SpringKind::Position, SpringKind::Fade].map(|kind| {
+            let id = engine.create_spring_kind(0, 0, SpringParams::default(), kind);
+            engine.spring_mut(id).unwrap().set_target(255, 100);
+            id
+        });
+        engine.tick(Duration::from_millis(16));
+        assert!(engine.has_active_animations());
+        engine.settle_all();
+        assert!(!engine.has_active_animations());
+        for id in ids {
+            assert_eq!(engine.spring(id).unwrap().rounded_position(), (255, 100));
+        }
     }
 
     #[test]

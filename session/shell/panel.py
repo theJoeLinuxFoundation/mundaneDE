@@ -16,6 +16,8 @@ gi.require_version("Gtk4LayerShell", "1.0")
 from gi.repository import Gdk, Gio, GLib, Gtk, Gtk4LayerShell as Layer
 from bus import Services, Shares
 from portals import CapturePortals
+from reader import Reader
+from appearance import Appearance
 from bluetooth import Bluetooth
 from devices import command, devices
 from upgrades import UpgradeNotices
@@ -134,6 +136,17 @@ class Panel:
         self.monitors.connect("items-changed", lambda *_: self.outputs_changed())
         self.outputs_changed()
         self.portals = CapturePortals(self)
+        self.appearance = Appearance(self, css, CSS)
+        self.reader = Reader(self)
+        self.auth = None
+        if os.environ.get("XDG_SESSION_ID"):
+            from authentication import Authentication
+
+            self.auth = Authentication(
+                self,
+                Gio.bus_get_sync(Gio.BusType.SYSTEM, None),
+                os.environ["XDG_SESSION_ID"],
+            )
         GLib.io_add_watch(
             self.channel.fileno(), GLib.PRIORITY_DEFAULT, GLib.IO_IN, self.receive
         )
@@ -267,7 +280,30 @@ class Panel:
                     first = icons.get_first_child()
                     if first:
                         first.grab_focus()
+        elif "subscription" in data:
+            self.reader.event(data)
+        elif data.get("logout"):
+            if self.auth:
+                self.auth.close()
+            if self.reader.child:
+                self.reader.child.terminate()
+            loop.quit()
+            return False
+        elif "screen_reader" in data:
+            self.reader.toggle()
         elif "locked" in data:
+            if self.auth:
+                self.auth.locked = data["locked"]
+                if self.auth.locked:
+                    self.auth.finish(cancel=True)
+            if self.outputs and self.reader.owner:
+                bar = next(iter(self.outputs.values()))[0]
+                hint = (
+                    "Screen locked. Enter your password and press Enter."
+                    if data["locked"]
+                    else "Screen unlocked."
+                )
+                bar.announce(hint, Gtk.AccessibleAnnouncementPriority.HIGH)
             self.portals.locked = data["locked"]
             if self.portals.locked:
                 self.portals.cancel_all()
@@ -367,6 +403,9 @@ class Panel:
 
     def dismiss(self):
         if self.menu is not None:
+            if self.page == "authentication" and self.auth.reply:
+                self.auth.finish(cancel=True)
+                return
             if self.page == "pairing":
                 self.bluetooth.answer(False)
             old, self.menu = self.menu, None
@@ -393,6 +432,7 @@ class Panel:
         self.menu = w
         self.page = title
         keys = Gtk.EventControllerKey()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self.on_key)
         w.add_controller(keys)
         return outer
@@ -414,6 +454,8 @@ class Panel:
     def start(self, m):
         box = self.open(m, "start")
         search = Gtk.SearchEntry(placeholder_text="Search applications")
+        search.update_property([Gtk.AccessibleProperty.LABEL], ["Search applications"])
+        self.menu.set_title("Start menu")
         box.append(search)
         rows = vbox(1)
         box.append(scrolled(rows, 340))
@@ -742,4 +784,5 @@ class Panel:
 
 if __name__ == "__main__":
     panel = Panel()
-    GLib.MainLoop().run()
+    loop = GLib.MainLoop()
+    loop.run()

@@ -11,7 +11,7 @@ settings-panel/
 │       ├── main.rs            # CLI args, window opens here
 │       ├── app.rs             # root layout + optimistic helper
 │       ├── sidebar.rs         # sidebar (selection on the row itself)
-│       ├── theme.rs           # palette constants (hardcoded)
+│       ├── theme.rs           # portal subscription and semantic palette
 │       └── pages/             # one file per category
 │           ├── mod.rs         # Page enum, PageState<T> cache, router
 │           ├── compositor.rs  # mundaneDE-native: spring, magnetism, wallpaper mode
@@ -27,13 +27,13 @@ settings-panel/
     └── src/
         ├── lib.rs             # public API, error type
         ├── compositor.rs      # ~/.config/mundane/config.toml round-trip (toml_edit)
-        ├── display.rs         # xrandr wrapper
+        ├── display.rs         # mundaneDE output transactions and X11 queries
         ├── theme_scan.rs      # GTK theme paths + gsettings
         ├── wallpaper_scan.rs  # /etc/backgrounds + ~/Pictures
         ├── os_release.rs      # parse /etc/os-release
         ├── sound.rs           # pactl wrapper
         ├── datetime.rs        # timedatectl wrapper
-        ├── system.rs          # streaming `pkexec nixos-rebuild switch --upgrade`
+        ├── system.rs          # Packages on joe and NixOS upgrade support
         └── dbus/
             ├── network.rs     # NetworkManager (zbus async)
             ├── accounts.rs    # AccountsService (zbus async)
@@ -44,7 +44,7 @@ settings-panel/
 
 ## How settings reach mundaneDE
 
-The Compositor page edits `~/.config/mundane/config.toml` via [`toml_edit`](https://docs.rs/toml_edit) (preserves comments). mundaneDE installs an inotify watcher on that path and applies the diff live — spring retune, gap update, wallpaper crossfade — without a restart. Settings panel never speaks to mundaneDE directly; the file is the only contract.
+The Compositor page edits `~/.config/mundane/config.toml` via [`toml_edit`](https://docs.rs/toml_edit) (preserves comments). mundaneDE installs an inotify watcher on that path and applies the diff live — spring retune, gap update, wallpaper crossfade — without a restart. The Display page lists modes and tests layouts over the private compositor socket. A trial reverts after 15 seconds unless confirmed.
 
 ## UI philosophy
 
@@ -76,18 +76,10 @@ Each page owns a `PageState<T>`: `Empty | Loading | Loaded { data, fetched_at } 
 
 ## Color palette
 
-Hardcoded in `mundane-settings/src/theme.rs`:
-
-| Token | Hex | Use |
-|---|---|---|
-| `BG` | `#1C1C1E` | Window background |
-| `SIDEBAR` | `#161618` | Sidebar |
-| `SURFACE` | `#2C2C2E` | Cards, controls |
-| `ACCENT` | `#6EA8FE` | mundaneDE spring-blue — selection, focus, in-flight |
-| `TEXT` | `#F5F5F5` | Primary text |
-| `TEXT_MUTED` | `#8E8E93` | Labels, hints |
-
-These are **not** derived from the GTK theme at runtime — mundane-settings keeps its own identity regardless of what the user picks for GTK clients.
+The Appearance page writes desktop GSettings preferences. Settings reads them
+through the Settings portal and refreshes its GPUI windows on change. Focus,
+selection, borders and text use the pinned mundane-ui semantic palette. GTK
+clients use native theme settings. Super+Alt+S enables the session reader.
 
 ## Running in dev
 
@@ -129,9 +121,7 @@ control semantics and screen-reader acceptance belong to [milestone 7](../docs/p
 
 ## Known stubs / TODOs
 
-- **Wayland display backend** (`mundane-settings-core/src/display.rs`) — currently `wlr-randr` stub. Revisit once mundaneDE grows multi-output support.
 - **Inline GPUI text input** — text capture is currently routed through `widgets::prompt` (a `zenity` modal subprocess). When GPUI gains a stable inline text-input primitive, `widgets::text_input` becomes the in-pane drop-in replacement.
-- **Display resolution / scale picker** — `display.rs` lists monitors and modes but the UI doesn't expose a selector yet.
 - **Bluetooth page** — deferred. No upstream tray applet on mundaneDE yet.
 
 ## Tests

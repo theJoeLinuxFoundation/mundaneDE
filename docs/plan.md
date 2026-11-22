@@ -15,7 +15,7 @@ receives an initial configure and maps on its first buffer. Popup creation,
 grabs and repositioning are empty handlers. Output geometry assumes scale one.
 DRM selects one connector, and session pause currently suspends libinput. Both
 loops wake on a 16 ms timeout. The GPUI panel writes compositor TOML and talks
-to system services. Its Wayland display backend is a stub. [Shell](../src/shell/mod.rs) ·
+to system services. Its Display page talks to the DRM session’s authenticated output socket. [Shell](../src/shell/mod.rs) ·
 [State](../src/state.rs) · [DRM backend](../src/backend/drm.rs) · [Settings panel](../settings-panel/README.md)
 
 The target is x86/glibc with systemd 262 and logind, Mesa 26.2, GTK 4.24,
@@ -174,7 +174,7 @@ and applications run with the logged-in UID. [systemd session targets](https://w
 | GDM and PAM | Install `mundane.desktop` under `/usr/share/wayland-sessions/`, alongside GNOME. Set `Exec` and `TryExec` to the installed launcher. GDM registers the session. Use joe’s existing `gdm-password` and `gdm-autologin` PAM stacks, pam_systemd, logind and the per-user D-Bus instance. Keep the GNOME entry and the distribution default. AccountsService’s per-user `Session=mundane` and `SessionType=wayland` opt into this session. |
 | Executables and libraries | Ship `mundane-de`, `mundane-session`, `mundane-settings`, a libseat built with logind, Python 3 with PyGObject/Gio/GLib, dbus-update-activation-environment and systemd user units. The [installer](../session/install.sh) accepts `DESTDIR` and `PREFIX` (use `/usr` for packages). Install Settings separately in the same bin directory. |
 | User units and activation | Install `mundane-session.target` and `mundane-ibus.service` under `lib/systemd/user/`. The launcher starts the target after exporting `WAYLAND_DISPLAY`, `XDG_CURRENT_DESKTOP=mundane`, `XDG_SESSION_DESKTOP=mundane`, `XDG_SESSION_TYPE=wayland` and `XDG_SESSION_ID`. Future shell units should use `PartOf=mundane-session.target`. GDM owns the seat process. A user service outside the session scope cannot take its place. Start X11 applications with the display returned by `mundane-de --x11-display`. |
-| Polkit and power | Until milestone 7, select a standalone graphical polkit agent as `mundane-polkit-agent` next to the launcher (a package symlink suffices), or set `MUNDANE_POLKIT_AGENT`. The beta1 test overlay uses polkit-gnome. Milestone 7 replaces this interim dependency with the shell’s agent. Keep polkitd, its PAM helper, `polkit-1` PAM configuration and joe’s administrator policy. The existing Settings timezone action uses `pkexec timedatectl`. The compositor introduces no privileged executable or PAM stack. The launcher requests logind’s delay inhibitor for sleep (`org.freedesktop.login1.inhibit-delay-sleep`), drops it when scanout has stopped and rearms it on wake. |
+| Polkit and power | Install the shell with the Polkit and PolkitAgent 1.0 GI typelibs. The panel registers the graphical agent with the authority for its logind session. Keep polkitd, its PAM helper, `polkit-1` PAM configuration and joe’s administrator policy. The existing Settings timezone action uses `pkexec timedatectl`. The compositor introduces no privileged executable or PAM stack. The launcher requests logind’s delay inhibitor for sleep (`org.freedesktop.login1.inhibit-delay-sleep`), drops it when scanout has stopped and rearms it on wake. |
 | Portals | Install the frontend and its interface XML, GTK backend, keyring Secret backend, PipeWire and WirePlumber. Install the two mundaneDE routing files and the capture helpers listed in milestone 6. The session publishes its Wayland environment, waits for the shell backend’s bus name and restarts the frontend so it discovers all backends on the new display. Logout stops both session targets. |
 | IBus | Build the GTK Wayland input-method frontend described in milestone 2. Install it in the libexec or lib/ibus location or set `MUNDANE_IBUS_PANEL`. Its presence enables the session-bound daemon with `--panel=disable`. The compositor starts the candidate panel with its private Wayland connection after readiness. Beta1 supplies GNOME’s IBus build and skips this unit under mundaneDE. |
 
@@ -379,8 +379,7 @@ of the joe workflow. Direct package management to the suite's Packages app
 when its dave integration is ready. Use AccountsService, timedated and the
 same device services as the system menu for the relevant pages.
 
-**Shell-owned polkit agent.** Replace the interim `MUNDANE_POLKIT_AGENT`
-hook as the default for joe. Register
+**Shell-owned polkit agent.** The shell registers
 `org.freedesktop.PolicyKit1.AuthenticationAgent` with the system authority for
 the active logind session and unregister at logout. Accept BeginAuthentication
 and CancelAuthentication from the authority. Present the action’s localized
@@ -398,8 +397,7 @@ requester and a lock during password entry. Verify the selected identity,
 exactly one response to each request, no privileged action after cancellation,
 and that the locker alone receives input. Repeat Settings’ protected timezone
 change through GDM under joe enforcement. Screen-reader checks cover the action,
-identity chooser, errors and masked entry. The interim agent can be supplied
-independently while this work lands.
+identity chooser, errors and masked entry. The authentication agent runs inside the panel.
 
 **Agreement with mundane-apps.** At the suite's Terminal milestone, agree on
 semantic foreground/background, selection, error, accent and focus roles,
@@ -467,6 +465,36 @@ the same insert and value and zero spoken “z” responses. Repeat both trials 
 a GPUI/AccessKit entry. Also attempt to watch and subscribe from an ordinary
 session client and verify it receives no keys during the typing trial.
 [GPUI speech fixture](https://github.com/theJoeLinuxFoundation/mundane-apps/blob/59982d6/tests/wayland/accessibility.py)
+
+### Implementation and packaging
+
+Install Orca and its speech backend (Speech Dispatcher and a voice), AT-SPI2
+2.62.1 or compatible, GSettings desktop schemas, dconf, fontconfig and the
+desktop icon theme. Ship the Polkit and PolkitAgent typelibs, polkitd and its
+distribution-provided authentication helper and PAM files. The unprivileged
+panel registers for its own logind session on the system bus. Super+Alt+S
+toggles the session-owned Orca process. The screen reader's unique session-bus
+connection receives directed keyboard signals. Lock and shell password entry
+suspend delivery. The disposable test overlay supplies Orca 51.1 and records
+speech at its speech-server interface.
+
+The desktop portal advertises `org.freedesktop.appearance` color-scheme,
+accent-color, contrast and reduced-motion and forwards font-name,
+text-scaling-factor and enable-animations in `org.gnome.desktop.interface`.
+The GTK backend on beta1 supplies color-scheme and contrast. Install
+`mundane.portal` and `mundane-portals.conf` so the frontend can merge both
+backends. Settings takes an initial `ReadAll` snapshot and listens for
+`SettingChanged`. It uses mundane-ui’s shared roles, focus rings, dark and
+high-contrast palettes at revision `612f5c5a8d774c81f9baac38c6909f0037805ede`.
+The suite's Terminal at that revision selects its palette on startup.
+Its live appearance gate remains open until mundane-ui and its callers subscribe
+to portal updates and repaint already-open controls. The acceptance run must
+include an installed suite application as well as Settings.
+
+Settings lists connector modes through `mundane-de output list`. Test, Keep
+and Revert use the compositor's 15-second layout trial. The socket requires
+kernel-supplied credentials for the session user. On joe, System opens
+`mundane-packages` as the logged-in user. [Headless checks](../tests/qemu/session/README.md#headless-settings-and-accessibility-qualification)
 
 ## 8. Qualify the default session
 

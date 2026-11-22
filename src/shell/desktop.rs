@@ -45,6 +45,9 @@ pub struct Desktop {
     inhibitors: Vec<WlSurface>,
     pub presented: HashMap<Output, smithay::backend::renderer::element::RenderElementStates>,
     pub lock: Lock,
+    pub monitor: super::keyboard_monitor::KeyboardMonitor,
+    pub pending_keys: std::collections::VecDeque<super::keyboard_monitor::PendingKey>,
+    pub reduce_motion: bool,
     pub tasks: HashMap<Window, Task>,
     pub workspace: u8,
     pub showing_desktop: bool,
@@ -60,6 +63,9 @@ impl Desktop {
         });
         IdleInhibitManagerState::new::<State>(dh);
         Self {
+            pending_keys:Default::default(),
+            monitor: Default::default(),
+            reduce_motion: false,
             layers: WlrLayerShellState::new_with_filter::<State, _>(dh, |c| {
                 super::services::role(c) == Role::Shell
             }),
@@ -80,6 +86,14 @@ impl Desktop {
 impl Drop for Desktop {
     fn drop(&mut self) {
         if let Some(mut child) = self.panel.take() {
+            if let Some(channel)=&self.channel {
+                let _=channel.send(br#"{"logout":true}"#);
+                let until=std::time::Instant::now()+std::time::Duration::from_millis(750);
+                while std::time::Instant::now()<until {
+                    if matches!(child.try_wait(),Ok(Some(_))){return}
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -212,6 +226,18 @@ impl State {
         }
     }
     pub fn shell_command(&mut self, command: &str) {
+        if let Some(serial)=command.strip_prefix("keyboard-forward ").and_then(|s|s.parse::<u32>().ok()){
+            self.forward_reader_keys(serial.into());return;
+        }
+        if let Some(data)=command.strip_prefix("keyboard-monitor ") {
+            if let Ok(next)=serde_json::from_str(data) {self.desktop.monitor.configure(next);}
+            return;
+        }
+        if let Some(value)=command.strip_prefix("reduced-motion ") {
+            self.desktop.reduce_motion=value=="on";
+            self.generation+=1;
+            return;
+        }
         let mut args = command.split_ascii_whitespace();
         let op = args.next().unwrap_or("");
         if self.desktop.lock.active {

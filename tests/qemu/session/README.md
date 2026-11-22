@@ -2,16 +2,14 @@
 
 Use joe’s beta1 `--test` desktop image with its serial test console and GDM
 autologin account. From the repository root on an x86 KVM host, build the
-compositor and Settings. Supply a logind-enabled libseat and a standalone GTK
-polkit authentication agent compatible with the guest. The reference run used
-the host’s libseat.so.1 and polkit-gnome’s authentication agent. The shell also needs GTK 4 layer-shell and swaylock, which the harness stages in the overlay. The host and guest used glibc 2.44.
+compositor and Settings. Supply a logind-enabled libseat compatible with the guest. The harness stages GTK 4 layer-shell and swaylock in the overlay. The shell registers the polkit agent. The host and guest used glibc 2.44.
 
 ```sh
 cargo build --release --locked --bins --examples
 cargo build --locked --manifest-path settings-panel/Cargo.toml
 run=$(tests/qemu/session/boot.sh)
 python3 tests/qemu/session/prepare.py "$run" \
-    --libseat /usr/lib/libseat.so.1 --agent /path/to/polkit-gnome-authentication-agent-1 \
+    --libseat /usr/lib/libseat.so.1 \
     --settings settings-panel/target/debug/mundane-settings
 python3 tests/qemu/session/qualify.py "$run"
 python3 tests/qemu/session/guest.py "$run" qmp system_powerdown
@@ -66,7 +64,7 @@ Run this command from the repository root.
 ./tests/try-mundane.sh
 ```
 
-On the first start the script builds the current checkout, installs it in a
+The launcher requires a clean checkout, fetches and prints the origin/main revision, and builds a private export. Use `--revision COMMIT` for a specific revision or `--from-working-tree` to opt into development changes. Headless trials default to a separate qualification directory. On the first start it installs the build in a
 private qcow2 overlay, selects mundaneDE for joe through GDM and checks the
 enforcing boot headlessly. It then opens the QEMU window. The guest has eight
 KVM vCPUs, 6 GiB RAM and a 1920×1080 primary display. The test account and
@@ -86,11 +84,9 @@ The guest has no network interface or host device passthrough.
 The reference x86 host supplies KVM, QEMU with GTK display support, OVMF,
 rustup stable and the compositor and Settings build dependencies. Install
 libseat, GTK 4 layer-shell and its GI typelib, binutils, curl and bsdtar.
-The helper uses installed grim, swaylock and the interim polkit-gnome agent when
-available. Otherwise it extracts pinned, SHA-256-checked binaries
-from the Arch package archive into the test cache. Their PAM conversation,
-libraries and services run inside joe. Distribution packages can select
-another agent through `MUNDANE_POLKIT_AGENT` until milestone 7.
+The helper uses installed grim and swaylock when available and can extract
+checksum-verified binaries from the Arch package archive. The beta1 overlay
+also receives Orca 51.1 and python-dasbus for screen-reader tests.
 
 The harness builds xdg-desktop-portal-wlr 0.9.0 from a checksum-verified
 release source tree in its cache. The host needs a C compiler, pkg-config,
@@ -150,3 +146,23 @@ covers the shared window on the first display. Stop, unplug, browser exit
 and lock must remove the PipeWire node and the shell indicator. The gate
 also exercises screenshot denial, the GTK file chooser, the preferred URI
 handler and a round trip from a shell notification button to its caller.
+
+### Headless Settings and accessibility qualification
+
+Use a dedicated, prepared, headless joe overlay with GDM logged in to mundaneDE.
+The driver changes the guest's reader profile, accessibility preferences and
+display settings. It uses QMP to send keys and capture rendered frames.
+
+```sh
+cargo +stable build --locked --manifest-path settings-panel/Cargo.toml --example echo
+python3 tests/qemu/session/qualify_accessibility.py "$run" \
+    --echo settings-panel/target/debug/examples/echo
+```
+
+Each typing trial starts a fresh Orca input history, focuses a real GTK entry
+or mundane-ui text field, and compares AT-SPI insert offsets, final value and
+recorded speech. A second ordinary client checks directed-signal isolation.
+The desktop checks use the same GDM session for launcher and toggle speech,
+native libadwaita and GPUI colours, display rollback and a PAM-protected
+timezone change. The two-identity fixture uses a separate runtime directory
+and authority bus inside the guest.

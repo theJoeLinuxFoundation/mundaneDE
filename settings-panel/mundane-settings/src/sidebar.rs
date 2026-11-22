@@ -13,8 +13,8 @@ use crate::app::App;
 use crate::pages::Page;
 use crate::theme;
 use gpui::{
-    Entity, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
-    div, px, rgb,
+    div, px, rgb, Entity, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled,
 };
 
 const SIDEBAR_WIDTH: f32 = 220.0;
@@ -22,19 +22,21 @@ const ROW_HEIGHT: f32 = 44.0;
 const TOP_PAD: f32 = 16.0;
 const HEADER_HEIGHT: f32 = 48.0;
 
-pub fn render(selected: Page, app: Entity<App>) -> impl IntoElement {
+pub fn render(selected: Page, app: Entity<App>, nav: &[gpui::FocusHandle; 9]) -> impl IntoElement {
     div()
+        .id("settings-navigation")
+        .overflow_y_scroll()
         .flex()
         .flex_col()
         .w(px(SIDEBAR_WIDTH))
         .h_full()
-        .bg(rgb(theme::SIDEBAR))
+        .bg(rgb(theme::palette().panel))
         .pt(px(TOP_PAD))
         .child(
             div()
                 .h(px(HEADER_HEIGHT))
                 .px_4()
-                .text_color(rgb(theme::ACCENT))
+                .text_color(rgb(theme::palette().focus))
                 .child("mundaneDE"),
         )
         .child(
@@ -42,39 +44,55 @@ pub fn render(selected: Page, app: Entity<App>) -> impl IntoElement {
                 .flex()
                 .flex_col()
                 .px(px(8.))
-                .child(row(Page::Compositor, selected, app.clone()))
-                .child(row(Page::Appearance, selected, app.clone()))
-                .child(row(Page::Display, selected, app.clone()))
-                .child(row(Page::Sound, selected, app.clone()))
-                .child(row(Page::Network, selected, app.clone()))
-                .child(row(Page::Users, selected, app.clone()))
-                .child(row(Page::Software, selected, app.clone()))
-                .child(row(Page::DateTime, selected, app.clone()))
-                .child(row(Page::System, selected, app)),
+                .child(row(Page::Compositor, selected, app.clone(), nav))
+                .child(row(Page::Appearance, selected, app.clone(), nav))
+                .child(row(Page::Display, selected, app.clone(), nav))
+                .child(row(Page::Sound, selected, app.clone(), nav))
+                .child(row(Page::Network, selected, app.clone(), nav))
+                .child(row(Page::Users, selected, app.clone(), nav))
+                .child(row(Page::Software, selected, app.clone(), nav))
+                .child(row(Page::DateTime, selected, app.clone(), nav))
+                .child(row(Page::System, selected, app, nav)),
         )
 }
 
-fn row(page: Page, selected: Page, app: Entity<App>) -> impl IntoElement {
+fn row(
+    page: Page,
+    selected: Page,
+    app: Entity<App>,
+    nav: &[gpui::FocusHandle; 9],
+) -> impl IntoElement {
     let is_selected = page == selected;
-    let mut row = div()
-        .id(("sidebar-row", page as usize))
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_3()
-        .px_3()
-        .h(px(ROW_HEIGHT))
-        .rounded(px(8.))
-        .text_color(if is_selected { rgb(theme::TEXT) } else { rgb(theme::TEXT_MUTED) })
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(theme::SURFACE)).text_color(rgb(theme::TEXT)))
-        .on_click(move |_event, _window, cx| {
-            app.update(cx, |app, cx| app.select(page, cx));
-        })
-        .child(div().w(px(20.)).child(page.icon()))
-        .child(page.label());
+    use mundane_ui::ControlRole;
+    let mut row = mundane_ui::focus_ring(
+        gpui::Role::Button.control(("sidebar-row", page as usize), page.label()),
+        &nav[page as usize],
+        theme::palette(),
+    )
+    .flex()
+    .flex_row()
+    .items_center()
+    .gap_3()
+    .px_3()
+    .h(px(ROW_HEIGHT))
+    .rounded(px(8.))
+    .text_color(if is_selected {
+        rgb(theme::palette().text)
+    } else {
+        rgb(theme::palette().secondary)
+    })
+    .cursor_pointer()
+    .hover(|s| {
+        s.bg(rgb(theme::palette().panel))
+            .text_color(rgb(theme::palette().text))
+    })
+    .on_click(move |_event, _window, cx| {
+        app.update(cx, |app, cx| app.select(page, cx));
+    })
+    .child(div().w(px(20.)).child(page.icon()))
+    .child(page.label());
     if is_selected {
-        row = row.bg(rgb(theme::SURFACE));
+        row = row.bg(rgb(theme::palette().panel));
     }
     row
 }

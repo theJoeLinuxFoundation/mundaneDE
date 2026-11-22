@@ -271,12 +271,11 @@ impl State {
                 if press && !self.desktop.lock.active {
                     self.record_input(serial, keyboard.current_focus().map(|f| f.surface));
                 }
-                keyboard.input::<(), _>(
+                let mut announced=false;
+                let (filtered,mods_changed)=keyboard.input_intercept(
                     self,
                     event.key_code(),
                     event.state(),
-                    serial,
-                    time,
                     |state, mods, handle| {
                         let sym = handle.modified_sym().raw();
                         if let Some(switch_vt) = &state.switch_vt {
@@ -291,6 +290,19 @@ impl State {
                         }
                         if state.desktop.lock.active {
                             return FilterResult::Forward;
+                        }
+                        if press && mods.logo && mods.alt && sym==keysyms::KEY_s {
+                            state.shell_message(&serde_json::json!({"screen_reader":"toggle"}));
+                            return FilterResult::Intercept(());
+                        }
+                        if !state.desktop.monitor.subscription.is_empty() {
+                            let mask=mods.serialized.depressed|mods.serialized.latched|mods.serialized.locked;
+                            let code=event.key_code().raw();
+                            let grab=state.desktop.monitor.filter(press,code,sym,mask);
+                            announced=true;
+                            state.shell_message(&serde_json::json!({"serial":u32::from(serial),"subscription":state.desktop.monitor.subscription,
+                                "key":[!press,mask,sym,xkbcommon::xkb::keysym_to_utf32(handle.modified_sym()),code]}));
+                            if grab {return FilterResult::Intercept(());}
                         }
                         if state.window_menu.is_some() {
                             if press {
@@ -371,6 +383,13 @@ impl State {
                         FilterResult::Forward
                     },
                 );
+                if matches!(filtered,FilterResult::Forward) {
+                    if announced {
+                        self.defer_reader_key(event.key_code(),event.state(),serial,time,mods_changed);
+                    }else{
+                        keyboard.input_forward(self,event.key_code(),event.state(),serial,time,mods_changed);
+                    }
+                }
             }
 
             // Winit reports absolute pointer positions.
@@ -592,7 +611,7 @@ impl State {
             .or_else(|| self.wm.size_of(&window))
             .unwrap_or_else(|| (0, 0).into());
         let target = self.snap_target(&window, desired, size);
-        if self.config.reduced_motion {
+        if self.config.reduced_motion || self.desktop.reduce_motion {
             self.place_window(&window, target);
             return;
         }

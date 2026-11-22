@@ -166,6 +166,48 @@ impl WallpaperSection {
 }
 
 impl MundaneConfig {
+    pub fn parse(text: &str) -> anyhow::Result<Self> {
+        let cfg: Self = toml::from_str(text)?;
+        for spring in [
+            cfg.spring.to_spring_params(),
+            cfg.wallpaper.to_fade_params(),
+        ] {
+            anyhow::ensure!(
+                spring.stiffness.is_finite()
+                    && spring.stiffness > 0.
+                    && spring.mass.is_finite()
+                    && spring.mass > 0.
+                    && spring.damping.is_finite()
+                    && spring.damping >= 0.,
+                "invalid spring parameters"
+            );
+        }
+        anyhow::ensure!(
+            [cfg.wm.attraction_radius, cfg.wm.outer_gap, cfg.wm.inner_gap]
+                .into_iter()
+                .all(|v| (0..=16384).contains(&v)),
+            "invalid gap or attraction radius"
+        );
+        anyhow::ensure!(
+            [cfg.output.width, cfg.output.height, cfg.output.refresh]
+                .into_iter()
+                .all(|n| n > 0),
+            "invalid output mode"
+        );
+        for display in cfg.displays.values() {
+            anyhow::ensure!(
+                display.scale.is_none_or(crate::outputs::valid_scale)
+                    && display.position.is_none_or(crate::outputs::valid_position)
+                    && display
+                        .rotation
+                        .is_none_or(|r| crate::outputs::rotation(r).is_some())
+                    && display.mode.is_none_or(|m| m.into_iter().all(|n| n > 0)),
+                "invalid display layout"
+            );
+        }
+        Ok(cfg)
+    }
+
     /// Load config from `~/.config/mundane/config.toml`, or return defaults if absent.
     pub fn load(path: Option<&Path>) -> Self {
         let path = path
@@ -177,7 +219,7 @@ impl MundaneConfig {
         };
 
         match std::fs::read_to_string(&path) {
-            Ok(contents) => match toml::from_str(&contents) {
+            Ok(contents) => match Self::parse(&contents) {
                 Ok(config) => config,
                 Err(e) => {
                     warn!("failed to parse {}: {e}, using defaults", path.display());
@@ -229,6 +271,19 @@ mod tests {
         let wm: WmSection = toml::from_str(raw).unwrap();
         assert_eq!(wm.outer_gap, 12);
         assert_eq!(wm.inner_gap, 4);
+    }
+
+    #[test]
+    fn invalid_edits_are_rejected_before_live_state_changes() {
+        for text in [
+            "[spring]\nmass=0",
+            "[spring]\ndamping=nan",
+            "[wallpaper]\nfade_stiffness=inf",
+            "[wm]\ninner_gap=-1",
+            "[displays.Head]\nscale=0.1",
+        ] {
+            assert!(MundaneConfig::parse(text).is_err(), "{text}");
+        }
     }
 
     #[test]

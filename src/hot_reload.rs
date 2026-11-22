@@ -94,7 +94,7 @@ fn apply_reload(state: &mut State, path: &PathBuf) {
     }
     let new: MundaneConfig = match std::fs::read_to_string(path)
         .ok()
-        .and_then(|s| toml::from_str(&s).ok())
+        .and_then(|s| MundaneConfig::parse(&s).ok())
     {
         Some(config) => config,
         None => {

@@ -50,7 +50,7 @@ def stop(process):
             process.wait()
 
 
-def run_until_logout(compositor, agent, channel):
+def run_until_logout(compositor, channel):
     loop = GLib.MainLoop()
     bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
     manager = "org.freedesktop.login1.Manager"
@@ -138,7 +138,7 @@ def run_until_logout(compositor, agent, channel):
         Gio.DBusSignalFlags.NONE,
         lambda *_: channel.sendall(b"L"),
     )
-    children = [os.pidfd_open(child.pid) for child in (compositor, agent)]
+    children = [os.pidfd_open(compositor.pid)]
     sources = [
         GLib.io_add_watch(
             channel.fileno(), GLib.PRIORITY_DEFAULT, GLib.IO_IN | GLib.IO_HUP, reply
@@ -187,12 +187,7 @@ def session():
                 break
     bindir = Path(__file__).resolve().parent
     env["MUNDANE_PANEL"] = str(bindir / "mundane-panel")
-    agent_path = env.get("MUNDANE_POLKIT_AGENT") or bindir / "mundane-polkit-agent"
-    if not os.access(agent_path, os.X_OK):
-        raise RuntimeError(
-            "install the mundane-polkit-agent executable for this session"
-        )
-    compositor = agent = channel = None
+    compositor = channel = None
     published = False
     with tempfile.TemporaryDirectory(
         dir=env["XDG_RUNTIME_DIR"], prefix="mundane-session-"
@@ -249,8 +244,7 @@ def session():
                     ],
                     check=True,
                 )
-                agent = subprocess.Popen([agent_path], env=env)
-                return run_until_logout(compositor, agent, channel)
+                return run_until_logout(compositor, channel)
             finally:
                 if published:
                     # The portal's Requisite=graphical-session.target can keep
@@ -266,7 +260,6 @@ def session():
                     )
                 if channel:
                     channel.close()
-                stop(agent)
                 if compositor and compositor.poll() is None:
                     try:
                         compositor.wait(timeout=3)

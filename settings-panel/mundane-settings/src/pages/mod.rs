@@ -166,7 +166,7 @@ impl Render for PagesView {
         div()
             .id(("page-content", self.active as usize))
             .size_full()
-            .bg(rgb(theme::BG))
+            .bg(rgb(theme::palette().surface))
             .child(content)
     }
 }

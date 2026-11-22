@@ -19,11 +19,6 @@ PACKAGES = {
         "4662cc18b71e2875e1d766c63e68d21a9370abb167c0968970c966d5e6044ad5",
         "usr/bin/swaylock",
     ),
-    "polkit-gnome": (
-        "0.105-12",
-        "4413127849dd3b541d8ede73f5ff8d6441037c59a823023e2cddb6da2312a913",
-        "usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1",
-    ),
 }
 
 
@@ -120,7 +115,62 @@ def screencast_backend():
     return binary
 
 
+def reader_packages(share):
+    # beta1 predates the reader package. Copy the two pure-Python packages into
+    # the guest overlay. Installed joe packages take precedence during staging.
+    packages = {
+        "orca-51.1-1-any": (
+            "orca",
+            "af2c34aa818f077213e910a8dd592e3deb69c415ca35f77ad22305ba50fd4ec8",
+        ),
+        "python-dasbus-1.7-5-any": (
+            "python-dasbus",
+            "4316a35b4625f02b6cd20a183d0a9751e38f81a32f79af1b4eea22fbbe964f61",
+        ),
+    }
+    base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    for stem, (name, digest) in packages.items():
+        filename = stem + ".pkg.tar.zst"
+        cached = next(
+            (
+                path
+                for path in (
+                    base / "mundane-try/packages" / filename,
+                    base / "mundane-apps-ci/packages" / filename,
+                    share / filename,
+                )
+                if path.exists()
+                and hashlib.sha256(path.read_bytes()).hexdigest() == digest
+            ),
+            None,
+        )
+        if not cached:
+            cache = base / "mundane-try/packages"
+            cache.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=cache) as work:
+                archive = Path(work) / filename
+                subprocess.run(
+                    [
+                        "curl",
+                        "-fLsS",
+                        "--retry",
+                        "2",
+                        "-o",
+                        archive,
+                        f"https://archive.archlinux.org/packages/{name[0]}/{name}/{filename}",
+                    ],
+                    check=True,
+                )
+                if hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
+                    raise ValueError(filename)
+                cached = cache / filename
+                os.replace(archive, cached)
+        if cached != share / filename:
+            shutil.copyfile(cached, share / filename)
+
+
 def stage_shell(share):
+    reader_packages(share)
     for source, target in [
         (agent("swaylock"), "swaylock"),
         (screencast_backend(), "xdg-desktop-portal-wlr"),
@@ -136,6 +186,12 @@ def stage_shell(share):
 
 
 INSTALL_SHELL = """
+if ! test -x /usr/bin/orca; then
+    for archive in /mnt/python-dasbus-1.7-5-any.pkg.tar.zst /mnt/orca-51.1-1-any.pkg.tar.zst; do
+        tar -C / -xf "$archive" usr
+    done
+    glib-compile-schemas /usr/share/glib-2.0/schemas
+fi
 install -Dm755 /mnt/xdg-desktop-portal-wlr /usr/local/bin/xdg-desktop-portal-wlr
 install -Dm755 /mnt/grim /usr/local/bin/grim
 install -Dm755 /mnt/libjpeg.so.8 /usr/local/lib/libjpeg.so.8

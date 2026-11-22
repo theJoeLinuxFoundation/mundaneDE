@@ -35,7 +35,11 @@ impl MundaneConfigFile {
 
     fn f64(&self, table: &str, key: &str) -> Option<f64> {
         self.doc.get(table)?.get(key)?.as_float().or_else(|| {
-            self.doc.get(table)?.get(key)?.as_integer().map(|i| i as f64)
+            self.doc
+                .get(table)?
+                .get(key)?
+                .as_integer()
+                .map(|i| i as f64)
         })
     }
 
@@ -83,7 +87,8 @@ impl MundaneConfigFile {
 
     /// `[wallpaper].mode`, defaulting to "fill".
     pub fn wallpaper_mode(&self) -> String {
-        self.str("wallpaper", "mode").unwrap_or_else(|| "fill".into())
+        self.str("wallpaper", "mode")
+            .unwrap_or_else(|| "fill".into())
     }
 
     pub fn set_spring(&mut self, stiffness: f64, damping: f64, mass: f64) {
@@ -132,46 +137,65 @@ pub fn config_path() -> Option<PathBuf> {
 /// Read the file, parse, return the editable document. A missing file starts an empty
 /// document so we can still write to it.
 pub async fn load() -> Result<MundaneConfigFile> {
-    let path = config_path()
-        .ok_or_else(|| Error::Parse("no XDG_CONFIG_HOME or HOME".into()))?;
-    on_runtime(async move {
-        let raw = match tokio::fs::read_to_string(&path).await {
-            Ok(s) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(e) => return Err(Error::Io(e)),
-        };
-        let doc = raw
-            .parse::<DocumentMut>()
-            .map_err(|e| Error::Parse(e.to_string()))?;
-        Ok(MundaneConfigFile { path, doc })
-    })
-    .await
+    let path = config_path().ok_or_else(|| Error::Parse("no XDG_CONFIG_HOME or HOME".into()))?;
+    on_runtime(async move { read(path) }).await
 }
 
-/// Write the document back to disk atomically (tempfile + rename in the same dir).
-pub async fn save(file: &MundaneConfigFile) -> Result<()> {
-    let path = file.path.clone();
-    let contents = file.doc.to_string();
-    on_runtime(async move {
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+fn read(path: PathBuf) -> Result<MundaneConfigFile> {
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let mut doc = raw
+        .parse::<DocumentMut>()
+        .map_err(|e| Error::Parse(e.to_string()))?;
+    for section in ["spring", "wm", "wallpaper"] {
+        if let Some(item) = doc.get_mut(section) {
+            if item.is_inline_table() {
+                *item = Item::Table(item.as_inline_table().unwrap().clone().into_table());
+            }
+            if !item.is_table() {
+                return Err(Error::Parse(format!("{section} must be a table")));
+            }
         }
-        let tmp = path.with_extension("toml.tmp");
-        tokio::fs::write(&tmp, contents.as_bytes()).await?;
-        tokio::fs::rename(&tmp, &path).await?;
-        Ok(())
-    })
-    .await
+    }
+    Ok(MundaneConfigFile { path, doc })
 }
 
-/// One-shot helper used by every setting in the Compositor page: load → mutate → save.
+/// Serialize the entire read/edit/rename operation across Settings processes.
 pub async fn update<F>(mutate: F) -> Result<()>
 where
     F: FnOnce(&mut MundaneConfigFile) + Send + 'static,
 {
-    let mut file = load().await?;
-    mutate(&mut file);
-    save(&file).await
+    let path = config_path().ok_or_else(|| Error::Parse("no config directory".into()))?;
+    on_runtime(async move {
+        tokio::task::spawn_blocking(move || {
+            use std::io::Write;
+            let dir = path.parent().unwrap();
+            std::fs::create_dir_all(dir)?;
+            let lock = std::fs::File::options()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(path.with_extension("lock"))?;
+            lock.lock()?;
+            let mut file = read(path.clone())?;
+            mutate(&mut file);
+            let (k, d, m) = file.spring();
+            if !(k.is_finite() && k > 0. && d.is_finite() && d >= 0. && m.is_finite() && m > 0.) {
+                return Err(Error::Parse("Invalid spring parameters".into()));
+            }
+            let mut temp = tempfile::NamedTempFile::new_in(dir)?;
+            temp.write_all(file.doc.to_string().as_bytes())?;
+            temp.as_file().sync_all()?;
+            temp.persist(&path).map_err(|e| Error::Io(e.error))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| Error::Parse(e.to_string()))?
+    })
+    .await
 }
 
 #[cfg(test)]

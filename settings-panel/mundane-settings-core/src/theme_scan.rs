@@ -1,10 +1,14 @@
 //! Scan installed GTK and icon themes on NixOS.
 
-use crate::{Result, on_runtime};
+use crate::{on_runtime, Result};
 use std::path::PathBuf;
 
 pub fn gtk_theme_roots() -> Vec<PathBuf> {
-    let mut v = vec![PathBuf::from("/run/current-system/sw/share/themes")];
+    let dirs = std::env::var_os("XDG_DATA_DIRS")
+        .unwrap_or_else(|| "/usr/local/share:/usr/share:/run/current-system/sw/share".into());
+    let mut v: Vec<_> = std::env::split_paths(&dirs)
+        .map(|dir| dir.join("themes"))
+        .collect();
     if let Ok(home) = std::env::var("HOME") {
         v.push(PathBuf::from(format!("{home}/.themes")));
         v.push(PathBuf::from(format!("{home}/.local/share/themes")));
@@ -13,7 +17,11 @@ pub fn gtk_theme_roots() -> Vec<PathBuf> {
 }
 
 pub fn icon_theme_roots() -> Vec<PathBuf> {
-    let mut v = vec![PathBuf::from("/run/current-system/sw/share/icons")];
+    let dirs = std::env::var_os("XDG_DATA_DIRS")
+        .unwrap_or_else(|| "/usr/local/share:/usr/share:/run/current-system/sw/share".into());
+    let mut v: Vec<_> = std::env::split_paths(&dirs)
+        .map(|dir| dir.join("icons"))
+        .collect();
     if let Ok(home) = std::env::var("HOME") {
         v.push(PathBuf::from(format!("{home}/.icons")));
         v.push(PathBuf::from(format!("{home}/.local/share/icons")));
@@ -38,8 +46,12 @@ pub async fn list_gtk_themes() -> Result<Vec<String>> {
                     continue;
                 }
                 let path = entry.path();
-                let has_gtk3 = tokio::fs::metadata(path.join("gtk-3.0/gtk.css")).await.is_ok();
-                let has_gtk4 = tokio::fs::metadata(path.join("gtk-4.0/gtk.css")).await.is_ok();
+                let has_gtk3 = tokio::fs::metadata(path.join("gtk-3.0/gtk.css"))
+                    .await
+                    .is_ok();
+                let has_gtk4 = tokio::fs::metadata(path.join("gtk-4.0/gtk.css"))
+                    .await
+                    .is_ok();
                 if has_gtk3 || has_gtk4 {
                     found.push(name);
                 }
@@ -70,13 +82,37 @@ pub async fn list_icon_themes() -> Result<Vec<String>> {
                 if found.iter().any(|f| f == &name) {
                     continue;
                 }
-                if tokio::fs::metadata(entry.path().join("index.theme")).await.is_ok() {
+                if tokio::fs::metadata(entry.path().join("index.theme"))
+                    .await
+                    .is_ok()
+                {
                     found.push(name);
                 }
             }
         }
         found.sort();
         Ok(found)
+    })
+    .await
+}
+
+pub async fn font_families() -> Result<Vec<String>> {
+    on_runtime(async {
+        let out = tokio::process::Command::new("fc-list")
+            .args(["--format", "%{family[0]}\n"])
+            .output()
+            .await?;
+        if !out.status.success() {
+            return Err(crate::Error::Parse(
+                "fontconfig could not list fonts".into(),
+            ));
+        }
+        let families: std::collections::BTreeSet<_> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect();
+        Ok(families.into_iter().collect())
     })
     .await
 }
@@ -89,6 +125,13 @@ pub async fn gsettings_get(schema: &str, key: &str) -> Result<String> {
             .args(["get", &schema, &key])
             .output()
             .await?;
+        if !out.status.success() {
+            return Err(crate::Error::Subprocess {
+                cmd: format!("gsettings get {schema} {key}"),
+                code: out.status.code().unwrap_or(-1),
+                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            });
+        }
         let s = String::from_utf8_lossy(&out.stdout)
             .trim()
             .trim_matches('\'')

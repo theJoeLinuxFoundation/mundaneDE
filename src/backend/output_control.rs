@@ -2,10 +2,13 @@
 use crate::{config::DisplayConfig, state::State};
 use anyhow::{Context, Result};
 use calloop::{generic::Generic, Interest, Mode, PostAction};
+use smithay::reexports::rustix;
 use std::{collections::BTreeMap, os::unix::net::UnixDatagram, path::PathBuf, time::Duration};
 
 #[derive(Clone, Debug, clap::Subcommand, serde::Deserialize, serde::Serialize)]
 pub enum Command {
+    /// List connected outputs and their advertised modes as JSON.
+    List,
     /// Try an advertised mode for 15 seconds. Refresh is in millihertz.
     Test {
         name: String,
@@ -46,12 +49,17 @@ pub fn request(cmd: Command) -> Result<()> {
         .connect(endpoint()?)
         .context("connect to the active DRM session")?;
     // Encode the command in a table so unit variants are also valid TOML.
+    let list = matches!(cmd, Command::List);
     let request = toml::to_string(&Message { command: cmd })?;
     client.send(request.as_bytes())?;
-    let mut reply = [0; 2048];
+    let mut reply = vec![0; 128 * 1024];
     let n = client.recv(&mut reply)?;
     let answer = std::str::from_utf8(&reply[..n])?;
-    anyhow::ensure!(answer == "ok", "{answer}");
+    if list && answer.starts_with('[') {
+        println!("{answer}");
+    } else {
+        anyhow::ensure!(answer == "ok", "{answer}");
+    }
     Ok(())
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -60,13 +68,23 @@ struct Message {
 }
 pub fn listen(
     state: &State,
-    mut apply: impl FnMut(&mut State, Command) -> Result<()> + 'static,
+    mut apply: impl FnMut(&mut State, Command) -> Result<String> + 'static,
 ) -> Result<SocketPath> {
     let path = endpoint()?;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let dir = std::fs::metadata(runtime()?)?;
+    anyhow::ensure!(
+        dir.is_dir()
+            && dir.uid() == smithay::reexports::rustix::process::geteuid().as_raw()
+            && dir.mode() & 0o077 == 0,
+        "private session runtime directory required"
+    );
     if path.exists() {
         std::fs::remove_file(&path)?;
     }
     let socket = UnixDatagram::bind(&path)?;
+    rustix::net::sockopt::set_socket_passcred(&socket, true)?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     socket.set_nonblocking(true)?;
     state
         .handle
@@ -74,19 +92,21 @@ pub fn listen(
             Generic::new(socket, Interest::READ, Mode::Level),
             move |_, socket, state| {
                 let mut bytes = [0; 2048];
-                let (n, peer) = socket.recv_from(&mut bytes)?;
-                let Some(reply) = peer.as_pathname() else {
+                use rustix::net::{recvmsg,sendto,RecvAncillaryBuffer,RecvAncillaryMessage,RecvFlags,SendFlags};
+                let mut space=[std::mem::MaybeUninit::uninit();rustix::cmsg_space!(ScmCredentials(1))];
+                let mut control=RecvAncillaryBuffer::new(&mut space);
+                let msg=recvmsg(&*socket,&mut [std::io::IoSliceMut::new(&mut bytes)],&mut control,RecvFlags::CMSG_CLOEXEC)?;
+                let Some(reply)=msg.address else {return Ok(PostAction::Continue)};
+                let n=msg.bytes;
+                if !control.drain().any(|c|matches!(c,RecvAncillaryMessage::ScmCredentials(u) if u.uid==rustix::process::geteuid())) {
                     return Ok(PostAction::Continue);
-                };
-                let command = (|| -> Result<()> {
+                }
+                let command = (|| -> Result<String> {
                     let msg: Message = toml::from_str(std::str::from_utf8(&bytes[..n])?)?;
                     apply(state, msg.command)
                 })();
-                let response = command
-                    .err()
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "ok".into());
-                let _ = socket.send_to(response.as_bytes(), reply);
+                let response = command.unwrap_or_else(|error|error.to_string());
+                let _ = sendto(socket,response.as_bytes(),SendFlags::empty(),&reply);
                 Ok(PostAction::Continue)
             },
         )

@@ -19,9 +19,6 @@ parser.add_argument("run", type=Path)
 parser.add_argument("--binary", type=Path, default=ROOT / "target/release/mundane-de")
 parser.add_argument("--libseat", type=Path, required=True)
 parser.add_argument(
-    "--agent", type=Path, required=True, help="standalone graphical polkit agent"
-)
-parser.add_argument(
     "--settings", type=Path, required=True, help="built mundane-settings"
 )
 parser.add_argument(
@@ -35,7 +32,6 @@ assert nodes["base"]["ro"] and nodes["basefile"]["ro"] and not nodes["layer"]["r
 for source, name in (
     (args.binary, "mundane-de"),
     (args.libseat, "libseat.so.1"),
-    (args.agent, "mundane-polkit-agent"),
     (args.settings, "mundane-settings"),
 ):
     if source and source.resolve() != (share / name).resolve():
@@ -49,7 +45,7 @@ with tempfile.TemporaryDirectory(dir=guest.run) as stage:
     )
     with tarfile.open(share / "session.tar", "w") as archive:
         archive.add(Path(stage) / "usr", arcname="usr")
-for name in ("probe.py", "org.joelinux.MundaneSessionTest.service"):
+for name in ("probe.py", "shell_widgets.py", "org.joelinux.MundaneSessionTest.service"):
     shutil.copyfile(Path(__file__).with_name(name), share / name)
 
 
@@ -87,12 +83,12 @@ test -f /usr/lib/dave/sealed
 mount -t 9p -o trans=virtio,version=9p2000.L,ro mundane /mnt
 tar -C / -xf /mnt/session.tar --no-same-owner
 install -Dm755 /mnt/libseat.so.1 /usr/local/lib/libseat.so.1
-install -Dm755 /mnt/mundane-polkit-agent /usr/local/bin/mundane-polkit-agent
 """
         + INSTALL_SHELL
         + """
 ldconfig
 install -Dm755 /mnt/mundane-settings /usr/local/bin/mundane-settings
+install -Dm644 /mnt/shell_widgets.py /usr/local/libexec/mundane-test-widgets
 install -Dm755 /mnt/probe.py /usr/local/libexec/mundane-login-probe
 install -Dm644 /mnt/org.joelinux.MundaneSessionTest.service /usr/local/share/dbus-1/services/org.joelinux.MundaneSessionTest.service
 test -x /usr/local/bin/mundane-de

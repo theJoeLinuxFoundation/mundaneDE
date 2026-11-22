@@ -192,6 +192,7 @@ impl State {
         self.desktop.panel_source = Some(token);
         self.desktop.channel = Some(server);
         self.desktop.panel = Some(child);
+        self.desktop.monitor=Default::default();
         if self.desktop.lock.active {
             self.shell_message(&serde_json::json!({"locked": true}));
         }

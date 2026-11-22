@@ -6,6 +6,7 @@
 //! configure handshake.
 
 use smithay::backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state};
+mod keyboard_monitor;
 pub(crate) mod decorations;
 pub(crate) mod desktop;
 pub(crate) mod interaction;

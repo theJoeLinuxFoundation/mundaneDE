@@ -28,6 +28,12 @@ for node in walk(Atspi.get_desktop(0)):
     if verb == "list":
         if name:
             print(role, name)
+    elif name == " ".join(names) and verb == "focus":
+        if node.grab_focus():
+            sys.exit(0)
+    elif name == " ".join(names) and verb == "state":
+        print(" ".join(v.value_nick for v in node.get_state_set().get_states()))
+        sys.exit(0)
     elif name == " ".join(names) and role in ("push button", "button", "toggle button"):
         for i in range(node.get_n_actions()):
             if node.get_action_name(i) in ("click", "activate", "press"):

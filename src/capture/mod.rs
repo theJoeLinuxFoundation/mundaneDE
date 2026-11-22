@@ -93,7 +93,7 @@ impl State {
     }
     pub fn panel_datagram(&mut self, socket: &UnixDatagram) -> anyhow::Result<()> {
         use rustix::net::{recvmsg, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags};
-        let mut bytes = [0; 1024];
+        let mut bytes = [0; 32768];
         let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
         let mut ancillary = RecvAncillaryBuffer::new(&mut space);
         let msg = recvmsg(

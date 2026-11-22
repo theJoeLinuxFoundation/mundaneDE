@@ -1,8 +1,8 @@
-//! Display configuration via `xrandr` (X11). Wayland is stubbed.
+//! Display configuration via `xrandr` (X11) and mundaneDE’s private output socket on Wayland.
 
-use crate::{Error, Result, on_runtime};
+use crate::{on_runtime, Error, Result};
 
-#[derive(Debug, Clone)]
+#[derive(serde::Deserialize, Debug, Clone)]
 pub struct Monitor {
     pub name: String,
     pub current: Option<Mode>,
@@ -10,9 +10,12 @@ pub struct Monitor {
     pub modes: Vec<Mode>,
     pub connected: bool,
     pub primary: bool,
+    pub rotation: u16,
+    pub position: Option<[i32; 2]>,
+    pub origin: [i32; 2],
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct Mode {
     pub width: u32,
     pub height: u32,
@@ -25,7 +28,7 @@ impl Mode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(serde::Deserialize, Debug, Clone)]
 pub struct MonitorChange {
     pub name: String,
     pub mode: Mode,
@@ -34,7 +37,14 @@ pub struct MonitorChange {
 
 pub async fn query() -> Result<Vec<Monitor>> {
     on_runtime(async {
-        let out = tokio::process::Command::new("xrandr").arg("--query").output().await;
+        if wayland() {
+            let text = command(&["list"]).await?;
+            return serde_json::from_slice(&text).map_err(|e| Error::Parse(e.to_string()));
+        }
+        let out = tokio::process::Command::new("xrandr")
+            .arg("--query")
+            .output()
+            .await;
         let out = match out {
             Ok(o) if o.status.success() => o,
             Ok(o) => {
@@ -61,14 +71,17 @@ pub async fn apply(changes: &[MonitorChange]) -> Result<()> {
             let scale_arg = format!("{:.2}x{:.2}", c.scale, c.scale);
             let out = tokio::process::Command::new("xrandr")
                 .args([
-                    "--output", &c.name, "--mode", &mode_arg, "--rate", &rate_arg, "--scale", &scale_arg,
+                    "--output", &c.name, "--mode", &mode_arg, "--rate", &rate_arg, "--scale",
+                    &scale_arg,
                 ])
                 .output()
                 .await?;
             if !out.status.success() {
                 return Err(Error::Subprocess {
-                    cmd: format!("xrandr --output {} --mode {} --rate {} --scale {}",
-                        c.name, mode_arg, rate_arg, scale_arg),
+                    cmd: format!(
+                        "xrandr --output {} --mode {} --rate {} --scale {}",
+                        c.name, mode_arg, rate_arg, scale_arg
+                    ),
                     code: out.status.code().unwrap_or(-1),
                     stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
                 });
@@ -79,10 +92,56 @@ pub async fn apply(changes: &[MonitorChange]) -> Result<()> {
     .await
 }
 
-// TODO: Wayland backend (wlr-randr / org.gnome.Mutter.DisplayConfig).
-#[allow(dead_code)]
-async fn wayland_query() -> Result<Vec<Monitor>> {
-    Err(Error::NotImplemented("Wayland display backend (wlr-randr)"))
+pub fn wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+}
+async fn command(args: &[&str]) -> Result<Vec<u8>> {
+    let binary = std::env::current_exe()?.with_file_name("mundane-de");
+    let out = tokio::process::Command::new(if binary.is_file() {
+        binary
+    } else {
+        "mundane-de".into()
+    })
+    .arg("output")
+    .args(args)
+    .output()
+    .await?;
+    if !out.status.success() {
+        return Err(Error::Subprocess {
+            cmd: "mundane-de output".into(),
+            code: out.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        });
+    }
+    Ok(out.stdout)
+}
+
+pub async fn trial(m: Monitor, mode: Mode, scale: f32) -> Result<()> {
+    on_runtime(async move {
+        let mut args = vec![
+            "test".to_string(),
+            m.name,
+            mode.width.to_string(),
+            mode.height.to_string(),
+            ((mode.refresh_hz * 1000.).round() as i32).to_string(),
+            scale.to_string(),
+            m.rotation.to_string(),
+        ];
+        if let Some([x, y]) = m.position {
+            args.extend(["--position".into(), x.to_string(), y.to_string()]);
+        }
+        command(&args.iter().map(String::as_str).collect::<Vec<_>>()).await?;
+        Ok(())
+    })
+    .await
+}
+pub async fn finish_trial(keep: bool) -> Result<()> {
+    on_runtime(async move {
+        command(&[if keep { "confirm" } else { "revert" }])
+            .await
+            .map(|_| ())
+    })
+    .await
 }
 
 pub fn parse_xrandr(input: &str) -> Vec<Monitor> {
@@ -105,19 +164,44 @@ pub fn parse_xrandr(input: &str) -> Vec<Monitor> {
             let status = parts.next().unwrap_or("");
             let connected = status == "connected";
             let primary = line.contains(" primary ");
-            current = Some(Monitor { name, current: None, scale: 1.0, modes: Vec::new(), connected, primary });
+            current = Some(Monitor {
+                name,
+                current: None,
+                scale: 1.0,
+                modes: Vec::new(),
+                connected,
+                primary,
+                rotation: 0,
+                position: None,
+                origin: [0, 0],
+            });
             continue;
         }
-        let Some(mon) = current.as_mut() else { continue };
+        let Some(mon) = current.as_mut() else {
+            continue;
+        };
         let mut tokens = line.split_whitespace();
         let Some(res) = tokens.next() else { continue };
-        let Some((w, h)) = res.split_once('x') else { continue };
-        let (Ok(width), Ok(height)) = (w.parse::<u32>(), h.parse::<u32>()) else { continue };
+        let Some((w, h)) = res.split_once('x') else {
+            continue;
+        };
+        let (Ok(width), Ok(height)) = (w.parse::<u32>(), h.parse::<u32>()) else {
+            continue;
+        };
         for rate_token in tokens {
             let is_current = rate_token.contains('*');
-            let cleaned: String = rate_token.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
-            let Ok(refresh_hz) = cleaned.parse::<f32>() else { continue };
-            let mode = Mode { width, height, refresh_hz };
+            let cleaned: String = rate_token
+                .chars()
+                .filter(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            let Ok(refresh_hz) = cleaned.parse::<f32>() else {
+                continue;
+            };
+            let mode = Mode {
+                width,
+                height,
+                refresh_hz,
+            };
             if is_current {
                 mon.current = Some(mode.clone());
             }

@@ -2,13 +2,13 @@
 
 use crate::pages::{Page, PageState};
 use crate::theme;
+use gpui::{
+    div, px, rgb, Context, InteractiveElement, IntoElement, ParentElement, Render,
+    StatefulInteractiveElement, Styled, Window,
+};
 use mundane_settings_core::{
     os_release::{self, OsRelease},
     system::{self as sys, LogLine},
-};
-use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window, div, px, rgb,
 };
 
 #[derive(Default, Clone)]
@@ -44,7 +44,8 @@ impl SystemPage {
                     fetched_at: std::time::Instant::now(),
                 };
                 cx.notify();
-            }).ok();
+            })
+            .ok();
         })
         .detach();
     }
@@ -64,7 +65,8 @@ impl SystemPage {
                         this.log.push(LogLine::Stderr(e.to_string()));
                         this.upgrading = false;
                         cx.notify();
-                    }).ok();
+                    })
+                    .ok();
                     return;
                 }
             };
@@ -76,7 +78,8 @@ impl SystemPage {
                         this.upgrading = false;
                     }
                     cx.notify();
-                }).ok();
+                })
+                .ok();
                 if is_exit {
                     break;
                 }
@@ -93,18 +96,32 @@ impl Render for SystemPage {
         }
 
         let upgrading = self.upgrading;
+        let label = if matches!(&self.state,PageState::Loaded {data,..} if data.os.id.as_deref()==Some("joe"))
+        {
+            "Open Packages"
+        } else {
+            "Check for Updates"
+        };
         let upgrade_button = div()
             .id("check-updates")
+            .role(gpui::Role::Button)
+            .aria_label(label)
+            .tab_index(0)
+            .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
             .px_4()
             .py_2()
-            .bg(rgb(if upgrading { theme::SIDEBAR } else { theme::ACCENT }))
-            .text_color(rgb(theme::BG))
+            .bg(rgb(if upgrading {
+                theme::palette().panel
+            } else {
+                theme::palette().focus
+            }))
+            .text_color(rgb(theme::palette().surface))
             .rounded(px(8.))
             .cursor_pointer()
             .on_click(cx.listener(|this, _event, _window, cx| {
                 this.start_upgrade(cx);
             }))
-            .child(if upgrading { "Updating…" } else { "Check for Updates" }.to_string());
+            .child(if upgrading { "Updating…" } else { label }.to_string());
 
         let body = match &self.state {
             PageState::Loaded { data, .. } => loaded_view(data, &self.log, upgrade_button),
@@ -121,15 +138,17 @@ impl Render for SystemPage {
 }
 
 fn skeleton() -> gpui::Div {
-    div().h(px(220.)).bg(rgb(theme::SURFACE)).rounded(px(10.))
+    div()
+        .h(px(220.))
+        .bg(rgb(theme::palette().panel))
+        .rounded(px(10.))
 }
 
-fn loaded_view(
-    d: &SystemData,
-    log: &[LogLine],
-    upgrade_button: impl IntoElement,
-) -> gpui::Div {
-    let pretty = d.os.pretty_name.clone().unwrap_or_else(|| "mundaneDE".into());
+fn loaded_view(d: &SystemData, log: &[LogLine], upgrade_button: impl IntoElement) -> gpui::Div {
+    let pretty =
+        d.os.pretty_name
+            .clone()
+            .unwrap_or_else(|| "mundaneDE".into());
     let version = d.os.version.clone().unwrap_or_default();
     let hostname_row = div()
         .flex()
@@ -138,10 +157,18 @@ fn loaded_view(
         .justify_between()
         .px_4()
         .py_3()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
-        .child(div().text_color(rgb(theme::TEXT_MUTED)).child("Hostname"))
-        .child(div().text_color(rgb(theme::TEXT)).child(d.hostname.clone()));
+        .child(
+            div()
+                .text_color(rgb(theme::palette().secondary))
+                .child("Hostname"),
+        )
+        .child(
+            div()
+                .text_color(rgb(theme::palette().text))
+                .child(d.hostname.clone()),
+        );
     div()
         .flex()
         .flex_col()
@@ -153,10 +180,14 @@ fn loaded_view(
                 .gap_1()
                 .px_4()
                 .py_3()
-                .bg(rgb(theme::SURFACE))
+                .bg(rgb(theme::palette().panel))
                 .rounded(px(10.))
-                .child(div().text_color(rgb(theme::TEXT)).child(pretty))
-                .child(div().text_color(rgb(theme::TEXT_MUTED)).child(version)),
+                .child(div().text_color(rgb(theme::palette().text)).child(pretty))
+                .child(
+                    div()
+                        .text_color(rgb(theme::palette().secondary))
+                        .child(version),
+                ),
         )
         .child(hostname_row)
         .child(upgrade_button)
@@ -170,14 +201,14 @@ fn log_view(log: &[LogLine]) -> gpui::Div {
         .min_h(px(120.))
         .px_3()
         .py_2()
-        .bg(rgb(theme::BG))
+        .bg(rgb(theme::palette().surface))
         .rounded(px(8.))
-        .text_color(rgb(theme::TEXT_MUTED));
+        .text_color(rgb(theme::palette().secondary));
     for line in log.iter().rev().take(200).rev() {
         let (text, color) = match line {
-            LogLine::Stdout(s) => (s.clone(), theme::TEXT),
-            LogLine::Stderr(s) => (s.clone(), theme::TEXT_MUTED),
-            LogLine::Exit(c) => (format!("[exit {c}]"), theme::ACCENT),
+            LogLine::Stdout(s) => (s.clone(), theme::palette().text),
+            LogLine::Stderr(s) => (s.clone(), theme::palette().secondary),
+            LogLine::Exit(c) => (format!("[exit {c}]"), theme::palette().focus),
         };
         pre = pre.child(div().text_color(rgb(color)).child(text));
     }

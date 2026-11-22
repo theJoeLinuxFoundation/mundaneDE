@@ -9,11 +9,11 @@
 
 use crate::pages::{Page, PageState};
 use crate::theme;
-use mundane_settings_core::{compositor as mundane_cfg, theme_scan};
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px, rgb,
+    div, px, rgb, AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Window,
 };
+use mundane_settings_core::{compositor as mundane_cfg, theme_scan};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -24,6 +24,7 @@ pub struct AppearanceData {
     pub interface_font: String,
     pub monospace_font: String,
     pub wallpaper_uri: String,
+    pub families: Vec<String>,
     pub themes_available: Vec<String>,
     pub icons_available: Vec<String>,
     pub wallpapers_available: Vec<PathBuf>,
@@ -34,6 +35,8 @@ pub struct AppearanceData {
 enum Section {
     GtkTheme,
     IconTheme,
+    InterfaceFont,
+    MonospaceFont,
     Wallpaper,
 }
 
@@ -41,11 +44,19 @@ pub struct AppearancePage {
     state: PageState<AppearanceData>,
     in_flight: HashSet<&'static str>,
     open: Option<Section>,
+    controls: [gpui::FocusHandle; 5],
+    error: Option<String>,
 }
 
 impl AppearancePage {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let s = Self { state: PageState::Empty, in_flight: Default::default(), open: None };
+        let s = Self {
+            controls: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
+            error: None,
+            state: PageState::Empty,
+            in_flight: Default::default(),
+            open: None,
+        };
         s.spawn_refresh(cx);
         s
     }
@@ -57,10 +68,20 @@ impl AppearancePage {
             let wallpapers = mundane_settings_core::wallpaper_scan::list_wallpapers()
                 .await
                 .unwrap_or_default();
-            let gtk_theme = theme_scan::gsettings_get("org.cinnamon.desktop.interface", "gtk-theme").await.unwrap_or_default();
-            let icon_theme = theme_scan::gsettings_get("org.cinnamon.desktop.interface", "icon-theme").await.unwrap_or_default();
-            let interface_font = theme_scan::gsettings_get("org.cinnamon.desktop.interface", "font-name").await.unwrap_or_default();
-            let monospace_font = theme_scan::gsettings_get("org.gnome.desktop.interface", "monospace-font-name").await.unwrap_or_default();
+            let gtk_theme = theme_scan::gsettings_get("org.gnome.desktop.interface", "gtk-theme")
+                .await
+                .unwrap_or_default();
+            let icon_theme = theme_scan::gsettings_get("org.gnome.desktop.interface", "icon-theme")
+                .await
+                .unwrap_or_default();
+            let interface_font =
+                theme_scan::gsettings_get("org.gnome.desktop.interface", "font-name")
+                    .await
+                    .unwrap_or_default();
+            let monospace_font =
+                theme_scan::gsettings_get("org.gnome.desktop.interface", "monospace-font-name")
+                    .await
+                    .unwrap_or_default();
             // mundaneDE wallpaper lives in ~/.config/mundane/config.toml as a plain path;
             // we show it in the same "file://…" form used for the equality check below.
             let wallpaper_uri = match mundane_cfg::load().await {
@@ -72,26 +93,41 @@ impl AppearancePage {
             };
 
             let data = AppearanceData {
-                gtk_theme, icon_theme, interface_font, monospace_font, wallpaper_uri,
-                themes_available: themes, icons_available: icons, wallpapers_available: wallpapers,
+                families: theme_scan::font_families().await.unwrap_or_default(),
+                gtk_theme,
+                icon_theme,
+                interface_font,
+                monospace_font,
+                wallpaper_uri,
+                themes_available: themes,
+                icons_available: icons,
+                wallpapers_available: wallpapers,
             };
             weak.update(async_cx, |this, cx| {
-                this.state = PageState::Loaded { data, fetched_at: std::time::Instant::now() };
+                this.state = PageState::Loaded {
+                    data,
+                    fetched_at: std::time::Instant::now(),
+                };
                 cx.notify();
-            }).ok();
+            })
+            .ok();
         })
         .detach();
     }
 
     fn toggle_section(&mut self, section: Section, cx: &mut Context<Self>) {
-        self.open = if self.open == Some(section) { None } else { Some(section) };
+        self.open = if self.open == Some(section) {
+            None
+        } else {
+            Some(section)
+        };
         cx.notify();
     }
 
     fn pick_gtk_theme(&mut self, name: String, cx: &mut Context<Self>) {
         self.set_gsettings(
             "gtk_theme",
-            "org.cinnamon.desktop.interface",
+            "org.gnome.desktop.interface",
             "gtk-theme",
             name,
             |d, v| d.gtk_theme = v,
@@ -102,7 +138,7 @@ impl AppearancePage {
     fn pick_icon_theme(&mut self, name: String, cx: &mut Context<Self>) {
         self.set_gsettings(
             "icon_theme",
-            "org.cinnamon.desktop.interface",
+            "org.gnome.desktop.interface",
             "icon-theme",
             name,
             |d, v| d.icon_theme = v,
@@ -154,8 +190,12 @@ impl AppearancePage {
         self.open = None;
         cx.notify();
         cx.spawn(async move |weak, async_cx| {
-            let _ = theme_scan::gsettings_set(schema, gkey, &value).await;
+            let error = theme_scan::gsettings_set(schema, gkey, &value)
+                .await
+                .err()
+                .map(|e| e.to_string());
             weak.update(async_cx, |this, cx| {
+                this.error = error;
                 this.in_flight.remove(key);
                 cx.notify();
                 this.spawn_refresh(cx);
@@ -175,13 +215,128 @@ impl Render for AppearancePage {
             PageState::Loaded { data, .. } => data_view(data, &self.in_flight, self.open, cx),
             _ => skeleton(),
         };
-        div()
+        use mundane_ui::ControlRole;
+        let prefs = theme::current();
+        let mut form = div()
+            .id("appearance-scroll")
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .size_full()
             .p_6()
-            .child(div().text_xl().pb_4().child("Appearance"))
-            .child(body)
+            .gap_2()
+            .child(mundane_ui::heading("appearance-heading", "Appearance"));
+        let choices = [
+            "blue", "teal", "green", "yellow", "orange", "red", "pink", "purple", "slate",
+        ];
+        let accent = choices
+            [(choices.iter().position(|s| *s == prefs.accent).unwrap_or(0) + 1) % choices.len()];
+        for (idx, (id, label, value, schema, key, next, toggle)) in [
+            (
+                "dark",
+                "Dark appearance",
+                prefs.dark.to_string(),
+                "org.gnome.desktop.interface",
+                "color-scheme",
+                if prefs.dark {
+                    "prefer-light"
+                } else {
+                    "prefer-dark"
+                },
+                Some(prefs.dark),
+            ),
+            (
+                "contrast",
+                "High contrast",
+                prefs.contrast.to_string(),
+                "org.gnome.desktop.a11y.interface",
+                "high-contrast",
+                if prefs.contrast { "false" } else { "true" },
+                Some(prefs.contrast),
+            ),
+            (
+                "motion",
+                "Reduce motion",
+                prefs.reduced.to_string(),
+                "org.gnome.desktop.interface",
+                "enable-animations",
+                if prefs.reduced { "true" } else { "false" },
+                Some(prefs.reduced),
+            ),
+            (
+                "accent",
+                "Accent colour",
+                prefs.accent.clone(),
+                "org.gnome.desktop.interface",
+                "accent-color",
+                accent,
+                None,
+            ),
+            (
+                "scale",
+                "Text size",
+                format!("{:.0}%", prefs.scale * 100.),
+                "org.gnome.desktop.interface",
+                "text-scaling-factor",
+                if prefs.scale < 1.24 {
+                    "1.25"
+                } else if prefs.scale < 1.49 {
+                    "1.5"
+                } else if prefs.scale < 1.99 {
+                    "2.0"
+                } else {
+                    "1.0"
+                },
+                None,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut control = if toggle.is_some() {
+                gpui::Role::Switch
+            } else {
+                gpui::Role::Button
+            }
+            .control(id, label);
+            if let Some(on) = toggle {
+                control = control.aria_toggled(if on {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                });
+            }
+            let control = mundane_ui::focus_ring(control, &self.controls[idx], theme::palette())
+                .px_3()
+                .py_1()
+                .flex()
+                .justify_between()
+                .child(label)
+                .child(match toggle {
+                    Some(true) => "On".into(),
+                    Some(false) => "Off".into(),
+                    None => value,
+                })
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    cx.spawn(async move |weak, cx| {
+                        let error = theme_scan::gsettings_set(schema, key, next)
+                            .await
+                            .err()
+                            .map(|e| e.to_string());
+                        weak.update(cx, |this, cx| {
+                            this.error = error;
+                            cx.notify()
+                        })
+                        .ok();
+                    })
+                    .detach();
+                }));
+            form = form.child(control);
+        }
+        if let Some(e) = &self.error {
+            form = form.child(e.clone());
+        }
+        form.child(body)
     }
 }
 
@@ -205,10 +360,20 @@ fn skeleton_row(label: &'static str) -> gpui::Div {
         .justify_between()
         .h(px(56.))
         .px_4()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
-        .child(div().text_color(rgb(theme::TEXT_MUTED)).child(label))
-        .child(div().w(px(180.)).h(px(28.)).bg(rgb(theme::SIDEBAR)).rounded(px(6.)))
+        .child(
+            div()
+                .text_color(rgb(theme::palette().secondary))
+                .child(label),
+        )
+        .child(
+            div()
+                .w(px(180.))
+                .h(px(28.))
+                .bg(rgb(theme::palette().panel))
+                .rounded(px(6.)),
+        )
 }
 
 fn data_view(
@@ -227,7 +392,12 @@ fn data_view(
         cx,
     ));
     if open == Some(Section::GtkTheme) {
-        col = col.child(theme_list(&data.themes_available, &data.gtk_theme, Section::GtkTheme, cx));
+        col = col.child(theme_list(
+            &data.themes_available,
+            &data.gtk_theme,
+            Section::GtkTheme,
+            cx,
+        ));
     }
     col = col.child(picker_row(
         Section::IconTheme,
@@ -238,7 +408,12 @@ fn data_view(
         cx,
     ));
     if open == Some(Section::IconTheme) {
-        col = col.child(theme_list(&data.icons_available, &data.icon_theme, Section::IconTheme, cx));
+        col = col.child(theme_list(
+            &data.icons_available,
+            &data.icon_theme,
+            Section::IconTheme,
+            cx,
+        ));
     }
     col = col.child(picker_row(
         Section::Wallpaper,
@@ -249,13 +424,43 @@ fn data_view(
         cx,
     ));
     if open == Some(Section::Wallpaper) {
-        col = col.child(wallpaper_list(&data.wallpapers_available, &data.wallpaper_uri, cx));
+        col = col.child(wallpaper_list(
+            &data.wallpapers_available,
+            &data.wallpaper_uri,
+            cx,
+        ));
     }
-    // Font rows stay read-only for now — font picker UX (preview, size) is a
-    // separate piece of work and the existing gsettings values are still
-    // visible here.
-    col = col.child(value_row("Interface font", &data.interface_font, false));
-    col = col.child(value_row("Monospace font", &data.monospace_font, false));
+    for (section, label, current) in [
+        (
+            Section::InterfaceFont,
+            "Interface font",
+            &data.interface_font,
+        ),
+        (
+            Section::MonospaceFont,
+            "Monospace font",
+            &data.monospace_font,
+        ),
+    ] {
+        col = col.child(picker_row(section, label, current, false, open, cx));
+        if open == Some(section) {
+            let (family, points) = current
+                .rsplit_once(' ')
+                .filter(|(_, n)| n.parse::<f64>().is_ok())
+                .unwrap_or((current, "11"));
+            let names: Vec<_> = data
+                .families
+                .iter()
+                .map(|name| format!("{name} {points}"))
+                .collect();
+            col = col.child(theme_list(
+                &names,
+                &format!("{family} {points}"),
+                section,
+                cx,
+            ));
+        }
+    }
     col
 }
 
@@ -270,29 +475,45 @@ fn picker_row(
     let chevron = if open == Some(section) { "▾" } else { "▸" };
     let mut row = div()
         .id(SharedString::from(format!("picker:{label}")))
+        .role(gpui::Role::Button)
+        .aria_label(label.to_string())
+        .tab_index(0)
+        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
         .flex()
         .flex_row()
         .items_center()
         .justify_between()
         .h(px(56.))
         .px_4()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(theme::SIDEBAR)))
+        .hover(|s| s.bg(rgb(theme::palette().panel)))
         .on_click(cx.listener(move |this, _e, _w, cx| this.toggle_section(section, cx)))
-        .child(div().text_color(rgb(theme::TEXT_MUTED)).child(label.to_string()))
+        .child(
+            div()
+                .text_color(rgb(theme::palette().secondary))
+                .child(label.to_string()),
+        )
         .child(
             div()
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap_3()
-                .child(div().text_color(rgb(theme::TEXT)).child(short_label(value)))
-                .child(div().text_color(rgb(theme::TEXT_MUTED)).child(chevron.to_string())),
+                .child(
+                    div()
+                        .text_color(rgb(theme::palette().text))
+                        .child(short_label(value)),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(theme::palette().secondary))
+                        .child(chevron.to_string()),
+                ),
         );
     if in_flight {
-        row = row.border_b_2().border_color(rgb(theme::ACCENT));
+        row = row.border_b_2().border_color(rgb(theme::palette().focus));
     }
     row.into_any_element()
 }
@@ -309,14 +530,14 @@ fn theme_list(
         .gap_1()
         .px_2()
         .py_2()
-        .bg(rgb(theme::BG))
+        .bg(rgb(theme::palette().surface))
         .rounded(px(10.));
     if available.is_empty() {
         col = col.child(
             div()
                 .px_4()
                 .py_2()
-                .text_color(rgb(theme::TEXT_MUTED))
+                .text_color(rgb(theme::palette().secondary))
                 .child("No themes found on this system."),
         );
         return col;
@@ -326,6 +547,10 @@ fn theme_list(
         let name_owned = name.clone();
         let row = div()
             .id(SharedString::from(format!("theme-opt:{name}")))
+            .role(gpui::Role::Button)
+            .aria_label(name.to_string())
+            .tab_index(0)
+            .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
             .flex()
             .flex_row()
             .items_center()
@@ -334,16 +559,40 @@ fn theme_list(
             .py_2()
             .rounded(px(8.))
             .cursor_pointer()
-            .hover(|s| s.bg(rgb(theme::SURFACE)))
+            .hover(|s| s.bg(rgb(theme::palette().panel)))
             .on_click(cx.listener(move |this, _e, _w, cx| match section {
                 Section::GtkTheme => this.pick_gtk_theme(name_owned.clone(), cx),
                 Section::IconTheme => this.pick_icon_theme(name_owned.clone(), cx),
+                Section::InterfaceFont => this.set_gsettings(
+                    "font-name",
+                    "org.gnome.desktop.interface",
+                    "font-name",
+                    name_owned.clone(),
+                    |d, v| d.interface_font = v,
+                    cx,
+                ),
+                Section::MonospaceFont => this.set_gsettings(
+                    "monospace-font-name",
+                    "org.gnome.desktop.interface",
+                    "monospace-font-name",
+                    name_owned.clone(),
+                    |d, v| d.monospace_font = v,
+                    cx,
+                ),
                 Section::Wallpaper => {}
             }))
-            .child(div().text_color(rgb(theme::TEXT)).child(name.clone()))
             .child(
                 div()
-                    .text_color(rgb(if is_current { theme::ACCENT } else { theme::TEXT_MUTED }))
+                    .text_color(rgb(theme::palette().text))
+                    .child(name.clone()),
+            )
+            .child(
+                div()
+                    .text_color(rgb(if is_current {
+                        theme::palette().focus
+                    } else {
+                        theme::palette().secondary
+                    }))
                     .child(if is_current { "Current" } else { "" }.to_string()),
             );
         col = col.child(row);
@@ -362,14 +611,14 @@ fn wallpaper_list(
         .gap_1()
         .px_2()
         .py_2()
-        .bg(rgb(theme::BG))
+        .bg(rgb(theme::palette().surface))
         .rounded(px(10.));
     if available.is_empty() {
         col = col.child(
             div()
                 .px_4()
                 .py_2()
-                .text_color(rgb(theme::TEXT_MUTED))
+                .text_color(rgb(theme::palette().secondary))
                 .child("No wallpapers in /etc/backgrounds or ~/Pictures."),
         );
         return col;
@@ -385,6 +634,10 @@ fn wallpaper_list(
         let path_owned = path.clone();
         let row = div()
             .id(SharedString::from(format!("wp-opt:{}", path.display())))
+            .role(gpui::Role::Button)
+            .aria_label(display.clone())
+            .tab_index(0)
+            .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
             .flex()
             .flex_row()
             .items_center()
@@ -393,14 +646,18 @@ fn wallpaper_list(
             .py_2()
             .rounded(px(8.))
             .cursor_pointer()
-            .hover(|s| s.bg(rgb(theme::SURFACE)))
+            .hover(|s| s.bg(rgb(theme::palette().panel)))
             .on_click(cx.listener(move |this, _e, _w, cx| {
                 this.pick_wallpaper(path_owned.clone(), cx);
             }))
-            .child(div().text_color(rgb(theme::TEXT)).child(display))
+            .child(div().text_color(rgb(theme::palette().text)).child(display))
             .child(
                 div()
-                    .text_color(rgb(if is_current { theme::ACCENT } else { theme::TEXT_MUTED }))
+                    .text_color(rgb(if is_current {
+                        theme::palette().focus
+                    } else {
+                        theme::palette().secondary
+                    }))
                     .child(if is_current { "Current" } else { "" }.to_string()),
             );
         col = col.child(row);
@@ -408,29 +665,14 @@ fn wallpaper_list(
     col
 }
 
-fn value_row(label: &str, value: &str, in_flight: bool) -> gpui::Div {
-    let mut row = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .h(px(56.))
-        .px_4()
-        .bg(rgb(theme::SURFACE))
-        .rounded(px(10.))
-        .child(div().text_color(rgb(theme::TEXT_MUTED)).child(label.to_string()))
-        .child(div().text_color(rgb(theme::TEXT)).child(short_label(value)));
-    if in_flight {
-        row = row.border_b_2().border_color(rgb(theme::ACCENT));
-    }
-    row
-}
-
 /// Trim a wallpaper URI / theme name for display in the value chip — long
 /// `file://...` URIs make the row wrap unattractively.
 fn short_label(s: &str) -> String {
     if let Some(rest) = s.strip_prefix("file://") {
-        if let Some(name) = std::path::Path::new(rest).file_name().and_then(|n| n.to_str()) {
+        if let Some(name) = std::path::Path::new(rest)
+            .file_name()
+            .and_then(|n| n.to_str())
+        {
             return name.to_string();
         }
     }

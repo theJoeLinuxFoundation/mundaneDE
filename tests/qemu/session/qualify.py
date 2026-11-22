@@ -82,13 +82,13 @@ def login(index):
         "compositor and agent",
         lambda: (
             g.shell(
-                "pgrep -u joe -f '^/usr/local/bin/mundane-de --session-notify ' && pgrep -u joe -f '^/usr/local/bin/mundane-polkit-agent$' || :"
+                "pgrep -u joe -f '^/usr/local/bin/mundane-de --session-notify ' && pgrep -u joe -f '^python3 .*share/mundane/shell/panel.py$' || :"
             ).count("\n")
             == 1
         ),
     )
     pid = int(g.shell("pgrep -u joe -f '^/usr/local/bin/mundane-de --session-notify '"))
-    agent = int(g.shell("pgrep -u joe -f '^/usr/local/bin/mundane-polkit-agent$'"))
+    agent = int(g.shell("pgrep -u joe -f '^python3 .*share/mundane/shell/panel.py$'"))
     for p in (pid, agent):
         assert f"session-{sid}.scope" in g.shell(f"cat /proc/{p}/cgroup")
     assert as_joe(
@@ -202,8 +202,7 @@ def power_cycle(data):
 
 
 def settings_auth():
-    # The 1280x800 virtual display and the Settings default window size are fixed.
-    assert g.screen("before-settings").startswith(b"P6\n1280 800\n")
+
     old = g.shell("timedatectl show -p Timezone --value")
     assert old == "UTC", old
     g.key("meta_l", "comma")
@@ -217,44 +216,29 @@ def settings_auth():
         ),
     )
 
-    def origin(label, color):
-        pixels = g.screen(label).split(b"\n", 3)[3]
-        index = pixels.find(bytes.fromhex(color) * 8)
-        if index >= 0 and index % 3 == 0:
-            return index // 3 % 1280, index // 3 // 1280
+    def widget(verb, name=""):
+        return as_joe(
+            "python3 -W ignore /usr/local/libexec/mundane-test-widgets "
+            + shlex.join([verb, name])
+        )
 
-    # Read coordinates after the entrance spring has reached the same pixel
-    # for several consecutive refreshes. A process can exist before it maps.
-    def stable_origin(label, color):
-        point = origin(label, color)
-        if point:
-            time.sleep(0.3)
-            return point if origin(label, color) == point else None
-
-    x, y = wait("settled Settings sidebar", lambda: stable_origin("settings", "161618"))
-
-    def within(dx, dy):
-        g.click((x + dx) / 1280, (y + dy) / 800)
-
-    within(86, 395)
-    time.sleep(0.6)
+    as_joe(
+        "gdbus call --session --dest org.a11y.Bus --object-path /org/a11y/bus --method org.freedesktop.DBus.Properties.Set org.a11y.Status IsEnabled '<true>'"
+    )
+    wait("Date & Time in Settings", lambda: "button Date & Time" in widget("list"))
+    widget("click", "Date & Time")
 
     def choose():
-        within(985, 194)
-        time.sleep(0.25)
-        within(370, 398)
+        wait("timezone control", lambda: "button Timezone" in widget("list"))
+        widget("click", "Timezone")
+        wait("Cairo in timezone list", lambda: "button Africa/Cairo" in widget("list"))
+        widget("click", "Africa/Cairo")
         wait(
-            "Settings requested Cairo",
-            lambda: "set-timezone Africa/Cairo" in g.shell("pgrep -a -x pkexec || :"),
-        )
-        wait(
-            "polkit password dialog",
-            lambda: g.screen("authorization").count(bytes.fromhex("fafafb")) > 80000,
+            "shell password prompt", lambda: "password text Password" in widget("list")
         )
 
     choose()
-    dx, dy = wait("settled dialog", lambda: stable_origin("cancel", "fafafb"))
-    g.click((dx + 510) / 1280, (dy + 218) / 800)
+    widget("click", "Cancel")
     wait("cancel dismissed request", lambda: not g.shell("pgrep -x pkexec || :"))
     assert g.shell("timedatectl show -p Timezone --value") == old
     choose()

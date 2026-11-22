@@ -3,11 +3,11 @@
 use crate::pages::{Page, PageState};
 use crate::theme;
 use crate::widgets::prompt;
-use mundane_settings_core::dbus::flatpak as backend;
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px, rgb,
+    div, px, rgb, AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Window,
 };
+use mundane_settings_core::dbus::flatpak as backend;
 use std::collections::HashSet;
 
 pub struct SoftwarePage {
@@ -88,11 +88,15 @@ impl SoftwarePage {
             let result = backend::list_remotes().await;
             weak.update(async_cx, |this, cx| {
                 this.state = match result {
-                    Ok(r) => PageState::Loaded { data: r, fetched_at: std::time::Instant::now() },
+                    Ok(r) => PageState::Loaded {
+                        data: r,
+                        fetched_at: std::time::Instant::now(),
+                    },
                     Err(e) => PageState::Error(e.to_string()),
                 };
                 cx.notify();
-            }).ok();
+            })
+            .ok();
         })
         .detach();
     }
@@ -132,7 +136,8 @@ impl SoftwarePage {
                     }
                 }
                 cx.notify();
-            }).ok();
+            })
+            .ok();
         })
         .detach();
     }
@@ -170,8 +175,18 @@ fn skeleton() -> gpui::Div {
         .flex()
         .flex_col()
         .gap_2()
-        .child(div().h(px(56.)).bg(rgb(theme::SURFACE)).rounded(px(10.)))
-        .child(div().h(px(56.)).bg(rgb(theme::SURFACE)).rounded(px(10.)))
+        .child(
+            div()
+                .h(px(56.))
+                .bg(rgb(theme::palette().panel))
+                .rounded(px(10.)),
+        )
+        .child(
+            div()
+                .h(px(56.))
+                .bg(rgb(theme::palette().panel))
+                .rounded(px(10.)),
+        )
 }
 
 fn error_view(msg: &str) -> gpui::Div {
@@ -180,9 +195,9 @@ fn error_view(msg: &str) -> gpui::Div {
         .px_4()
         .flex()
         .items_center()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
-        .text_color(rgb(theme::TEXT_MUTED))
+        .text_color(rgb(theme::palette().secondary))
         .child(format!("flatpak: {msg}"))
 }
 
@@ -194,7 +209,11 @@ fn remotes_view(
     cx: &mut Context<SoftwarePage>,
 ) -> gpui::Div {
     let mut col = div().flex().flex_col().gap_3();
-    col = col.child(div().text_color(rgb(theme::TEXT_MUTED)).child("Flatpak remotes"));
+    col = col.child(
+        div()
+            .text_color(rgb(theme::palette().secondary))
+            .child("Flatpak remotes"),
+    );
     for r in remotes {
         col = col.child(remote_row(r, in_flight.contains(&r.name), cx));
     }
@@ -204,28 +223,28 @@ fn remotes_view(
             div()
                 .px_4()
                 .py_2()
-                .text_color(rgb(theme::TEXT_MUTED))
+                .text_color(rgb(theme::palette().secondary))
                 .child(format!("Add remote failed: {err}")),
         );
     }
     col
 }
 
-fn remote_row(
-    r: &backend::Remote,
-    in_flight: bool,
-    cx: &mut Context<SoftwarePage>,
-) -> AnyElement {
+fn remote_row(r: &backend::Remote, in_flight: bool, cx: &mut Context<SoftwarePage>) -> AnyElement {
     let name = r.name.clone();
     let mut row = div()
         .id(SharedString::from(format!("remote-row:{}", name)))
+        .role(gpui::Role::Button)
+        .aria_label(format!("Toggle {name}"))
+        .tab_index(0)
+        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
         .flex()
         .flex_row()
         .items_center()
         .justify_between()
         .px_4()
         .py_3()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
         .cursor_pointer()
         .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -235,16 +254,28 @@ fn remote_row(
             div()
                 .flex()
                 .flex_col()
-                .child(div().text_color(rgb(theme::TEXT)).child(r.name.clone()))
-                .child(div().text_color(rgb(theme::TEXT_MUTED)).child(r.url.clone())),
+                .child(
+                    div()
+                        .text_color(rgb(theme::palette().text))
+                        .child(r.name.clone()),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(theme::palette().secondary))
+                        .child(r.url.clone()),
+                ),
         )
         .child(
             div()
-                .text_color(if r.enabled { rgb(theme::ACCENT) } else { rgb(theme::TEXT_MUTED) })
+                .text_color(if r.enabled {
+                    rgb(theme::palette().focus)
+                } else {
+                    rgb(theme::palette().secondary)
+                })
                 .child(if r.enabled { "enabled" } else { "disabled" }.to_string()),
         );
     if in_flight {
-        row = row.border_b_2().border_color(rgb(theme::ACCENT));
+        row = row.border_b_2().border_color(rgb(theme::palette().focus));
     }
     row.into_any_element()
 }
@@ -252,16 +283,31 @@ fn remote_row(
 fn add_remote_button(pending: bool, cx: &mut Context<SoftwarePage>) -> gpui::Div {
     let button = div()
         .id("add-remote")
+        .role(gpui::Role::Button)
+        .aria_label("Add remote")
+        .tab_index(0)
+        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
         .h(px(40.))
         .px_4()
         .flex()
         .items_center()
-        .bg(rgb(if pending { theme::SIDEBAR } else { theme::ACCENT }))
-        .text_color(rgb(theme::BG))
+        .bg(rgb(if pending {
+            theme::palette().panel
+        } else {
+            theme::palette().focus
+        }))
+        .text_color(rgb(theme::palette().surface))
         .rounded(px(8.))
         .cursor_pointer()
         .on_click(cx.listener(|this, _event, _window, cx| this.start_add_remote(cx)))
-        .child(if pending { "Adding…" } else { "+ Add remote…" }.to_string());
+        .child(
+            if pending {
+                "Adding…"
+            } else {
+                "+ Add remote…"
+            }
+            .to_string(),
+        );
 
     div()
         .flex()
@@ -270,11 +316,11 @@ fn add_remote_button(pending: bool, cx: &mut Context<SoftwarePage>) -> gpui::Div
         .mt_4()
         .px_4()
         .py_3()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
         .child(
             div()
-                .text_color(rgb(theme::TEXT_MUTED))
+                .text_color(rgb(theme::palette().secondary))
                 .child("Add a Flatpak remote (e.g. flathub-beta) — opens a name + URL prompt."),
         )
         .child(button)

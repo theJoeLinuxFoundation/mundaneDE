@@ -1,6 +1,6 @@
 //! System actions: streaming `nixos-rebuild switch --upgrade`.
 
-use crate::{Result, on_runtime};
+use crate::{on_runtime, Result};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 
@@ -13,8 +13,14 @@ pub enum LogLine {
 
 pub async fn run_upgrade() -> Result<mpsc::UnboundedReceiver<LogLine>> {
     on_runtime(async {
-        let mut cmd = tokio::process::Command::new("pkexec");
-        cmd.args(["nixos-rebuild", "switch", "--upgrade"]);
+        let os = crate::os_release::load().await?;
+        let mut cmd = if os.id.as_deref() == Some("joe") {
+            tokio::process::Command::new("mundane-packages")
+        } else {
+            let mut cmd = tokio::process::Command::new("pkexec");
+            cmd.args(["nixos-rebuild", "switch", "--upgrade"]);
+            cmd
+        };
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
         let mut child = cmd.spawn()?;

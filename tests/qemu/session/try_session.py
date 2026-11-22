@@ -9,7 +9,6 @@ import subprocess
 import sys
 import time
 
-from dependencies import agent
 from guest import Guest
 from machine import boot
 
@@ -26,8 +25,13 @@ parser.add_argument(
 args = parser.parse_args()
 cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
 run = Path(
-    os.environ.get("MUNDANE_TRY_DIR", cache / "mundane-try" / "desktop")
+    os.environ.get(
+        "MUNDANE_TRY_DIR",
+        cache / "mundane-try" / ("qualification" if args.headless else "desktop"),
+    )
 ).resolve()
+if args.headless and run == (cache / "mundane-try/desktop").resolve():
+    parser.error("choose a dedicated directory for headless tests")
 run.mkdir(mode=0o700, exist_ok=True, parents=True)
 guard = (run / "launcher.lock").open("a")
 fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -117,6 +121,7 @@ for path in [
             "prepare.py",
             "dependencies.py",
             "probe.py",
+            "shell_widgets.py",
             "org.joelinux.MundaneSessionTest.service",
         )
     ),
@@ -142,8 +147,6 @@ if install:
             str(binary),
             "--libseat",
             "/usr/lib/libseat.so.1",
-            "--agent",
-            str(agent("polkit-gnome")),
             "--settings",
             str(settings),
         ]

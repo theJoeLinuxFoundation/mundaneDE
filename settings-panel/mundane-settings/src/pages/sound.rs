@@ -4,11 +4,11 @@
 
 use crate::pages::{Page, PageState};
 use crate::theme;
-use mundane_settings_core::sound::{self as backend, AudioSink};
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px, rgb,
+    div, px, rgb, AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Window,
 };
+use mundane_settings_core::sound::{self as backend, AudioSink};
 use std::collections::HashSet;
 
 pub struct SoundPage {
@@ -18,7 +18,10 @@ pub struct SoundPage {
 
 impl SoundPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let s = Self { state: PageState::Empty, in_flight: Default::default() };
+        let s = Self {
+            state: PageState::Empty,
+            in_flight: Default::default(),
+        };
         s.spawn_refresh(cx);
         s
     }
@@ -28,11 +31,15 @@ impl SoundPage {
             let result = backend::list_sinks().await;
             weak.update(async_cx, |this, cx| {
                 this.state = match result {
-                    Ok(s) => PageState::Loaded { data: s, fetched_at: std::time::Instant::now() },
+                    Ok(s) => PageState::Loaded {
+                        data: s,
+                        fetched_at: std::time::Instant::now(),
+                    },
                     Err(e) => PageState::Error(e.to_string()),
                 };
                 cx.notify();
-            }).ok();
+            })
+            .ok();
         })
         .detach();
     }
@@ -69,7 +76,9 @@ impl Render for SoundPage {
         }
         let body: AnyElement = match &self.state {
             PageState::Loaded { data, .. } if data.is_empty() => empty_view().into_any_element(),
-            PageState::Loaded { data, .. } => sinks_view(data, &self.in_flight, cx).into_any_element(),
+            PageState::Loaded { data, .. } => {
+                sinks_view(data, &self.in_flight, cx).into_any_element()
+            }
             PageState::Error(e) => error_view(e).into_any_element(),
             _ => skeleton().into_any_element(),
         };
@@ -88,8 +97,18 @@ fn skeleton() -> gpui::Div {
         .flex()
         .flex_col()
         .gap_2()
-        .child(div().h(px(56.)).bg(rgb(theme::SURFACE)).rounded(px(10.)))
-        .child(div().h(px(56.)).bg(rgb(theme::SURFACE)).rounded(px(10.)))
+        .child(
+            div()
+                .h(px(56.))
+                .bg(rgb(theme::palette().panel))
+                .rounded(px(10.)),
+        )
+        .child(
+            div()
+                .h(px(56.))
+                .bg(rgb(theme::palette().panel))
+                .rounded(px(10.)),
+        )
 }
 
 fn empty_view() -> gpui::Div {
@@ -98,9 +117,9 @@ fn empty_view() -> gpui::Div {
         .px_4()
         .flex()
         .items_center()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
-        .text_color(rgb(theme::TEXT_MUTED))
+        .text_color(rgb(theme::palette().secondary))
         .child("No audio output devices detected.")
 }
 
@@ -110,9 +129,9 @@ fn error_view(msg: &str) -> gpui::Div {
         .px_4()
         .flex()
         .items_center()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
-        .text_color(rgb(theme::TEXT_MUTED))
+        .text_color(rgb(theme::palette().secondary))
         .child(format!("pactl: {msg}"))
 }
 
@@ -124,7 +143,7 @@ fn sinks_view(
     let mut col = div().flex().flex_col().gap_2();
     col = col.child(
         div()
-            .text_color(rgb(theme::TEXT_MUTED))
+            .text_color(rgb(theme::palette().secondary))
             .child("Output device"),
     );
     for s in sinks {
@@ -137,25 +156,33 @@ fn sink_row(s: &AudioSink, in_flight: bool, cx: &mut Context<SoundPage>) -> AnyE
     let name_owned = s.name.clone();
     let mut row = div()
         .id(SharedString::from(format!("sink:{}", s.name)))
+        .role(gpui::Role::Button)
+        .aria_label(s.description.clone())
+        .tab_index(0)
+        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
         .flex()
         .flex_row()
         .items_center()
         .justify_between()
         .px_4()
         .py_3()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(theme::SIDEBAR)))
+        .hover(|s| s.bg(rgb(theme::palette().panel)))
         .on_click(cx.listener(move |this, _e, _w, cx| this.make_default(name_owned.clone(), cx)))
         .child(
             div()
                 .flex()
                 .flex_col()
-                .child(div().text_color(rgb(theme::TEXT)).child(s.description.clone()))
                 .child(
                     div()
-                        .text_color(rgb(theme::TEXT_MUTED))
+                        .text_color(rgb(theme::palette().text))
+                        .child(s.description.clone()),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(theme::palette().secondary))
                         .child(format!(
                             "{}{}",
                             s.name,
@@ -167,11 +194,15 @@ fn sink_row(s: &AudioSink, in_flight: bool, cx: &mut Context<SoundPage>) -> AnyE
         )
         .child(
             div()
-                .text_color(if s.is_default { rgb(theme::ACCENT) } else { rgb(theme::TEXT_MUTED) })
+                .text_color(if s.is_default {
+                    rgb(theme::palette().focus)
+                } else {
+                    rgb(theme::palette().secondary)
+                })
                 .child(if s.is_default { "Default" } else { "" }.to_string()),
         );
     if in_flight {
-        row = row.border_b_2().border_color(rgb(theme::ACCENT));
+        row = row.border_b_2().border_color(rgb(theme::palette().focus));
     }
     row.into_any_element()
 }

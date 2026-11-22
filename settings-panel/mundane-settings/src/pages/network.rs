@@ -5,11 +5,11 @@
 use crate::pages::{Page, PageState};
 use crate::theme;
 use crate::widgets::prompt;
-use mundane_settings_core::dbus::network as backend;
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px, rgb,
+    div, px, rgb, AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Window,
 };
+use mundane_settings_core::dbus::network as backend;
 
 #[derive(Default, Clone)]
 pub struct NetworkData {
@@ -25,7 +25,11 @@ pub struct NetworkPage {
 
 impl NetworkPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let s = Self { state: PageState::Empty, connecting: None, last_error: None };
+        let s = Self {
+            state: PageState::Empty,
+            connecting: None,
+            last_error: None,
+        };
         s.spawn_refresh(cx);
         s
     }
@@ -40,7 +44,8 @@ impl NetworkPage {
                     fetched_at: std::time::Instant::now(),
                 };
                 cx.notify();
-            }).ok();
+            })
+            .ok();
         })
         .detach();
     }
@@ -122,9 +127,24 @@ fn skeleton() -> gpui::Div {
         .flex()
         .flex_col()
         .gap_2()
-        .child(div().h(px(56.)).bg(rgb(theme::SURFACE)).rounded(px(10.)))
-        .child(div().h(px(56.)).bg(rgb(theme::SURFACE)).rounded(px(10.)))
-        .child(div().h(px(56.)).bg(rgb(theme::SURFACE)).rounded(px(10.)))
+        .child(
+            div()
+                .h(px(56.))
+                .bg(rgb(theme::palette().panel))
+                .rounded(px(10.)),
+        )
+        .child(
+            div()
+                .h(px(56.))
+                .bg(rgb(theme::palette().panel))
+                .rounded(px(10.)),
+        )
+        .child(
+            div()
+                .h(px(56.))
+                .bg(rgb(theme::palette().panel))
+                .rounded(px(10.)),
+        )
 }
 
 fn data_view(
@@ -149,7 +169,7 @@ fn data_view(
             div()
                 .px_4()
                 .py_2()
-                .text_color(rgb(theme::TEXT_MUTED))
+                .text_color(rgb(theme::palette().secondary))
                 .child(format!("Couldn't connect: {e}")),
         );
     }
@@ -165,7 +185,10 @@ fn data_view(
 }
 
 fn section_header(label: &'static str) -> gpui::Div {
-    div().text_color(rgb(theme::TEXT_MUTED)).pt_2().child(label)
+    div()
+        .text_color(rgb(theme::palette().secondary))
+        .pt_2()
+        .child(label)
 }
 
 fn empty_card(message: &str) -> gpui::Div {
@@ -174,9 +197,9 @@ fn empty_card(message: &str) -> gpui::Div {
         .px_4()
         .flex()
         .items_center()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
-        .text_color(rgb(theme::TEXT_MUTED))
+        .text_color(rgb(theme::palette().secondary))
         .child(message.to_string())
 }
 
@@ -190,25 +213,29 @@ fn wifi_row(
     let is_connecting = connecting == Some(w.ssid.as_str());
     let any_pending = connecting.is_some();
     let chip = if is_connecting {
-        Some(("Connecting…", theme::ACCENT))
+        Some(("Connecting…", theme::palette().focus))
     } else if w.connected {
-        Some(("Connected", theme::ACCENT))
+        Some(("Connected", theme::palette().focus))
     } else if w.secured {
-        Some(("Secured", theme::TEXT_MUTED))
+        Some(("Secured", theme::palette().secondary))
     } else {
         None
     };
     let mut row = div()
         .id(SharedString::from(format!("wifi-row:{}", w.ssid)))
+        .role(gpui::Role::Button)
+        .aria_label(w.ssid.clone())
+        .tab_index(0)
+        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
         .flex()
         .flex_col()
         .gap_1()
         .px_4()
         .py_3()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(theme::SIDEBAR)))
+        .hover(|s| s.bg(rgb(theme::palette().panel)))
         .on_click(cx.listener(move |this, _e, _w, cx| {
             this.start_connect(ssid_for_listener.clone(), secured, cx);
         }))
@@ -218,18 +245,26 @@ fn wifi_row(
                 .flex_row()
                 .items_center()
                 .justify_between()
-                .child(div().text_color(rgb(theme::TEXT)).child(w.ssid.clone()))
-                .child(div().text_color(rgb(theme::TEXT_MUTED)).child(format!("{}%", w.strength))),
+                .child(
+                    div()
+                        .text_color(rgb(theme::palette().text))
+                        .child(w.ssid.clone()),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(theme::palette().secondary))
+                        .child(format!("{}%", w.strength)),
+                ),
         );
     if let Some((label, color)) = chip {
         row = row.child(div().text_color(rgb(color)).child(label.to_string()));
     }
     if is_connecting {
-        row = row.border_b_2().border_color(rgb(theme::ACCENT));
+        row = row.border_b_2().border_color(rgb(theme::palette().focus));
     }
     if any_pending && !is_connecting {
         // Subdue other rows visually while a connect is in flight.
-        row = row.text_color(rgb(theme::TEXT_MUTED));
+        row = row.text_color(rgb(theme::palette().secondary));
     }
     row.into_any_element()
 }
@@ -242,12 +277,16 @@ fn vpn_row(v: &backend::VpnConnection) -> gpui::Div {
         .justify_between()
         .px_4()
         .py_3()
-        .bg(rgb(theme::SURFACE))
+        .bg(rgb(theme::palette().panel))
         .rounded(px(10.))
         .child(div().child(v.name.clone()))
         .child(
             div()
-                .text_color(if v.active { rgb(theme::ACCENT) } else { rgb(theme::TEXT_MUTED)})
+                .text_color(if v.active {
+                    rgb(theme::palette().focus)
+                } else {
+                    rgb(theme::palette().secondary)
+                })
                 .child(if v.active { "active" } else { "inactive" }.to_string()),
         )
 }

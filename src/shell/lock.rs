@@ -60,6 +60,7 @@ impl Drop for Lock {
 }
 impl State {
     pub fn begin_lock(&mut self) {
+        self.desktop.pending_keys.clear();
         if self.desktop.lock.active {
             return;
         }

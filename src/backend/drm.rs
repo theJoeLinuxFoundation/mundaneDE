@@ -268,6 +268,7 @@ pub fn run_drm(config: MundaneConfig, notify: Option<&std::path::Path>) -> anyho
             match event {
                 SessionEvent::PauseSession => {
                     tracing::info!("seat paused");
+                    state.desktop.pending_keys.clear();
                     b.active = false;
                     libinput_context.suspend();
                     b.drm.pause();
@@ -343,9 +344,23 @@ impl DrmBackend {
         &mut self,
         state: &mut State,
         cmd: super::output_control::Command,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<String> {
         use super::output_control::{save, Command};
+        if !matches!(cmd,Command::Revert) {
+            anyhow::ensure!(self.active && !state.desktop.lock.active,"session is inactive or locked");
+        }
         match cmd {
+            Command::List => {
+                let mode = |m:WlMode| serde_json::json!({"width":m.size.w,"height":m.size.h,"refresh_hz": m.refresh as f64 / 1000.});
+                let mut outputs=Vec::new();
+                for h in self.heads.values(){
+                    let o=&h.head.output;
+                    let rotation=[0,90,180,270].into_iter().find(|deg|crate::outputs::rotation(*deg)==Some(o.current_transform())).unwrap_or(0);
+                    outputs.push(serde_json::json!({"name":o.name(),"current":o.current_mode().map(mode),"scale":o.current_scale().fractional_scale(),"rotation":rotation,"position":crate::outputs::position(o),"origin":[o.current_location().x,o.current_location().y],"connected":true,"primary":false,"modes":h.connector.modes().iter().map(|m|mode((*m).into())).collect::<Vec<_>>()}));
+                }
+                outputs.sort_by(|a,b|a["name"].as_str().cmp(&b["name"].as_str()));
+                return Ok(serde_json::to_string(&outputs)?);
+            }
             Command::Test {
                 name,
                 width,
@@ -448,7 +463,7 @@ impl DrmBackend {
             }
         }
         state.arrange_heads();
-        Ok(())
+        Ok("ok".into())
     }
     fn rescan(&mut self, state: &mut State) -> anyhow::Result<()> {
         for event in self.scanner.scan_connectors(&self.drm)? {

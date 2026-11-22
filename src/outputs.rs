@@ -428,11 +428,8 @@ impl State {
         }
     }
     pub fn animate(&mut self, dt: std::time::Duration) {
-        if self.config.reduced_motion {
-            for s in self.animation.springs_mut() {
-                s.x.snap_to_target();
-                s.y.snap_to_target();
-            }
+        if self.config.reduced_motion || self.desktop.reduce_motion {
+            self.animation.settle_all();
         } else {
             self.animation.tick(dt);
         }
