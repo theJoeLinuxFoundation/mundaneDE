@@ -104,6 +104,11 @@ and recover the previous layout. Check window bounds, cursor, focus and content
 in each state. Use virtual outputs for geometry and real DRM hardware for
 hotplug, modesetting, modifier import and scanout timing.
 
+Magnetic placement should go unnoticed during an ordinary drag. Verify the
+window follows the pointer until release, settles at a nearby edge or neighbour
+and stays put when released outside the attraction radius. Repeat with reduced
+motion enabled and use the same target immediately, without overshoot or a fade.
+
 **Spring and frame budgets.** Proposed targets are measured in a release DRM
 build on a recorded reference GPU/CPU, first at 1920×1080/60 Hz and then at
 120 Hz on a capable display. Script ten moving windows and repeat drag, snap
@@ -146,6 +151,16 @@ on the distribution's enforcing configuration.
 
 ## 5. Provide a shell, workspaces and a lock screen
 
+Preserve the bottom taskbar, Start menu, StatusNotifierItem tray and desktop
+icons. Show the user’s XDG Desktop directory, support keyboard selection and
+open items through their preferred handler. Provide minimize and maximize
+buttons on normal resizable windows. Agree decoration mode with each toolkit,
+configure GTK header bars and implement the controls on server-decorated
+windows. Test both kinds. Minimize to the taskbar, restore from it, maximize
+up to the taskbar and restore the original bounds. Launch from Start and from
+a desktop icon, and activate a tray item. Compare the default layout against
+the joe GNOME session at the same resolution. [Desktop announcement](https://joelinux.io/news/mundanede/)
+
 Deliver the panel, launcher, notification service, on-screen displays (OSDs)
 and system menu as restartable session components. Read installed desktop
 entries, match Wayland app IDs, honour MIME/URI handlers and use activation
@@ -176,6 +191,34 @@ displays, attach a third, terminate the locker, and verify coverage and
 input isolation until a recovered locker authenticates. Include a suspend/lid
 cycle with the session locked before sleep. Exercise service failures on a
 private test bus and repeat device actions on a laptop.
+
+### Upgrade and recovery status on the desktop
+
+The shell owns a persistent entry in the system menu and a notification when
+an upgrade is prepared or a failed upgrade has returned the machine to its
+previous system. Show these at login and refresh during the session, including
+when Packages is closed. Offer a normal, user-confirmed restart for a prepared
+upgrade. Keep a recovery notice available after its notification is dismissed.
+
+Request a versioned, unprivileged, machine-readable snapshot from dave. The
+shell and Packages should share the following meanings. The exact transport
+and command spelling belong to dave. [dave(8)](https://github.com/theJoeLinuxFoundation/joe-linux/blob/beta2/dave/share/dave.8)
+
+| dave operation | Data the desktop needs |
+| --- | --- |
+| `deployments list` and `status` | Stable IDs and display labels for bootable deployments, the running and next-boot IDs, and the durable prepared upgrade ID/target or an explicit empty value. A prepared upgrade is applied during shutdown. The next-boot ID alone does not establish preparation. |
+| `upgrade --check` | A read-only preview of available changes with package names, actions and old/new versions, an empty result for up-to-date, and a distinct failure result. A nonempty preview alone must never trigger the restart notice. |
+| Boot outcome | A durable last-upgrade event ID, attempted deployment/upgrade ID, actual running ID, outcome (succeeded, automatic fallback after failure, explicit rollback, or unknown) and a displayable reason when known. A manual rollback or a user selecting an older deployment must not produce a failed-upgrade alert. |
+
+Read a consistent snapshot at login, after resume and when dave signals a state
+change (a revision to poll is sufficient). Deduplicate notifications by upgrade
+or event ID across shell restarts. Request fixtures for preview only, prepared,
+successful boot, automatic fallback, manual rollback and unavailable/unsupported
+status. Test these without elevated privileges. Only prepared shows “Upgrade
+ready. Restart to apply”. Automatic fallback names the attempted and restored
+systems. Successful boot clears the pending notice. Treat unreadable or newer
+unsupported data as unavailable. Never infer a boot failure by comparing IDs or
+parsing translated CLI output.
 
 ## 6. Deliver portals that work outside GNOME Shell
 
@@ -282,7 +325,12 @@ distribution work. [joe Linux test infrastructure](https://github.com/theJoeLinu
 log in through GDM, open a file from a removable drive in its preferred app,
 edit and save it, use Firefox with sound and screen sharing, run an X11 app,
 lock, suspend, resume and log out. Repeat the protected operation checks under
-joe's enforcing security module. Test one multi-output hardware configuration
+joe's enforcing security module. Run joe’s existing `make test-desktop` application matrix on the candidate session
+in both logging and enforcing modes. In disposable images, stage an upgrade,
+see the pending notice, reboot successfully and see it clear. Exercise joe’s
+failed-boot recovery fixture and confirm the next login names the restored
+system without opening Packages. Check an explicit rollback separately.
+Test one multi-output hardware configuration
 and a VM. Confirm selecting GNOME at the greeter restores a working session
 with the same files and preferences. Publish pass/fail results and unresolved
 limitations before recommending a default change. Retire individual GNOME apps
