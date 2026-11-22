@@ -208,8 +208,8 @@ and [Settings shell](../settings-panel/shell.nix).
 | `/usr/bin/` | `mundane-de`, `mundane-settings`, `mundane-session`, `mundane-panel`. The first two are native executables. |
 | `/usr/share/wayland-sessions/` | `mundane.desktop`, generated with both `Exec` and `TryExec` pointing to `/usr/bin/mundane-session`. |
 | `/usr/lib/systemd/user/` | `mundane-session.target`, `mundane-ibus.service`. The launcher starts the target after publishing the session environment. |
-| `/usr/share/mundane/shell/` | `appearance.py`, `authentication.py`, `bluetooth.py`, `bus.py`, `cast.py`, `devices.py`, `panel.py`, `portals.py`, `quick_settings.py`, `reader.py`, `tray_menu.py`, `upgrades.py`. |
-| `/usr/share/glib-2.0/schemas/` | `50-mundane.gschema.override`. Run joe’s `glib-compile-schemas` trigger before sealing the image. |
+| `/usr/share/mundane/shell/` | `appearance.py`, `applications.py`, `authentication.py`, `bluetooth.py`, `bus.py`, `cast.py`, `devices.py`, `panel.py`, `portals.py`, `quick_settings.py`, `reader.py`, `tray_menu.py`, `upgrades.py`. |
+| `/usr/share/glib-2.0/schemas/` | `50-mundane.gschema.override`, `org.joelinux.mundane.shell.gschema.xml` (taskbar favourites). Run joe’s `glib-compile-schemas` trigger before sealing the image. |
 | `/usr/share/xdg-desktop-portal/` | `mundane-portals.conf`, `portals/mundane.portal`. |
 | `/usr/share/licenses/mundaneDE/` | `LICENSE`, `THIRD-PARTY-NOTICES.md`, `licenses/Smithay-MIT.txt`, `settings-panel/LICENSE`. Upstream crate licences accompany their sources in the archive. |
 

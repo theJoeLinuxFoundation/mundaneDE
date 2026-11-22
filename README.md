@@ -10,6 +10,8 @@ client-side decorations and supports IBus text composition. The GPUI settings pa
 It supports mixed refresh rates, fractional scaling and hotplug. The GDM session includes a bottom taskbar with Start, a tray, desktop icons and a PAM lock screen. Its desktop portals let Firefox share a display or a single window over PipeWire. The taskbar names each active share and lets you stop it.
 The [roadmap](ROADMAP.md) describes when mundaneDE can become the default joe Linux session.
 
+See the [desktop comparison with joe’s GNOME session](docs/parity.md) for everyday workflows and screenshots.
+
 ## Build and run in a window
 
 Start from the repository root in a graphical Linux session with Wayland or X11
@@ -34,6 +36,7 @@ example, `WAYLAND_DISPLAY=wayland-2 foot` with `foot` installed.
 | Move a window and snap it on release | Super or Alt + left drag |
 | Close the focused window | Super+Q |
 | Reload the wallpaper | Super+W |
+| Select a window on the current workspace | Hold Alt and press Tab or Shift+Tab, then release Alt |
 | Restore the last minimized window | Super+Tab |
 | Quit the compositor | Super+Shift+Q |
 

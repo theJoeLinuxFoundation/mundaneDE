@@ -20,7 +20,8 @@ from reader import Reader
 from appearance import Appearance
 import tray_menu
 from bluetooth import Bluetooth
-from quick_settings import QuickSettings, label as styled_label
+from quick_settings import QuickSettings, label as styled_label, icon_button
+from applications import Applications
 from devices import command, devices
 from upgrades import UpgradeNotices
 
@@ -99,6 +100,7 @@ class Panel:
         self.outputs = {}
         self.menu = None
         self.popup = None
+        self.switcher = None
         self.toast_id = None
         self.labels = {}
         self.toplevels = subprocess.Popen(
@@ -128,10 +130,7 @@ class Panel:
         self.upgrades = UpgradeNotices(
             Path(GLib.get_user_state_dir()) / "mundane" / "upgrade-notices.json"
         )
-        self.apps = sorted(
-            (a for a in Gio.AppInfo.get_all() if a.should_show()),
-            key=lambda a: a.get_display_name().casefold(),
-        )
+        self.catalog = Applications(self.apps_changed)
         self.desktop = Path(
             GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DESKTOP)
             or Path.home() / "Desktop"
@@ -184,6 +183,7 @@ class Panel:
                 bar, desk, *_ = self.outputs.pop(m)
                 bar.destroy()
                 desk.destroy()
+                self.hide_switcher()
                 self.dismiss()
         for m in monitors:
             if m in self.outputs:
@@ -209,7 +209,13 @@ class Panel:
             work.set_child(markers)
             work.connect("clicked", lambda _, m=m: self.overview(m))
             self.workspace_scroll(work)
-            row.append(tasks)
+            strip = Gtk.ScrolledWindow(
+                hexpand=True,
+                vscrollbar_policy=Gtk.PolicyType.NEVER,
+                hscrollbar_policy=Gtk.PolicyType.EXTERNAL,
+            )
+            strip.set_child(tasks)
+            row.append(strip)
             row.append(work)
             row.append(tray)
             clock = Gtk.Button()
@@ -307,6 +313,7 @@ class Panel:
             "system",
             "overview",
             "tray",
+            "app-windows",
             "power",
         ):
             self.dismiss()
@@ -341,6 +348,8 @@ class Panel:
             self.poll_dave()
         elif "osd" in data:
             self.volume(data["osd"])
+        elif "switcher" in data:
+            self.show_switcher(data)
         elif "workspace" in data:
             listed = [
                 {**self.labels[t["id"]], **t}
@@ -353,6 +362,54 @@ class Panel:
                 self.draw_tasks()
         return True
 
+    def hide_switcher(self):
+        if self.switcher:
+            self.switcher.destroy()
+            self.switcher = None
+
+    def show_switcher(self, data):
+        choices = data["switcher"]
+        if not choices or not self.outputs:
+            self.hide_switcher()
+            return
+        if not self.switcher:
+            monitor = next(
+                (m for m in self.outputs if m.get_connector() == data["output"]),
+                next(iter(self.outputs)),
+            )
+            self.switcher = self.window(
+                monitor, "mundane-switcher", Layer.Layer.OVERLAY, []
+            )
+            self.switcher.set_title("Switch windows")
+        selected = data["selected"]
+        box = vbox(8)
+        box.set_css_classes(["menu"])
+        box.set_size_request(290, -1)
+        box.append(styled_label("Switch windows", "menu-heading"))
+        start = data["start"]
+        for index, title in enumerate(choices, start):
+            text = title or "Untitled window"
+            row = Gtk.Box(spacing=10, css_classes=["switch-row"])
+            icon = Gtk.Image.new_from_icon_name("object-select-symbolic")
+            icon.set_opacity(1 if index == selected else 0)
+            row.append(icon)
+            row.append(Gtk.Label(label=text, xalign=0, ellipsize=3, max_width_chars=36))
+            if index == selected:
+                row.add_css_class("selected")
+            box.append(row)
+        box.append(
+            styled_label(
+                f"{selected + 1} of {data['count']}  ·  Release Alt to switch",
+                "menu-caption",
+            )
+        )
+        self.switcher.set_child(box)
+        self.switcher.present()
+        self.switcher.announce(
+            choices[selected - start] or "Untitled window",
+            Gtk.AccessibleAnnouncementPriority.MEDIUM,
+        )
+
     def tick(self):
         self.send("list")
         stamp = datetime.datetime.now().strftime("%H:%M")
@@ -361,7 +418,7 @@ class Panel:
         return True
 
     def draw_tasks(self):
-        for _, _, box, _, _, work, _ in self.outputs.values():
+        for m, (_, _, box, _, _, work, _) in self.outputs.items():
             clear(box)
             work.set_tooltip_text(f"Workspace {self.workspace} · Overview")
             work.update_property(
@@ -379,25 +436,68 @@ class Panel:
                     f"Workspace {n} · {count} windows"
                     + (" · Current" if n == self.workspace else "")
                 )
-            for t in self.tasks:
-                if t["workspace"] != self.workspace:
-                    continue
-                try:
-                    app = (
-                        Gio.DesktopAppInfo.new(t["app"] + ".desktop")
-                        if t["app"]
-                        else None
-                    )
-                except TypeError:
-                    app = None
+            pins = self.catalog.pinned()
+            groups = {i: [] for i in pins if i in self.catalog.by_id}
+            other = []
+            for task in self.tasks:
+                ident = self.catalog.lookup.get(
+                    task["app"].removesuffix(".desktop").casefold()
+                )
+                if ident in groups:
+                    groups[ident].append(task)
+                elif task["workspace"] == self.workspace:
+                    other.append((task, self.catalog.by_id.get(ident)))
+            for ident, windows in groups.items():
+                app = self.catalog.by_id[ident]
+                name = app.get_display_name()
+                b = icon_button(
+                    name,
+                    "application-x-executable-symbolic",
+                    lambda a=app, items=windows, m=m: self.open_pinned(m, a, items),
+                )
+                if app.get_icon():
+                    b.get_child().set_from_gicon(app.get_icon())
+                if windows:
+                    b.add_css_class("running")
+                    b.set_tooltip_text(f"{name} · {len(windows)} open")
+                box.append(b)
+            for task, app in other:
                 b = button(
-                    t["title"] or t["app"],
-                    lambda t=t: self.send("activate " + t["id"]),
+                    task["title"] or task["app"],
+                    lambda t=task: self.send("activate " + t["id"]),
                     app.get_icon() if app else "application-x-executable-symbolic",
                 )
-                if t["minimized"]:
+                if task["minimized"]:
                     b.set_opacity(0.7)
                 box.append(b)
+
+    def apps_changed(self):
+        self.draw_tasks()
+        if self.page == "start":
+            self.populate_start()
+
+    def open_pinned(self, monitor, app, windows):
+        if not windows:
+            self.launch(app)
+        elif len(windows) == 1:
+            self.task_action("activate " + windows[0]["id"])
+        else:
+            if self.toggled(monitor, "app-windows"):
+                return
+            box = self.open(monitor, "app-windows")
+            self.menu.set_title(app.get_display_name())
+            box.append(styled_label(app.get_display_name(), "menu-heading"))
+            rows = vbox(2)
+            for t in windows:
+                rows.append(
+                    button(
+                        f"{t['title'] or t['app']} · Desk {t['workspace']}",
+                        lambda t=t: self.task_action("activate " + t["id"]),
+                    )
+                )
+            box.append(scrolled(rows, min(220, 42 * len(windows))))
+            self.menu.present()
+            rows.get_first_child().grab_focus()
 
     def refresh_trays(self, *_):
         if not hasattr(self, "bus"):
@@ -473,6 +573,7 @@ class Panel:
                 self.tray_subscription = None
             old, self.menu = self.menu, None
             self.page = None
+            self.populate_start = None
             old.destroy()
             if hasattr(self, "portals") and self.portals.choosing:
                 self.portals.finish(self.portals.choosing, 1)
@@ -549,36 +650,82 @@ class Panel:
         search.update_property([Gtk.AccessibleProperty.LABEL], ["Search applications"])
         self.menu.set_title("Start menu")
         box.append(search)
-        rows = vbox(1)
-        box.append(scrolled(rows, 340))
+        selection = (
+            "Favourites"
+            if self.catalog.matches("Favourites", "")
+            else "All applications"
+        )
+        category = Gtk.ToggleButton()
+        box.append(category)
+        rows = vbox(2)
+        scroll = scrolled(rows, -1)
+        scroll.set_max_content_height(min(340, max(90, m.get_geometry().height - 240)))
+        scroll.set_propagate_natural_height(True)
+        box.append(scroll)
+
+        def choose(name):
+            nonlocal selection
+            selection = name
+            category.set_active(False)
+            category.grab_focus()
 
         def populate(*_):
             clear(rows)
-            query = search.get_text().casefold()
-            for app in self.apps:
-                if (
-                    query
-                    not in (
-                        app.get_display_name() + " " + (app.get_id() or "")
-                    ).casefold()
-                ):
-                    continue
+            query = search.get_text().strip()
+            category.set_sensitive(not query)
+            category.set_label("Search results" if query else selection + "  ▾")
+            category.update_property(
+                [Gtk.AccessibleProperty.LABEL],
+                ["Search results" if query else "Browse categories, " + selection],
+            )
+            if category.get_active() and not query:
+                for name in [
+                    "Favourites",
+                    "All applications",
+                    *sorted(self.catalog.groups),
+                ]:
+                    rows.append(button(name, lambda n=name: choose(n)))
+                return
+            pins = self.catalog.pinned()
+            for app in self.catalog.matches(selection, query):
+                ident, name = app.get_id(), app.get_display_name()
+                row = Gtk.Box(spacing=5)
+                launch = button(name, lambda a=app: self.launch(a), app.get_icon())
+                launch.get_child().set_halign(Gtk.Align.START)
+                launch.set_hexpand(True)
+                row.append(launch)
+                pinned = ident in pins
+                action = ("Unpin " if pinned else "Pin ") + name
+                row.append(
+                    icon_button(
+                        action,
+                        "starred-symbolic" if pinned else "non-starred-symbolic",
+                        lambda i=ident: self.catalog.toggle(i),
+                    )
+                )
+                rows.append(row)
+            if not rows.get_first_child():
                 rows.append(
-                    button(
-                        app.get_display_name(),
-                        lambda a=app: self.launch(a),
-                        app.get_icon(),
+                    styled_label(
+                        "No matching applications"
+                        if query
+                        else "No favourite applications",
+                        "menu-caption",
                     )
                 )
 
+        self.populate_start = populate
         populate()
+        category.connect("toggled", populate)
         search.connect("search-changed", populate)
-        search.connect(
-            "activate",
-            lambda *_: (
-                rows.get_first_child() and rows.get_first_child().emit("clicked")
-            ),
-        )
+
+        def launch_first(*_):
+            # SearchEntry debounces search-changed; Enter can arrive before it.
+            matches = self.catalog.matches(selection, search.get_text())
+            if matches:
+                self.launch(matches[0])
+
+        search.connect("activate", launch_first)
         box.append(
             button("Window overview", lambda: self.overview(m), "view-grid-symbolic")
         )

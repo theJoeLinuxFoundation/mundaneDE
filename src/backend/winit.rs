@@ -288,6 +288,9 @@ impl State {
                                 return FilterResult::Intercept(());
                             }
                         }
+                        if !press && state.desktop.switcher_keys.remove(&event.key_code().raw()) {
+                            return FilterResult::Intercept(());
+                        }
                         if state.desktop.lock.active {
                             return FilterResult::Forward;
                         }
@@ -303,6 +306,10 @@ impl State {
                             state.shell_message(&serde_json::json!({"serial":u32::from(serial),"subscription":state.desktop.monitor.subscription,
                                 "key":[!press,mask,sym,xkbcommon::xkb::keysym_to_utf32(handle.modified_sym()),code]}));
                             if grab {return FilterResult::Intercept(());}
+                        }
+                        if state.switcher_key(sym, mods, press) {
+                            state.desktop.switcher_keys.insert(event.key_code().raw());
+                            return FilterResult::Intercept(());
                         }
                         if state.window_menu.is_some() {
                             if press {
@@ -437,6 +444,11 @@ impl State {
                     return;
                 }
                 if !self.desktop.lock.active && button_state == ButtonState::Pressed {
+                    if self.desktop.switcher.is_some() {
+                        self.finish_switcher(false);
+                        self.desktop.dismissed_buttons.insert(button);
+                        return;
+                    }
                     if let Some(menu) = &self.desktop.menu_surface {
                         let inside = self.hit_layer(self.cursor_location, true)
                             .is_some_and(|(_, _, layer)| layer.wl_surface() == menu);

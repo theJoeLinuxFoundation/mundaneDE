@@ -64,6 +64,7 @@ impl State {
         if self.desktop.lock.active {
             return;
         }
+        self.finish_switcher(false);
         self.revoke_capture(None);
         self.shell_message(&serde_json::json!({"locked":true}));
         self.generation += 1;

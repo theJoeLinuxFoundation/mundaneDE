@@ -1,0 +1,8 @@
+<schemalist>
+  <schema id="org.joelinux.mundane.shell" path="/org/joelinux/mundane/shell/">
+    <key name="favorite-apps" type="as">
+      <default>['firefox.desktop','org.gnome.Nautilus.desktop','org.gnome.Terminal.desktop','org.gnome.TextEditor.desktop','org.gnome.Calculator.desktop']</default>
+      <summary>Pinned desktop entries in taskbar order</summary>
+    </key>
+  </schema>
+</schemalist>

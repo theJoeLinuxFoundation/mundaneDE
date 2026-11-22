@@ -60,7 +60,10 @@ for node in walk(Atspi.get_desktop(0)):
                 sys.exit(0)
         except GLib.Error:
             continue
-    elif name == " ".join(names) and verb == "state" and role != "label":
+    elif name == " ".join(names) and (
+        (verb == "state" and role != "label")
+        or (verb == "frame-state" and role == "frame")
+    ):
         print(" ".join(v.value_nick for v in node.get_state_set().get_states()))
         sys.exit(0)
     elif (

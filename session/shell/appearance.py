@@ -191,6 +191,9 @@ class Appearance:
  .bar .desk-marker {{background:{surface};color:{muted};border:1px solid {edge};border-radius:6px;min-width:18px;padding:1px 2px;transition:{transition};}}
  .bar .desk-marker.occupied {{border-bottom:3px solid {fg};}}
  .bar .desk-marker.current {{background:{selected};color:{ink};border:2px solid {ink};font-weight:700;}}
+ .bar button.running {{border-bottom:3px solid {ink if not contrast else fg};}}
+ .switch-row {{padding:7px 10px;border-radius:7px;}}
+ .switch-row.selected {{background:{selected};color:{ink};}}
  .desk-number {{font-size:1.4em;font-weight:700;}}
 button:focus-visible,entry:focus-visible {{outline:3px solid {"#ffff00" if contrast else "#" + accent};outline-offset:-3px;}}
 """

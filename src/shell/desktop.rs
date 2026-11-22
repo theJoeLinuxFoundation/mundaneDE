@@ -50,6 +50,8 @@ pub struct Desktop {
     inhibitors: Vec<WlSurface>,
     pub presented: HashMap<Output, smithay::backend::renderer::element::RenderElementStates>,
     pub lock: Lock,
+    pub switcher: Option<super::switcher::Switcher>,
+    pub switcher_keys: std::collections::HashSet<u32>,
     pub menu_surface: Option<WlSurface>,
     previous_menu_focus: Option<crate::focus::KeyboardFocus>,
     pub dismissed_buttons: std::collections::HashSet<u32>,
@@ -84,6 +86,8 @@ impl Desktop {
             presented: HashMap::new(),
             lock: Lock::new(dh),
             menu_surface: None,
+            switcher: None,
+            switcher_keys: Default::default(),
             previous_menu_focus: None,
             dismissed_buttons: Default::default(),
             tasks: HashMap::new(),
@@ -164,6 +168,7 @@ impl State {
         }
     }
     pub fn forget_task(&mut self, w: &Window) {
+        self.switcher_lost_window(w);
         if let Some(task) = self.desktop.tasks.remove(w) {
             self.revoke_capture(Some(&crate::capture::Source::Window(
                 task.handle.identifier(),
@@ -232,6 +237,7 @@ impl State {
     }
     pub fn switch_workspace(&mut self, n: u8) {
         if (1..=4).contains(&n) && self.desktop.workspace != n {
+            self.finish_switcher(false);
             self.desktop.showing_desktop = false;
             if let Some(old) = self.desktop.transition.take() {
                 self.animation.remove_spring(old.spring);
@@ -434,11 +440,13 @@ impl State {
         if !self.desktop.lock.active
             && l.cached_state().keyboard_interactivity == KeyboardInteractivity::Exclusive
         {
+            self.finish_switcher(false);
             if matches!(
                 l.namespace(),
                 "mundane-start"
                     | "mundane-system"
                     | "mundane-overview"
+                    | "mundane-app-windows"
                     | "mundane-tray"
                     | "mundane-power"
             ) {

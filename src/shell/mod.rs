@@ -11,6 +11,7 @@ pub(crate) mod decorations;
 pub(crate) mod desktop;
 pub(crate) mod interaction;
 mod layout;
+mod switcher;
 pub(crate) mod lock;
 pub(crate) mod menu;
 mod protocols;
