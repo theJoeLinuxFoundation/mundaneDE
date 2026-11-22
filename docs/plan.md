@@ -248,25 +248,38 @@ previous system. Show these at login and refresh during the session, including
 when Packages is closed. Offer a normal, user-confirmed restart for a prepared
 upgrade. Keep a recovery notice available after its notification is dismissed.
 
-Request a versioned, unprivileged, machine-readable snapshot from dave. The
-shell and Packages should share the following meanings. The exact transport
-and command spelling belong to dave. [dave(8)](https://github.com/theJoeLinuxFoundation/joe-linux/blob/beta2/dave/share/dave.8)
+Run `dave status --json` as the session user at login and after resume, then
+poll its opaque `revision` for changes. In dave 0.4.0-r3 on the `dave-json`
+branch, `dave-status.service` publishes the snapshot at boot and privileged
+dave operations refresh it after changes. Read `dave.status/1` from stdout.
+Ignore added fields. For an error, unsupported schema or incomplete snapshot,
+mark status unavailable and retry without issuing or acknowledging a notice.
+An unmanaged system has no deployment notices. [dave(8), JSON](https://github.com/theJoeLinuxFoundation/joe-linux/blob/d5c1bfab75d61a3d8492ddd09e0b7cc62e425979/dave/share/dave.8#L309) · [Status types and outcome rules](https://github.com/theJoeLinuxFoundation/joe-linux/blob/d5c1bfab75d61a3d8492ddd09e0b7cc62e425979/dave/src/answers.zig#L174)
 
-| dave operation | Data the desktop needs |
+| State in a complete, managed snapshot | Shell behaviour |
 | --- | --- |
-| `deployments list` and `status` | Stable IDs and display labels for bootable deployments, the running and next-boot IDs, and the durable prepared upgrade ID/target or an explicit empty value. A prepared upgrade is applied during shutdown. The next-boot ID alone does not establish preparation. |
-| `upgrade --check` | A read-only preview of available changes with package names, actions and old/new versions, an empty result for up-to-date, and a distinct failure result. A nonempty preview alone must never trigger the restart notice. |
-| Boot outcome | A durable last-upgrade event ID, attempted deployment/upgrade ID, actual running ID, outcome (succeeded, automatic fallback after failure, explicit rollback, or unknown) and a displayable reason when known. A manual rollback or a user selecting an older deployment must not produce a failed-upgrade alert. |
+| `prepared_upgrade` is present | Show “Upgrade ready, restart to apply” with its `summary`, `install` and `remove` counts. Clear the entry when the value returns to null. A read-only `dave upgrade --check --json` preview belongs to Packages and cannot raise this notice. |
+| `last_upgrade.outcome == "fallback"` | Report that deployment `last_upgrade.deployment` failed and the machine returned to deployment `running`. Show the supplied `message` in the details. Only dave classifies exhausted systemd-boot attempts. |
+| `not_running`, `checking`, `succeeded`, `unknown`, or null `last_upgrade` | Suppress recovery alerts, including after a manual rollback or boot-menu choice. `not_applied` can show its reason in the menu as a shutdown application failure. |
 
-Read a consistent snapshot at login, after resume and when dave signals a state
-change (a revision to poll is sufficient). Deduplicate notifications by upgrade
-or event ID across shell restarts. Request fixtures for preview only, prepared,
-successful boot, automatic fallback, manual rollback and unavailable/unsupported
-status. Test these without elevated privileges. Only prepared shows “Upgrade
-ready. Restart to apply”. Automatic fallback names the attempted and restored
-systems. Successful boot clears the pending notice. Treat unreadable or newer
-unsupported data as unavailable. Never infer a boot failure by comparing IDs or
-parsing translated CLI output.
+Use `running`, `next_boot` and the `deployments` records (health `good`,
+`untested`, `failed` or null) for details. Comparing IDs or health cannot
+establish an automatic fallback. Store the delivered fallback’s `event` per
+user across shell restarts. Seeing the same event in `checking` must leave a
+later fallback eligible for notification.
+
+The prepared object lacks a stable identity. Show one notification per
+observed period of preparation and retain the menu entry throughout. If a
+staged upgrade is replaced before the next poll by another with identical
+summary and counts, the shell cannot distinguish them. A staged-plan digest
+would allow exact once-per-preparation delivery in that case.
+
+**Acceptance.** With Packages closed, exercise preview, prepared, successful
+boot, manual rollback and automatic fallback. Check the attempted and restored
+IDs against joe’s deployment VM scenarios. Restart the shell and repeat a poll
+after dismissal. The system menu retains the current state and a delivered
+event stays quiet. Also exercise incomplete, unavailable and unsupported data
+as an ordinary user. [Deployment VM scenarios](https://github.com/theJoeLinuxFoundation/joe-linux/blob/d5c1bfab75d61a3d8492ddd09e0b7cc62e425979/tests/vm/deployments.tomlx)
 
 ## 6. Deliver portals that work outside GNOME Shell
 
