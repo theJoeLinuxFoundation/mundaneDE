@@ -28,7 +28,6 @@ use smithay::desktop::Window;
 use smithay::input::pointer::{CursorImageAttributes, CursorImageStatus};
 use smithay::wayland::compositor::with_states;
 
-use crate::animation::SpringId;
 use crate::state::State;
 
 render_elements! {
@@ -61,6 +60,17 @@ pub fn collect_elements(
         elements.extend(cursor_elements(renderer, state));
     }
 
+    if let Some(icon) = &state.dnd_icon {
+        let icon_elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+            render_elements_from_surface_tree(renderer, icon, state.cursor_location.to_physical_precise_round(1.0), 1.0, 1.0, Kind::Unspecified);
+        elements.extend(icon_elements.into_iter().map(MundaneRenderElement::from));
+    }
+    if let Some(menu) = &state.window_menu {
+        if let Ok(element) = MemoryRenderBufferRenderElement::from_buffer(renderer,
+            menu.origin.to_f64().to_physical(1.0), &menu.buffer, None, None, None, Kind::Unspecified) {
+            elements.push(MundaneRenderElement::from(element));
+        }
+    }
     // Snap-preview ghost: shown only during an interactive drag when the snap target
     // would move the window. Drawn above windows so the user sees where it'll land.
     // Output scale is 1, so logical and physical coordinates coincide and we can
@@ -128,21 +138,11 @@ fn cursor_elements(renderer: &mut GlesRenderer, state: &State) -> Vec<MundaneRen
                 .map(MundaneRenderElement::from)
                 .collect()
         }
-        // Named / default cursor → the built-in arrow (hotspot at its top-left tip).
-        //
-        // We rebuild the `MemoryRenderBuffer` every frame (it's a 14×21 RGBA buffer — about
-        // 1 KB to re-upload). That gives the element a fresh `Id` every frame, so the
-        // [`OutputDamageTracker`] treats the previous frame's cursor as *gone* (damaging its
-        // last geometry) and this frame's cursor as *new* (damaging its current geometry).
-        // The result is reliable damage at both the old and new positions — no trails.
-        //
-        // [`OutputDamageTracker`]: smithay::backend::renderer::damage::OutputDamageTracker
-        _ => {
-            let buffer = crate::cursor::build_cursor();
+        CursorImageStatus::Named(_) => {
             match MemoryRenderBufferRenderElement::from_buffer(
                 renderer,
-                pos.to_physical(1.0),
-                &buffer,
+                (pos - state.named_cursor.hotspot.to_f64()).to_physical(1.0),
+                &state.named_cursor.buffer,
                 None,
                 None,
                 None,
@@ -160,10 +160,20 @@ fn cursor_elements(renderer: &mut GlesRenderer, state: &State) -> Vec<MundaneRen
 
 /// Copy each spring's current position into its window's location in the [`Space`].
 pub fn sync_spring_positions(state: &mut State) {
-    let pairs: Vec<(Window, SpringId)> = state.wm.mapped_windows().collect();
-    for (window, id) in pairs {
-        if let Some((x, y)) = state.animation.spring(id).map(|s| s.rounded_position()) {
-            state.space.map_element(window, (x, y), false);
+    // Space::map_element also raises the window. Preserve the stack when a
+    // spring moves underneath another window, including a rootless X11 window.
+    let order: Vec<_> = state.space.elements().cloned().collect();
+    let mut reordered = false;
+    for window in order {
+        let position = state.wm.spring_id(&window).and_then(|id| state.animation.spring(id))
+            .map(|s| s.rounded_position().into());
+        match position {
+            Some(pos) if Some(pos) != state.space.element_location(&window) => {
+                state.space.map_element(window, pos, false);
+                reordered = true;
+            }
+            _ if reordered => state.space.raise_element(&window, false),
+            _ => {}
         }
     }
 }

@@ -87,7 +87,7 @@ def client_frame(frame, requested):
     return all(pixels.startswith(row, first + y * width * 3) for y in range(h))
 
 
-def scenario(base, binary, gpu, env):
+def scenario(base, binary, gpu, env, everyday):
     host_log = base / "sway.log"
     server_log = base / "mundane.log"
     trace = base / "client.log"
@@ -120,7 +120,11 @@ def scenario(base, binary, gpu, env):
         def swaymsg(*cmd):
             return json.loads(run(["swaymsg", "-s", str(ipc), "-r", *cmd], host_client))
 
-        server = launch([binary, "--winit"], server_log, host_client)
+        if everyday:
+            from everyday import prepare_ibus
+            prepare_ibus(base, host_client, launch)
+        server = launch([binary, "--winit"], server_log, dict(host_client, WAYLAND_DEBUG="client") if everyday else host_client)
+
 
         def ready():
             return re.search(r"winit backend running on WAYLAND_DISPLAY=(wayland-\d+)", server_log.read_text())
@@ -169,6 +173,9 @@ def scenario(base, binary, gpu, env):
         assert configure and re.search(rf"ack_configure\({configure[1]}\)", protocol[configure.end():])
         for w, h in [(120, 80), (200, 110)]:
             assert re.search(rf"create_buffer\([^\n]+, {w}, {h},", protocol), f"missing {w}x{h} shm buffer"
+        if everyday:
+            from everyday import exercise
+            exercise(base, binary, inner, host_client, launch, capture, background, server.pid)
         assert swaymsg(f"[pid={server.pid}]", "kill")[0]["success"]
         assert server.wait(timeout=5) == 0
         log = server_log.read_text()
@@ -183,7 +190,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gpu", metavar="RENDER_NODE", help="test an isolated NVIDIA GBM output")
     parser.add_argument("--binary", type=Path, default=ROOT / "target/debug/mundane-de")
+    parser.add_argument("--everyday", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.everyday and (Path("/proc/1/comm").read_text().strip() != "bwrap" or Path("/run/user").exists() or Path("/dev/dri").exists()
+                          or Path("/sys/class/net").exists()):
+        parser.error("use everyday.sh to create the private X11, network and device namespaces")
     if not __debug__:
         parser.error("run without -O so the test assertions are enabled")
     if not args.binary.is_file():
@@ -218,7 +229,7 @@ def main():
                 break
         env.update(LIBGL_ALWAYS_SOFTWARE="1", GALLIUM_DRIVER="llvmpipe")
     env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + str(Path(env["XDG_RUNTIME_DIR"]) / "bus")
-    scenario(base, args.binary.resolve(), args.gpu, env)
+    scenario(base, args.binary.resolve(), args.gpu, env, args.everyday)
 
 
 if __name__ == "__main__":

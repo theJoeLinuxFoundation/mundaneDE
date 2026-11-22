@@ -5,6 +5,15 @@
 //! Smithay-managed protocols (compositor, shm, xdg-shell, seat, data-device, output) to
 //! this state; the `delegate_*!` macros generate the dispatch glue.
 
+use smithay::desktop::PopupManager;
+use smithay::reexports::wayland_server::Resource;
+use smithay::utils::Serial;
+use smithay::wayland::selection::data_device::set_data_device_focus;
+use smithay::wayland::selection::primary_selection::{set_primary_focus, PrimarySelectionState};
+use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
+use smithay::wayland::text_input::TextInputManagerState;
+use smithay::wayland::xdg_activation::XdgActivationState;
+use std::collections::VecDeque;
 use std::os::unix::io::OwnedFd;
 use std::time::Instant;
 
@@ -13,8 +22,10 @@ use smithay::desktop::{Space, Window};
 use smithay::input::pointer::CursorImageStatus;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::output::{Mode, Output, PhysicalProperties};
-use smithay::reexports::calloop::LoopSignal;
-use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason, GlobalId};
+use smithay::reexports::calloop::{LoopHandle, LoopSignal, RegistrationToken};
+use smithay::reexports::wayland_server::backend::{
+    ClientData, ClientId, DisconnectReason, GlobalId,
+};
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, DisplayHandle};
@@ -25,7 +36,9 @@ use smithay::wayland::output::{OutputHandler, OutputManagerState};
 use smithay::wayland::selection::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
 };
-use smithay::wayland::selection::SelectionHandler;
+use smithay::wayland::xwayland_shell::XWaylandShellState;
+use smithay::xwayland::{X11Wm, XWaylandClientData};
+
 use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{
@@ -52,6 +65,7 @@ pub struct BackendIdentity {
 
 /// An in-progress interactive window move (Super + left drag).
 pub struct MoveState {
+    pub client_grab: bool,
     /// The window being dragged.
     pub window: Window,
     /// Pointer-minus-window-origin captured at grab start, so the window tracks the
@@ -65,18 +79,20 @@ pub struct MoveState {
 }
 
 /// Per-client state required by the compositor protocol.
-#[derive(Default)]
 pub struct ClientState {
+    pub on_exit: calloop::ping::Ping,
     pub compositor_state: CompositorClientState,
+    pub role: crate::shell::services::Role,
 }
 
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) { self.on_exit.ping(); }
 }
 
 pub struct State {
     pub display_handle: DisplayHandle,
+    pub client_exit: calloop::ping::Ping,
 
     // Wayland protocol globals.
     pub compositor_state: CompositorState,
@@ -85,6 +101,19 @@ pub struct State {
     pub seat_state: SeatState<Self>,
     pub data_device_state: DataDeviceState,
     pub seat: Seat<Self>,
+    pub handle: LoopHandle<'static, Self>,
+    pub xwayland_shell: XWaylandShellState,
+    pub xwm: Option<X11Wm>,
+    pub native_offers: [Option<Vec<String>>; 2],
+    pub x11_waiters: Vec<std::os::unix::net::UnixStream>,
+    pub xserver: Option<(RegistrationToken, u32)>,
+    pub popups: PopupManager,
+    pub primary: PrimarySelectionState,
+    pub clipboard_control: smithay::wayland::selection::ext_data_control::DataControlState,
+    pub services: Vec<crate::shell::services::Helper>,
+    pub activation: XdgActivationState,
+    pub minimized: Vec<Window>,
+    pub recent_input: VecDeque<(Serial, ClientId, Instant)>,
     // Retained to keep the wl_output / xdg-output manager globals alive.
     #[allow(dead_code)]
     pub output_manager_state: OutputManagerState,
@@ -101,9 +130,8 @@ pub struct State {
     pub wallpaper: WallpaperManager,
     pub config: MundaneConfig,
 
-    // The current cursor image requested by clients/seat. The built-in arrow is rebuilt
-    // each frame in `render::cursor_elements` so the [`OutputDamageTracker`] sees a fresh
-    // `Id` and correctly damages both the old and new positions on every move.
+    // Cache the themed buffer until the requested shape changes.
+    pub named_cursor: crate::cursor::NamedCursor,
     pub cursor_status: CursorImageStatus,
     /// Authoritative pointer position. Updated for every motion event regardless of any
     /// in-progress interactive grab; the seat's `pointer.current_location()` can't serve as
@@ -114,6 +142,9 @@ pub struct State {
     pub cursor_location: Point<f64, Logical>,
 
     // Interactive move (manual grab — see [`MoveState`]).
+    pub window_menu: Option<crate::shell::menu::WindowMenu>,
+    pub dnd_icon: Option<WlSurface>,
+    pub resize: Option<crate::shell::interaction::Resize>,
     pub move_state: Option<MoveState>,
 
     // Loop control / timing.
@@ -132,10 +163,14 @@ impl State {
         config: MundaneConfig,
         identity: BackendIdentity,
         loop_signal: LoopSignal,
+        handle: LoopHandle<'static, Self>,
         socket_name: String,
     ) -> anyhow::Result<Self> {
         let compositor_state = CompositorState::new::<Self>(dh);
         let xdg_shell_state = XdgShellState::new::<Self>(dh);
+        XdgDecorationState::new::<Self>(dh);
+        smithay::wayland::cursor_shape::CursorShapeManagerState::new::<Self>(dh);
+        TextInputManagerState::new::<Self>(dh);
         let shm_state = ShmState::new::<Self>(dh, vec![]);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(dh);
         let data_device_state = DataDeviceState::new::<Self>(dh);
@@ -151,7 +186,12 @@ impl State {
         let mode = identity.mode;
         let output = Output::new(identity.output_name, identity.physical);
         let output_global = output.create_global::<Self>(dh);
-        output.change_current_state(Some(mode), Some(identity.transform), None, Some((0, 0).into()));
+        output.change_current_state(
+            Some(mode),
+            Some(identity.transform),
+            None,
+            Some((0, 0).into()),
+        );
         output.set_preferred(mode);
 
         let mut space = Space::<Window>::default();
@@ -164,8 +204,24 @@ impl State {
         let mut animation = AnimationEngine::new();
         let wallpaper = WallpaperManager::new(&config.wallpaper, &mut animation);
 
+        let primary = PrimarySelectionState::new::<Self>(dh);
+        let clipboard_control = crate::shell::services::globals(dh, &primary);
+        let (client_exit, receiver) = calloop::ping::make_ping()?;
+        handle.insert_source(receiver, |_,_,state| {
+            if state.native_offers.iter().all(Option::is_none) { return; }
+            // The source can die after the focused window receives its last offer.
+            // Re-offer both selections after Wayland has torn down the client's resources.
+            let client = state.seat.get_keyboard().and_then(|k| k.current_focus())
+                .and_then(|f| f.surface.client());
+            set_primary_focus(&state.display_handle, &state.seat, None);
+            set_data_device_focus(&state.display_handle, &state.seat, None);
+            set_primary_focus(&state.display_handle, &state.seat, client.clone());
+            set_data_device_focus(&state.display_handle, &state.seat, client);
+        }).map_err(|e|anyhow::anyhow!("register client exit notification: {e}"))?;
+        let services = crate::shell::services::launch(dh, &client_exit)?;
         Ok(Self {
             display_handle: dh.clone(),
+            client_exit,
             compositor_state,
             xdg_shell_state,
             shm_state,
@@ -177,12 +233,29 @@ impl State {
             output,
             damage_tracker,
             _output_global: output_global,
+            handle,
+            xwayland_shell: XWaylandShellState::new::<Self>(dh),
+            xwm: None,
+            native_offers: Default::default(),
+            x11_waiters: Vec::new(),
+            xserver: None,
+            popups: PopupManager::default(),
+            minimized: Vec::new(),
+            recent_input: VecDeque::new(),
+            primary,
+            clipboard_control,
+            services,
+            activation: XdgActivationState::new::<Self>(dh),
             animation,
             wm: WindowManager::new(),
             wallpaper,
             config,
+            named_cursor: crate::cursor::NamedCursor::load(Default::default()),
             cursor_status: CursorImageStatus::default_named(),
             cursor_location: Point::from((0.0, 0.0)),
+            window_menu: None,
+            resize: None,
+            dnd_icon: None,
             move_state: None,
             start_time: Instant::now(),
             loop_signal,
@@ -205,6 +278,9 @@ impl CompositorHandler for State {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
+        if let Some(x) = client.get_data::<XWaylandClientData>() {
+            return &x.compositor_state;
+        }
         &client.get_data::<ClientState>().unwrap().compositor_state
     }
 
@@ -224,7 +300,7 @@ impl ShmHandler for State {
 }
 
 impl SeatHandler for State {
-    type KeyboardFocus = WlSurface;
+    type KeyboardFocus = crate::focus::KeyboardFocus;
     type PointerFocus = WlSurface;
     type TouchFocus = WlSurface;
 
@@ -232,14 +308,20 @@ impl SeatHandler for State {
         &mut self.seat_state
     }
 
-    fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&WlSurface>) {}
+    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&Self::KeyboardFocus>) {
+        let client =
+            focused.and_then(|surface| self.display_handle.get_client(surface.surface.id()).ok());
+        set_data_device_focus(&self.display_handle, seat, client.clone());
+        set_primary_focus(&self.display_handle, seat, client);
+    }
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        if let CursorImageStatus::Named(icon) = image {
+            if icon != self.named_cursor.icon {
+                self.named_cursor = crate::cursor::NamedCursor::load(icon);
+            }
+        }
         self.cursor_status = image;
     }
-}
-
-impl SelectionHandler for State {
-    type SelectionUserData = ();
 }
 
 impl DataDeviceHandler for State {
@@ -248,7 +330,19 @@ impl DataDeviceHandler for State {
     }
 }
 
-impl ClientDndGrabHandler for State {}
+impl ClientDndGrabHandler for State {
+    fn started(
+        &mut self,
+        _: Option<smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource>,
+        icon: Option<WlSurface>,
+        _: Seat<Self>,
+    ) {
+        self.dnd_icon = icon;
+    }
+    fn dropped(&mut self, _: Option<WlSurface>, _: bool, _: Seat<Self>) {
+        self.dnd_icon = None;
+    }
+}
 impl ServerDndGrabHandler for State {
     fn send(&mut self, _mime_type: String, _fd: OwnedFd, _seat: Seat<Self>) {}
 }

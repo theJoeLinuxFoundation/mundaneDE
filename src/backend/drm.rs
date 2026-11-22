@@ -171,7 +171,8 @@ pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
             model: output_name.clone(),
         },
     };
-    let mut state = State::new(&dh, config, identity, loop_signal, socket_name.clone())?;
+    let mut state = State::new(&dh, config, identity, loop_signal, event_loop.handle(), socket_name.clone())?;
+    let _x11_listener = crate::x11::listen(&state)?;
 
     // --- DRM surface + compositor ----------------------------------------------------------
     let cursor_size = drm.cursor_size();
@@ -228,7 +229,7 @@ pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
         .insert_source(socket, move |stream, _, state: &mut State| {
             if let Err(e) = state
                 .display_handle
-                .insert_client(stream, Arc::new(ClientState::default()))
+                .insert_client(stream, Arc::new(ClientState { on_exit: state.client_exit.clone(), role: Default::default(), compositor_state: Default::default() }))
             {
                 tracing::warn!("failed to add wayland client: {e}");
             }
@@ -353,6 +354,7 @@ fn render(backend: &Rc<RefCell<DrmBackend>>, state: &mut State) {
     for window in state.space.elements() {
         window.send_frame(&output, time, None, |_, _| Some(output.clone()));
     }
+    state.popups.cleanup();
     state.space.refresh();
     let _ = state.display_handle.flush_clients();
 }

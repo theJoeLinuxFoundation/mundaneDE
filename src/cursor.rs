@@ -60,3 +60,52 @@ pub fn build_cursor() -> MemoryRenderBuffer {
         None,
     )
 }
+
+use smithay::input::pointer::CursorIcon;
+use smithay::utils::{Logical, Point};
+
+pub struct NamedCursor {
+    pub icon: CursorIcon,
+    pub buffer: MemoryRenderBuffer,
+    pub hotspot: Point<i32, Logical>,
+}
+
+impl NamedCursor {
+    pub fn load(icon: CursorIcon) -> Self {
+        let theme = xcursor::CursorTheme::load(
+            &std::env::var("XCURSOR_THEME").unwrap_or_else(|_| "default".into()),
+        );
+        let size = std::env::var("XCURSOR_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(24);
+        let image = std::iter::once(icon.name())
+            .chain(icon.alt_names().iter().copied())
+            .find_map(|name| theme.load_icon(name))
+            .and_then(|path| std::fs::File::open(path).ok())
+            .and_then(|file| {
+                xcursor::parser::parse_xcursor_stream(&mut std::io::BufReader::new(file)).ok()
+            })
+            .and_then(|images| images.into_iter().min_by_key(|img| img.size.abs_diff(size)));
+        if let Some(image) = image {
+            Self {
+                icon,
+                buffer: MemoryRenderBuffer::from_slice(
+                    &image.pixels_rgba,
+                    Fourcc::Abgr8888,
+                    (image.width as i32, image.height as i32),
+                    1,
+                    Transform::Normal,
+                    None,
+                ),
+                hotspot: (image.xhot as i32, image.yhot as i32).into(),
+            }
+        } else {
+            Self {
+                icon,
+                buffer: build_cursor(),
+                hotspot: (0, 0).into(),
+            }
+        }
+    }
+}

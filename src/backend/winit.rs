@@ -62,7 +62,8 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
             model: "Winit".to_string(),
         },
     };
-    let mut state = State::new(&dh, config, identity, loop_signal, socket_name.clone())?;
+    let mut state = State::new(&dh, config, identity, loop_signal, event_loop.handle(), socket_name.clone())?;
+    let _x11_listener = crate::x11::listen(&state)?;
 
     let handle = event_loop.handle();
 
@@ -70,7 +71,7 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
         .insert_source(socket, move |stream, _, state: &mut State| {
             if let Err(e) = state
                 .display_handle
-                .insert_client(stream, Arc::new(ClientState::default()))
+                .insert_client(stream, Arc::new(ClientState { on_exit: state.client_exit.clone(), role: Default::default(), compositor_state: Default::default() }))
             {
                 tracing::warn!("failed to add wayland client: {e}");
             }
@@ -97,6 +98,7 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
                 state
                     .output
                     .change_current_state(Some(Mode { size, refresh }), None, None, None);
+                state.resize_expanded_windows();
             }
             WinitEvent::Input(ev) => state.handle_input(ev),
             WinitEvent::CloseRequested => state.loop_signal.stop(),
@@ -138,6 +140,7 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
         for window in state.space.elements() {
             window.send_frame(&output, time, None, |_, _| Some(output.clone()));
         }
+        state.popups.cleanup();
         state.space.refresh();
         let _ = state.display_handle.flush_clients();
     })
@@ -151,6 +154,12 @@ fn render(
     state: &mut State,
     presented_size: &mut Option<Size<i32, Physical>>,
 ) -> anyhow::Result<()> {
+    use smithay::input::pointer::CursorImageStatus;
+    let draw_cursor = matches!(state.cursor_status, CursorImageStatus::Surface(_));
+    backend.window().set_cursor_visible(matches!(state.cursor_status, CursorImageStatus::Named(_)));
+    if let CursorImageStatus::Named(icon) = state.cursor_status {
+        backend.window().set_cursor(icon);
+    }
     let size = backend.window_size();
     // A new, resized or recreated surface has no usable damage history. Querying
     // BUFFER_AGE_EXT before the first bind can itself raise EGL_BAD_SURFACE.
@@ -164,8 +173,8 @@ fn render(
     let damage = {
         let (renderer, mut framebuffer) =
             backend.bind().map_err(|e| anyhow::anyhow!("bind: {e}"))?;
-        // winit runs nested, so leave the cursor to the host compositor.
-        let (elements, clear_color) = crate::render::collect_elements(renderer, state, false);
+        // Named cursors belong to the host. Render application cursor surfaces ourselves.
+        let (elements, clear_color) = crate::render::collect_elements(renderer, state, draw_cursor);
         let res = state
             .damage_tracker
             .render_output(renderer, &mut framebuffer, age, &elements, clear_color)
@@ -193,6 +202,9 @@ impl State {
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = event.time_msec();
                 let press = event.state() == KeyState::Pressed;
+                if press {
+                    self.record_input(serial, keyboard.current_focus().map(|f| f.surface));
+                }
                 keyboard.input::<(), _>(
                     self,
                     event.key_code(),
@@ -201,13 +213,19 @@ impl State {
                     time,
                     |state, mods, handle| {
                         let sym = handle.modified_sym().raw();
+                        if state.window_menu.is_some() {
+                            if press { state.menu_key(sym); }
+                            return FilterResult::Intercept(());
+                        }
                         if press {
-                            if sym == keysyms::KEY_Escape {
-                                state.loop_signal.stop();
-                                return FilterResult::Intercept(());
-                            }
                             if mods.logo {
                                 match sym {
+                                    keysyms::KEY_Tab => {
+                                        if let Some(w) = state.minimized.last().cloned() {
+                                            state.restore_window(&w);
+                                        }
+                                        return FilterResult::Intercept(());
+                                    }
                                     keysyms::KEY_Return => {
                                         state.spawn_terminal();
                                         return FilterResult::Intercept(());
@@ -270,7 +288,15 @@ impl State {
                 let pointer = self.seat.get_pointer().unwrap();
                 let mods = self.seat.get_keyboard().unwrap().modifier_state();
 
-                if button == BTN_LEFT && button_state == ButtonState::Pressed {
+                if button_state == ButtonState::Pressed && self.window_menu.is_some() {
+                    let row = self.window_menu.as_ref().and_then(|m| m.row(self.cursor_location));
+                    self.menu_action(if button == BTN_LEFT { row } else { None });
+                    return;
+                }
+                if button_state == ButtonState::Pressed {
+                    self.record_input(serial, pointer.current_focus());
+                }
+                if button_state == ButtonState::Pressed && !pointer.is_grabbed() {
                     let loc = pointer.current_location();
                     if let Some((window, win_loc)) =
                         self.space.element_under(loc).map(|(w, l)| (w.clone(), l))
@@ -279,12 +305,13 @@ impl State {
                         // Super OR Alt starts an interactive move. Alt is the practical
                         // trigger when running nested: a host compositor (e.g. Mutter)
                         // typically grabs Super+drag for itself, so Super never reaches us.
-                        if mods.logo || mods.alt {
-                            let offset = loc - win_loc.to_f64();
+                        if button == BTN_LEFT && (mods.logo || mods.alt) && !window.toplevel().is_some_and(|t| t.current_state().states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Maximized)) {
+                            let offset = loc - self.space.element_location(&window).unwrap_or(win_loc).to_f64();
                             self.move_state = Some(MoveState {
                                 window,
                                 offset,
                                 snap_preview: None,
+                                client_grab: false,
                             });
                             return;
                         }
@@ -293,9 +320,15 @@ impl State {
 
                 if button == BTN_LEFT && button_state == ButtonState::Released {
                     if let Some(mv) = self.move_state.take() {
+                        let forward_release = mv.client_grab;
                         self.finish_move(mv);
-                        pointer.frame(self);
-                        return;
+                        if !forward_release { return; }
+                    }
+                    if let Some(r) = self.resize.take() {
+                        if let Some(t) = r.window.toplevel() {
+                            t.with_pending_state(|s| s.states.unset(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Resizing));
+                            t.send_pending_configure();
+                        }
                     }
                 }
 
@@ -332,22 +365,19 @@ impl State {
     /// spring to the cursor); otherwise forward motion to the focused surface.
     fn pointer_moved(&mut self, pos: Point<f64, Logical>, serial: Serial, time: u32) {
         let pointer = self.seat.get_pointer().unwrap();
+        if let Some(menu) = self.window_menu.as_mut() {
+            menu.hover(pos);
+            return;
+        }
+        if self.resize.is_some() {
+            self.resize_to(pos);
+            return;
+        }
         if let Some(window) = self.move_state.as_ref().map(|m| m.window.clone()) {
             let offset = self.move_state.as_ref().unwrap().offset;
             let new = pos - offset;
             let (x, y) = (new.x.round() as i32, new.y.round() as i32);
-            self.space.map_element(window.clone(), (x, y), false);
-            // Pin the spring to the pointer so release springs from rest here.
-            if let Some(id) = self.wm.spring_id(&window) {
-                if let Some(h) = self.animation.spring_mut(id) {
-                    h.x.position = x as f64;
-                    h.x.target = x as f64;
-                    h.x.velocity = 0.0;
-                    h.y.position = y as f64;
-                    h.y.target = y as f64;
-                    h.y.velocity = 0.0;
-                }
-            }
+            self.place_window(&window, (x, y).into());
             // Recompute snap preview: where the magnetic snap would put the window
             // if released right now.
             let size = self
@@ -379,7 +409,10 @@ impl State {
             let focus = self
                 .space
                 .element_under(pos)
-                .and_then(|(w, loc)| w.toplevel().map(|t| (t.wl_surface().clone(), loc.to_f64())));
+                .and_then(|(w, loc)| {
+                    w.surface_under(pos - loc.to_f64(), smithay::desktop::WindowSurfaceType::ALL)
+                        .map(|(s, offset)| (s, (loc + offset).to_f64()))
+                });
             pointer.motion(self, focus, &MotionEvent { location: pos, serial, time });
             pointer.frame(self);
         }
@@ -435,7 +468,8 @@ impl State {
             return;
         };
         if let Some(surface) = keyboard.current_focus() {
-            if let Some(window) = self.wm.window_for_surface(&surface) {
+            if let Some(x) = &surface.x11 { let _ = x.close(); return; }
+            if let Some(window) = self.wm.window_for_surface(&surface.surface) {
                 if let Some(toplevel) = window.toplevel() {
                     toplevel.send_close();
                 }

@@ -83,6 +83,27 @@ the candidate popup follows the caret. Copy in both directions between
 `xterm` and a native terminal. Run the suite's Terminal and Files as additional
 native clients when their first runnable revisions arrive.
 
+**Nested result.** The application harness passes with real GTK title buttons,
+the compositor window menu, interactive move and resize, a nested popup tree,
+Nautilus rename and fresh and expired activation tokens. It checks both terminal
+clipboards after restarting Xwayland, middle-click paste, drag and drop, and
+selection-owner exit. A fixture IBus engine shows Japanese candidates at two
+caret positions in Text Editor. Firefox receives the same committed text in a
+form and starts a fresh composition when focus changes. Terminal and Files from
+mundane-apps each submit a buffer. The ordinary registry, negotiated versions,
+traces and screenshots are recorded by the [application tests](../tests/nested/README.md#everyday-applications).
+
+**Distribution handoff.** Package Xwayland on PATH. The launcher can obtain
+`DISPLAY` from `mundane-de --x11-display`. Ship the upstream GTK 3 IBus panel
+built with its Wayland input-method-v2 frontend, start the session's IBus daemon
+with the automatic panel disabled, and set `MUNDANE_IBUS_PANEL` to the panel
+executable. Keep the existing joe IBus daemon and engines. The compositor gives
+input-method and virtual-keyboard access to that frontend’s private connection.
+An optional session clipboard manager named by `MUNDANE_CLIPBOARD_MANAGER`
+receives ext-data-control on its own connection. GTK and GPUI should use
+client-side controls according to the negotiated mode and xdg-toplevel
+capabilities. The taskbar restore path belongs to milestone 5.
+
 ## 3. Drive each display at its own scale and refresh rate
 
 Replace the single output and flip flag with per-connector mode, logical

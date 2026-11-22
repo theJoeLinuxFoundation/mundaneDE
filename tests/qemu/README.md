@@ -38,7 +38,7 @@ The repository is shared into the VM at `/mundane`, and `mundane` runs
 `LIBSEAT_BACKEND=seatd`. Rebuild on the host (`cargo build`) and just re-run `mundane` in the
 guest — no VM rebuild needed.
 
-To quit the compositor: `Super+Shift+Q` or `Esc`. To shut the VM down: `poweroff`.
+To quit the compositor: `Super+Shift+Q`. To shut the VM down: `poweroff`.
 
 ## Keybindings
 
@@ -48,7 +48,7 @@ To quit the compositor: `Super+Shift+Q` or `Esc`. To shut the VM down: `poweroff
 | `Super+W` | reload / crossfade the wallpaper |
 | `Super+,` | open `mundane-settings` (override the binary with `$MUNDANE_SETTINGS`) |
 | `Super+Q` | close the focused window |
-| `Super+Shift+Q` or `Esc` | quit the compositor |
+| `Super+Shift+Q` | quit the compositor |
 | `Super`/`Alt` + left-drag | move a window; on release it springs to a magnetic snap |
 
 ## Seeing a wallpaper

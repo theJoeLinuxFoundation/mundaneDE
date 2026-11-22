@@ -160,10 +160,7 @@ impl WindowManager {
         Point::from(((base_x + cascade).max(0), (base_y + cascade).max(0)))
     }
 
-    /// Iterate mapped windows with their spring ids (for syncing positions each frame).
-    pub fn mapped_windows(&self) -> impl Iterator<Item = (Window, SpringId)> + '_ {
-        self.mapped.iter().map(|m| (m.window.clone(), m.spring))
-    }
+
 }
 
 impl Default for WindowManager {

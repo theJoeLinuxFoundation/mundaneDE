@@ -5,8 +5,8 @@ compositor uses Smithay. Drag a window near a screen edge or another window and
 release it to see a damped spring move it into place.
 
 The compositor runs in a host window or directly on a single DRM/KMS output.
-It can display Wayland applications, manage keyboard and pointer focus, and
-crossfade between wallpapers. The GPUI settings panel is a separate application.
+It runs native Wayland applications and rootless X11 windows, negotiates
+client-side decorations and supports IBus text composition. The GPUI settings panel is a separate application.
 A desktop shell, session lock and multi-monitor support are still missing.
 The [roadmap](ROADMAP.md) describes when mundaneDE can become the default joe Linux session.
 
@@ -15,7 +15,7 @@ The [roadmap](ROADMAP.md) describes when mundaneDE can become the default joe Li
 Start from the repository root in a graphical Linux session with Wayland or X11
 and EGL support. Use stable Rust, a C toolchain, pkg-config and the development
 libraries for Wayland, EGL/GLES, DRM, GBM, libinput, libudev, libseat and
-libxkbcommon. If you use Nix with a nixpkgs channel, `nix-shell` supplies the
+libxkbcommon and Cairo. If you use Nix with a nixpkgs channel, `nix-shell` supplies the
 native dependencies and rustup.
 
 ```sh
@@ -34,7 +34,24 @@ example, `WAYLAND_DISPLAY=wayland-2 foot` with `foot` installed.
 | Move a window and snap it on release | Super or Alt + left drag |
 | Close the focused window | Super+Q |
 | Reload the wallpaper | Super+W |
-| Quit the compositor | Esc |
+| Restore the last minimized window | Super+Tab |
+| Quit the compositor | Super+Shift+Q |
+
+GTK and the GPUI suite can draw their own window controls. The compositor
+advertises the window menu, maximize, fullscreen and minimize capabilities.
+Escape goes to the focused application.
+
+An X11 launcher can ask the running compositor for its private display.
+Set `WAYLAND_DISPLAY` to the mundaneDE socket first. With the compositor
+binary on your path, run `DISPLAY=$(mundane-de --x11-display) xterm`.
+The command waits for Xwayland and its window manager to be ready.
+
+To use IBus, point `MUNDANE_IBUS_PANEL` at the upstream `ibus-ui-gtk3`
+executable before starting mundaneDE. The compositor gives the panel a private
+Wayland connection and passes `--enable-wayland-im`. It needs a running IBus
+daemon in the same session. GTK and Firefox can then use text-input-v3.
+The [isolated application tests](tests/nested/README.md#everyday-applications)
+exercise this configuration.
 
 For direct rendering on a free seat, omit `--winit`. The repository includes
 a [manual DRM/KMS test in QEMU](tests/qemu/README.md).

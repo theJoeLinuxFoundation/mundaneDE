@@ -20,6 +20,7 @@ pkgs.mkShell {
 
     # Graphics / DRM
     libdrm
+    cairo
     mesa
     libgbm            # GBM buffer allocator (split out of mesa in recent nixpkgs)
     libGL

@@ -9,6 +9,7 @@ mod shell;
 mod state;
 mod wallpaper;
 mod wm;
+mod x11;
 
 use clap::Parser;
 use tracing::info;
@@ -19,6 +20,9 @@ struct Cli {
     /// Use the Winit development backend instead of DRM/KMS
     #[arg(long)]
     winit: bool,
+    /// Ask a running mundaneDE session to start Xwayland and print its DISPLAY.
+    #[arg(long, conflicts_with = "winit")]
+    x11_display: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -30,6 +34,7 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
+    if cli.x11_display { return x11::print_display(); }
     let config = config::MundaneConfig::load(None);
 
     info!("starting mundaneDE");

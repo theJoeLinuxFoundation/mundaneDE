@@ -6,7 +6,7 @@ It has spring-driven window placement, a magnetic snap preview, wallpaper
 crossfades and a separate settings application. GDM, GNOME Shell and Mutter
 still provide the distribution's desktop session.
 
-Milestone 1 is complete. The remaining milestones each end with a user-visible
+Milestones 1 and 2 pass in the isolated nested session. The remaining milestones each end with a user-visible
 acceptance test. GTK4/libadwaita applications and Firefox are compatibility targets
 throughout the transition. The desktop will keep joe’s familiar layout and report
 dave upgrade and recovery status itself. [Public announcement](https://joelinux.io/news/mundanede/)
@@ -14,7 +14,7 @@ dave upgrade and recovery status itself. [Public announcement](https://joelinux.
 | Milestone | Acceptance test |
 | --- | --- |
 | [1. Repeatable nested session](tests/nested/README.md) | A real Wayland client opens, resizes and closes in an isolated run. The first frame shows Afterlight, the final frame clears the client, and a cold start on the affected EGL driver reports no buffer-age error. |
-| 2. Everyday applications | Use menus and dialogs in Files, compose text with IBus in GTK and Firefox, and copy text between a native Wayland window and an Xwayland application. |
+| [2. Everyday applications](tests/nested/README.md#everyday-applications) | Use GTK’s own buttons to minimize, maximize and restore a window. Rename a file in Nautilus, compose text with IBus in Text Editor and Firefox, and paste in both directions between native and X11 terminals. |
 | 3. Outputs and animation | Drag a window between 100% and 150% displays, unplug one and keep the window reachable. Check that magnetic snapping feels unobtrusive and still works with reduced motion. Meet the frame and idle budgets on the recorded reference hardware. |
 | 4. Login and logout | Select mundaneDE in GDM, switch VTs, suspend, resume and log out twice. Each login gets working seat devices and a fresh shell environment. GNOME remains selectable. |
 | 5. Desktop shell and lock | Use the bottom taskbar, Start menu, tray and desktop icons. Minimize, restore and maximize a window using its buttons. Verify the shell reports a prepared dave upgrade awaiting restart and an automatic return to the previous system after a failed upgrade. Lock both displays and disconnect the locker. Every display stays covered until authenticated recovery. |

@@ -6,6 +6,12 @@ The application and library in `settings-panel/` are derived from the
 argentumOS settings panel and retain the MIT licence. The original workspace
 credits the argentumOS contributors. See the [MIT licence](settings-panel/LICENSE).
 
+## Smithay
+
+The popup-grab and selection integration follows Smithay’s Anvil reference
+compositor. Its MIT copyright and permission notice are included in
+[the Smithay licence](licenses/Smithay-MIT.txt).
+
 ## Earlier wallpaper
 
 Earlier commits include `pexels-jplenio-2080960.jpg`, a photograph by Johannes

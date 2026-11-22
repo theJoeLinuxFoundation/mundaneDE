@@ -16,6 +16,7 @@ smithay = { git = "https://github.com/Smithay/smithay.git", tag = "v0.7.0", defa
     "renderer_gl",
     "wayland_frontend",
     "desktop",
+    "xwayland",
 ] }
 
 # DRM helper utilities — used by the DRM backend for connector scanning (`drm_scanner`).
@@ -45,6 +46,7 @@ thiserror = "2"
 
 # Keyboard maps — must match Smithay's xkbcommon version
 xkbcommon = "0.8.0"
+xcursor = "0.3"
 
 # Image decoding for the wallpaper engine. Pure-Rust png/jpeg decoders only —
 # no system libjpeg/libpng linkage, so nothing to add to shell.nix.
@@ -54,3 +56,18 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # `macos_kqueue` is the lightweight option on macOS — we use neither feature for the
 # default Linux build, but pinning explicitly avoids surprise FSEvents bundling.
 notify = { version = "6", default-features = false, features = ["macos_kqueue"] }
+cairo-rs = { version = "0.21", default-features = false }
+
+[dev-dependencies]
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+
+[[example]]
+name = "nested-input"
+path = "tests/nested/input.rs"
+
+[[example]]
+name = "nested-capabilities"
+path = "tests/nested/capabilities.rs"
