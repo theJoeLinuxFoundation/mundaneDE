@@ -1,0 +1,8 @@
+wl_compositor 5
+wl_data_device_manager 3
+wl_output 4
+wl_seat 9
+wl_shm 2
+wl_subcompositor 1
+xdg_wm_base 6
+zxdg_output_manager_v1 3

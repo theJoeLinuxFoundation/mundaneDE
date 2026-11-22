@@ -38,15 +38,13 @@ and the pin record together. Review protocol version changes, redo the registry
 and screenshot checks, and exercise DRM pause/resume before accepting the
 upgrade. Keep the previous lockfile recoverable with a normal revert. [Smithay pin](../PINNING.md)
 
-**Nested EGL finding.** On the NVIDIA Wayland host, a cold start logged
-`EGL_BAD_SURFACE` from `eglQuerySurface` inside Smithay's `buffer_age` trace
-span. Our render function queries age before the first `backend.bind()`.
-Smithay documents that the query needs a bound surface. The existing error
-fallback gives damage tracking age zero, so rendering proceeds. An isolated
-build that skipped the initial query and used age zero drew Afterlight and
-mapped `foot` without the error. For the implementation, use full damage until
-a successful first frame, invalidate age on surface recreation, and retain age
-tracking on subsequent valid frames. [Nested render path](../src/backend/winit.rs) ·
+**Nested EGL finding.** The initial `eglQuerySurface` for buffer age used to run
+before the winit surface was bound, raising `EGL_BAD_SURFACE` on NVIDIA.
+The compositor now uses age zero until a successful submission. It queries
+again only when the window size still matches and the EGL surface is current.
+A rendering error invalidates the recorded size. The private headless
+regression reproduced the old failure and passed with the fix on both Mesa
+llvmpipe and an NVIDIA RTX 5070. [Nested render path](../src/backend/winit.rs) ·
 [Smithay buffer-age contract](https://github.com/Smithay/smithay/blob/a166cf4c94b5aedc332a65aa1dd753e8148829c3/src/backend/winit/mod.rs#L305-L320)
 
 **Acceptance.** From private XDG directories and a private session bus, start
@@ -56,7 +54,8 @@ assert the configure/ack and new buffer dimensions, then close it. Capture the
 host output before mapping, after resize and after close. Require the expected
 pixels and a clean child exit. Repeat cold starts and resize on the affected
 driver with buffer-age tracing. Check for zero startup EGL errors and correct
-damage on later frames. Record the baseline registry for an ordinary client. Use this run for the
+damage on later frames. The [nested test](../tests/nested/README.md) records and checks the ordinary-client
+registry. Use this run for the
 first Terminal integration with the app suite, including its keyboard-focus
 and screen-reader probe (milestone 7).
 

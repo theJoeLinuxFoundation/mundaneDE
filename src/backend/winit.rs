@@ -20,7 +20,7 @@ use smithay::output::{Mode, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode as CalloopMode, PostAction};
 use smithay::reexports::wayland_server::Display;
-use smithay::utils::{Logical, Point, Serial, Transform, SERIAL_COUNTER};
+use smithay::utils::{Logical, Physical, Point, Serial, Size, Transform, SERIAL_COUNTER};
 use smithay::wayland::socket::ListeningSocketSource;
 
 use crate::config::MundaneConfig;
@@ -117,6 +117,7 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
     tracing::info!("mundaneDE winit backend running on WAYLAND_DISPLAY={socket_name}");
 
     let mut last_frame = Instant::now();
+    let mut presented_size = None;
     event_loop.run(Some(Duration::from_millis(16)), &mut state, |state| {
         let now = Instant::now();
         let dt = now - last_frame;
@@ -127,7 +128,8 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
         }
         state.wallpaper.cleanup(&mut state.animation);
 
-        if let Err(e) = render(&mut backend, state) {
+        if let Err(e) = render(&mut backend, state, &mut presented_size) {
+            presented_size = None;
             tracing::error!("render error: {e}");
         }
 
@@ -144,8 +146,21 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn render(backend: &mut WinitGraphicsBackend<GlesRenderer>, state: &mut State) -> anyhow::Result<()> {
-    let age = backend.buffer_age().unwrap_or(0);
+fn render(
+    backend: &mut WinitGraphicsBackend<GlesRenderer>,
+    state: &mut State,
+    presented_size: &mut Option<Size<i32, Physical>>,
+) -> anyhow::Result<()> {
+    let size = backend.window_size();
+    // A new, resized or recreated surface has no usable damage history. Querying
+    // BUFFER_AGE_EXT before the first bind can itself raise EGL_BAD_SURFACE.
+    let age = if *presented_size == Some(size) && backend.egl_surface().is_current() {
+        let age = backend.buffer_age().unwrap_or(0);
+        tracing::trace!(age, "queried nested EGL buffer age");
+        age
+    } else {
+        0
+    };
     let damage = {
         let (renderer, mut framebuffer) =
             backend.bind().map_err(|e| anyhow::anyhow!("bind: {e}"))?;
@@ -162,6 +177,7 @@ fn render(backend: &mut WinitGraphicsBackend<GlesRenderer>, state: &mut State) -
         backend
             .submit(Some(&damage))
             .map_err(|e| anyhow::anyhow!("submit: {e}"))?;
+        *presented_size = Some(size);
     }
     Ok(())
 }
