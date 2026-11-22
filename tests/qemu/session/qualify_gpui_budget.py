@@ -212,7 +212,12 @@ def qualify(run, startup_only=False):
     plug(g, True)
     try:
         idle("Two outputs")
-        orca = joe(g, "orca --replace </dev/null >/tmp/gpui-orca.log 2>&1 & echo $!")
+        setting = "org.gnome.desktop.a11y.applications screen-reader-enabled"
+        previous = joe(g, "gsettings get " + setting)
+        joe(g, "gsettings set " + setting + " true")
+        reader = "pgrep -P " + str(assert_preview(g)) + " -f /usr/bin/orca || :"
+        wait("supervised Orca", lambda: g.shell(reader).isdigit())
+        orca = int(g.shell(reader))
         try:
             idle("Two outputs with Orca")
             print(
@@ -221,7 +226,7 @@ def qualify(run, startup_only=False):
                 flush=True,
             )
         finally:
-            g.shell(f"kill {int(orca)} 2>/dev/null || :")
+            joe(g, f"gsettings set {setting} {previous}")
     finally:
         plug(g, False)
 

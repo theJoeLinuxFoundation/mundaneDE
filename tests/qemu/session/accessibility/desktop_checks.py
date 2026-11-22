@@ -7,7 +7,7 @@ import time
 from . import suite_checks
 
 
-def check(g, joe, launch, tree, speech, read, wait):
+def check(g, joe, launch, tree, speech, read, wait, gpui_shell=False):
     widgets = "python3 -W ignore /tmp/m7/shell_widgets.py "
 
     def activate(label):
@@ -91,7 +91,17 @@ def check(g, joe, launch, tree, speech, read, wait):
             lambda: json.loads(read("gtk-style"))["accent"] == "blue",
         )
 
-        suite_checks.check(g, joe, launch, activate, tree, read, wait)
+        suite_checks.check(
+            g,
+            joe,
+            launch,
+            activate,
+            tree,
+            read,
+            wait,
+            gpui_shell=gpui_shell,
+            widgets=widgets,
+        )
         # Exercise the same live window across actual DRM fractional-scale changes.
         output = json.loads(joe("/usr/local/bin/mundane-de output list"))[0]
         mode = output["current"]
@@ -165,6 +175,17 @@ def check(g, joe, launch, tree, speech, read, wait):
             activate(target)
             wait("shell authentication", lambda: "password text Password" in tree())
 
+        if gpui_shell:
+            choose()
+            offset = len(speech())
+            for key in ("x", "z", "9"):
+                g.key(key)
+                time.sleep(0.14)
+            assert joe(widgets + "protected Password") == "protected"
+            g.key("ret")
+            wait("wrong password denied", lambda: "Authentication failed" in tree())
+            assert g.shell("timedatectl show -p Timezone --value") == original
+            assert not set(speech()[offset:]) & {"x", "z", "9", "xz9"}
         choose()
         activate("Cancel")
         wait("cancelled", lambda: "frame Authentication required" not in tree())

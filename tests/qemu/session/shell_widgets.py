@@ -62,6 +62,12 @@ for node in walk(root):
     ):
         print(node.get_description())
         sys.exit(0)
+    elif name == " ".join(names) and verb == "protected" and role == "password text":
+        value = Atspi.Text.get_text(node, 0, -1) if "Text" in node.get_interfaces() else ""
+        if all(c == "•" for c in value):
+            print("protected")
+            sys.exit(0)
+        sys.exit(1)
     elif name == " ".join(names) and verb == "bounds" and role == "button":
         rect = node.get_extents(Atspi.CoordType.WINDOW)
         print(rect.x, rect.y, rect.width, rect.height)

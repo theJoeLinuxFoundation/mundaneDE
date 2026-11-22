@@ -450,8 +450,15 @@ def appearance_and_speech(s, suite):
     s.pref("interface accent-color", "blue")
     s.pref("a11y.interface high-contrast", "false")
     s.pref("interface enable-animations", "true")
+    reader = "org.gnome.desktop.a11y.applications screen-reader-enabled"
+    previous_reader = s.joe("gsettings get " + reader)
+    s.joe("gsettings set " + reader + " false")
+    wait(
+        "reader stopped",
+        lambda: not g.shell("pgrep -u joe -f '^/usr/bin/python3 /usr/bin/orca' || :"),
+    )
     s.joe("rm -f " + RT + "/mundane-speech.jsonl")
-    orca = s.launch("orca --replace", "orca")
+    s.joe("gsettings set " + reader + " true")
     native = None
     settings = None
 
@@ -548,7 +555,8 @@ def appearance_and_speech(s, suite):
             gpui_shell=True,
         )
     finally:
-        for pid in (settings, native, orca):
+        s.joe(f"gsettings set {reader} {previous_reader}")
+        for pid in (settings, native):
             if pid:
                 g.shell(f"kill {pid} 2>/dev/null || :")
     for variant, scheme, contrast in [

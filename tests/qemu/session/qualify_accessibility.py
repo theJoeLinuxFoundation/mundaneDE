@@ -32,11 +32,17 @@ def main():
         required=True,
         help="pinned suite build containing mundane-terminal and examples/motion",
     )
+    parser.add_argument(
+        "--gpui", action="store_true", help="qualify the supervised GPUI shell"
+    )
     opts = parser.parse_args()
     g = Guest(opts.run)
     assert g.qmp("query-display-options")["type"] == "none"
     blocks = {v["node-name"]: v["ro"] for v in g.qmp("query-named-block-nodes")}
     assert blocks["base"] and blocks["basefile"] and not blocks["layer"]
+    if opts.gpui:
+        assert g.shell("pgrep -x -u joe mundane-shell")
+        assert g.shell("cat /sys/kernel/security/joe/enforce") == "1"
     share = g.run / "share"
     for path in [*(HERE / "accessibility").glob("*.py"), HERE / "shell_widgets.py"]:
         shutil.copy(path, share / path.name)
@@ -158,12 +164,17 @@ def main():
         g.shell(f"kill {observer} 2>/dev/null || :")
     from accessibility.desktop_checks import check
 
-    check(g, joe, launch, tree, speech, read, wait)
-    result = joe(
-        'temp=$(mktemp -d); env WAYLAND_DISPLAY="$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" XDG_RUNTIME_DIR="$temp" GTK_A11Y=none GSETTINGS_BACKEND=memory dbus-run-session -- python3 /tmp/m7/auth_fixture.py authority "$temp/audit"'
-    )
-    assert "unregistration passed" in result, result
-    print("Private authority and two-identity helper conversation passed.")
+    check(g, joe, launch, tree, speech, read, wait, gpui_shell=opts.gpui)
+    if opts.gpui:
+        from accessibility.gpui_agent import qualify
+
+        qualify(g, joe, launch, tree, speech, wait)
+    else:
+        result = joe(
+            'temp=$(mktemp -d); env WAYLAND_DISPLAY="$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" XDG_RUNTIME_DIR="$temp" GTK_A11Y=none GSETTINGS_BACKEND=memory dbus-run-session -- python3 /tmp/m7/auth_fixture.py authority "$temp/audit"'
+        )
+        assert "unregistration passed" in result, result
+        print("Private authority and two-identity helper conversation passed.")
     old = g.shell("loginctl show-seat seat0 -p ActiveSession --value")
     g.shell("systemctl restart gdm")
 

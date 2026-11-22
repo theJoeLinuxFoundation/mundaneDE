@@ -20,7 +20,17 @@ def drag_from_centre(g, x, y):
     time.sleep(0.25)
 
 
-def check(g, joe, launch, activate, tree, read, wait, gpui_shell=False):
+def check(
+    g,
+    joe,
+    launch,
+    activate,
+    tree,
+    read,
+    wait,
+    gpui_shell=False,
+    widgets="python3 -W ignore /tmp/mundane-gpui-step2/shell_widgets.py ",
+):
     # Start over the open Settings window. AT-SPI actions on Settings do not
     # raise it. Only sample Terminal's grid, clear of its header and shell chrome.
     def frame():
@@ -54,16 +64,9 @@ def check(g, joe, launch, activate, tree, read, wait, gpui_shell=False):
         if gpui_shell:
             wait(
                 "presented and focused Terminal",
-                lambda: (
-                    "active"
-                    in joe(
-                        "python3 -W ignore /tmp/mundane-gpui-step2/shell_widgets.py frame-state Terminal"
-                    ).split()
-                ),
+                lambda: "active" in joe(widgets + "frame-state Terminal").split(),
             )
-            joe(
-                "python3 -W ignore /tmp/mundane-gpui-step2/shell_widgets.py --frame Terminal click Maximize"
-            )
+            joe(widgets + "--frame Terminal click Maximize")
         else:
             drag_from_centre(g, 0.76, 0.5)
         wait("initial dark Terminal grid", lambda: palette("17201e", "1b2130"))

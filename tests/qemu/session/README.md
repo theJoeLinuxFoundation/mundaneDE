@@ -270,3 +270,14 @@ python3 "$driver/qualify_portals.py" "$portal_run" --gpui-screenshots "$portal_r
 The feedback driver checks notification ownership, actions, expiration, bounded history, Do Not Disturb, typing through a volume OSD and persistent dave notice IDs. The step 2 laptop and Orca cases also check a brightness key on a virtual keyboard and speech for a notification in history. Use mundane-apps at the desktop’s pin for the live Terminal test.
 
 The portal driver compares an occluded window and a second monitor against the pixels delivered through the public portal. It checks cancellation, Stop on both taskbars, window close, browser exit, hot-unplug, lock and loss of either service. It changes the monitor pattern on a live stream and again after revocation, checks the PipeWire graph and worker exit, and observes an appearance change through the recovered frontend. It also opens and cancels a GTK file chooser, follows an associated URI and invokes a notification action. The budget driver measures the idle session with all three backends registered.
+
+### GPUI shell step 4
+
+Boot the GPUI preview in a dedicated headless joe guest with the accessibility dependencies installed. Use the GPUI echo example and the suite's Terminal and motion example from the pinned workspace, as in the milestone 7 accessibility test.
+
+```sh
+python3 "$driver/qualify_accessibility.py" "$run" --gpui --echo "$echo_binary" --suite-target "$suite_target"
+python3 "$driver/qualify_gpui_budget.py" "$budget_run"
+```
+
+The first driver records Orca's own speech requests on the virtual seat. It checks typed and programmatic inserts, a delivered notification, a password entry, session restart and the active GDM login. A real Settings timezone change goes through joe's polkitd, helper and PAM. A second authority on a private bus drives the installed agent through a two-administrator conversation, cancellation, lock, authority disappearance and logout. QMP records the empty prompt in three appearances. Use a separate trace-enabled overlay for the budget and run its startup samples with the host otherwise idle. `--startup-only` repeats the cold and 20 warm logins independently.
