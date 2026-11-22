@@ -12,15 +12,14 @@ from guest import Guest
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("run", type=Path)
-parser.add_argument(
-    "--gpui-screenshots", type=Path, help="test the GPUI preview and save its scanouts"
-)
+parser.add_argument("--screenshots", type=Path, help="directory for portal scanouts")
 parser.add_argument(
     "--flatpak-client",
     type=Path,
     help="exercise a document grant from an isolated Flatpak using the compiled portals/grant.c client",
 )
 args = parser.parse_args()
+args.screenshots = args.screenshots or args.run / "screenshots"
 g = Guest(args.run)
 here = Path(__file__).resolve().parent
 fixtures = "/tmp/mundane-portal-test"
@@ -76,12 +75,11 @@ def force_output(on):
 
 
 def shot(name):
-    if args.gpui_screenshots:
-        args.gpui_screenshots.mkdir(exist_ok=True, parents=True)
-        image = g.screen(name)
-        assert image.startswith(b"P6\n1920 1080\n255\n")
-        with (args.gpui_screenshots / (name + ".png")).open("wb") as output:
-            subprocess.run(["pnmtopng"], input=image, stdout=output, check=True)
+    args.screenshots.mkdir(exist_ok=True, parents=True)
+    image = g.screen(name)
+    assert image.startswith(b"P6\n1920 1080\n255\n")
+    with (args.screenshots / (name + ".png")).open("wb") as output:
+        subprocess.run(["pnmtopng"], input=image, stdout=output, check=True)
 
 
 def colors(name, head):
@@ -175,11 +173,10 @@ def setup():
     cmd = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
     assert cmd[cmd.index(b"-display") + 1] == b"none"
     assert g.shell("cat /sys/kernel/security/joe/enforce") == "1"
-    if args.gpui_screenshots:
-        wait("GPUI login", lambda: g.shell("pgrep -u joe -x mundane-shell || :"))
-        joe(
-            "busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true"
-        )
+    wait("GPUI login", lambda: g.shell("pgrep -u joe -x mundane-shell || :"))
+    joe(
+        "busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true"
+    )
     for name in (
         "org.freedesktop.portal.Desktop",
         "org.freedesktop.impl.portal.desktop.gtk",
@@ -286,18 +283,16 @@ def captures():
         flush=True,
     )
     cases = ["stop", "browser-exit", "lock", "unplug"]
-    if args.gpui_screenshots:
-        cases[1:1] = ["shell-exit", "frontend-exit"]
+    cases[1:1] = ["shell-exit", "frontend-exit"]
     for action in cases:
         firefox()
         if action == "stop":
             shot("share-consent")
         shared()
-        if args.gpui_screenshots:
-            wait(
-                "Stop on both taskbars",
-                lambda: widgets().count("button Stop sharing Virtual-2") == 2,
-            )
+        wait(
+            "Stop on both taskbars",
+            lambda: widgets().count("button Stop sharing Virtual-2") == 2,
+        )
         if action == "stop":
             shot("active-share")
         if action in ("shell-exit", "frontend-exit"):
@@ -338,11 +333,10 @@ def captures():
                         bytes(map(int, c.split(","))).hex() for c in line.split()[2:]
                     ]
                     assert near(palette, green), line
-            if args.gpui_screenshots:
-                wait(
-                    "GPUI locker accepts input",
-                    lambda: "password text Password" in widgets(),
-                )
+            wait(
+                "GPUI locker accepts input",
+                lambda: "password text Password" in widgets(),
+            )
             for key in ("j", "o", "e", "ret"):
                 g.key(key)
                 time.sleep(0.15)
@@ -374,20 +368,13 @@ def captures():
 
 
 def choice_portals():
-    chooser = (
-        "frame Portal test file"
-        if args.gpui_screenshots
-        else "file chooser Portal test file"
-    )
+    chooser = "frame Portal test file"
     # Select an exact file through the public portal and its location field.
     launch("client", "chooser", "choose")
     wait("file chooser", lambda: chooser in widgets())
-    if args.gpui_screenshots:
-        assert "button File type: Text files" in widgets()
-        assert (
-            "button example.txt" in widgets() and "button patterns.log" not in widgets()
-        )
-        shot("open-file")
+    assert "button File type: Text files" in widgets()
+    assert "button example.txt" in widgets() and "button patterns.log" not in widgets()
+    shot("open-file")
     g.key("ctrl", "l")
     time.sleep(0.35)
     for ch in work + "/example.txt":
@@ -401,31 +388,28 @@ def choice_portals():
     click("Cancel")
     logged("chooser", "OpenFile (1,")
     assert "file://" not in content("chooser.log")
-    if args.gpui_screenshots:
-        launch("client", "save", "save")
-        wait("GPUI Save", lambda: "frame Portal save test" in widgets())
-        click("Save")
-        click("Replace")
-        logged("save", "SaveFile (0,")
-        assert work + "/example.txt" in content("save.log")
-        launch("client", "save-many", "save-many")
-        wait("GPUI destination folder", lambda: "frame Portal save test" in widgets())
-        click("Save")
-        logged("save-many", "SaveFiles (0,")
-        assert "second.txt" in content(
-            "save-many.log"
-        ) and "example%20(1).txt" in content("save-many.log").replace(
-            "%28", "("
-        ).replace("%29", ")")
-        launch("client", "ask", "ask")
-        wait("GPUI application choice", lambda: "frame Open with" in widgets())
-        shot("open-with")
-        click("Portal test handler")
-        logged("ask", "OpenURI (0,")
-        wait(
-            "chosen URI handler",
-            lambda: content("opened") == "mundane-portal-test://item/43",
-        )
+    launch("client", "save", "save")
+    wait("GPUI Save", lambda: "frame Portal save test" in widgets())
+    click("Save")
+    click("Replace")
+    logged("save", "SaveFile (0,")
+    assert work + "/example.txt" in content("save.log")
+    launch("client", "save-many", "save-many")
+    wait("GPUI destination folder", lambda: "frame Portal save test" in widgets())
+    click("Save")
+    logged("save-many", "SaveFiles (0,")
+    assert "second.txt" in content("save-many.log") and "example%20(1).txt" in content(
+        "save-many.log"
+    ).replace("%28", "(").replace("%29", ")")
+    launch("client", "ask", "ask")
+    wait("GPUI application choice", lambda: "frame Open with" in widgets())
+    shot("open-with")
+    click("Portal test handler")
+    logged("ask", "OpenURI (0,")
+    wait(
+        "chosen URI handler",
+        lambda: content("opened") == "mundane-portal-test://item/43",
+    )
     if args.flatpak_client:
         shutil.copyfile(args.flatpak_client, g.run / "share" / "file-grant")
         g.shell(

@@ -14,10 +14,10 @@ PACKAGES = {
         "2cbddb88d4a3316c61e8984203bbdca81cbf089c323e5db09c4e1648c483c8a6",
         "usr/bin/grim",
     ),
-    "swaylock": (
-        "1.8.6-1",
-        "4662cc18b71e2875e1d766c63e68d21a9370abb167c0968970c966d5e6044ad5",
-        "usr/bin/swaylock",
+    "ibus": (
+        "1.5.34-2",
+        "64c688e0615430b8367080571990d95cf53b5cd8debe0cbfd82a6907854e61e6",
+        "usr/lib/ibus/ibus-wayland",
     ),
 }
 
@@ -172,15 +172,10 @@ def reader_packages(share):
 def stage_shell(share):
     reader_packages(share)
     for source, target in [
-        (agent("swaylock"), "swaylock"),
+        (agent("ibus"), "ibus-wayland"),
         (screencast_backend(), "xdg-desktop-portal-wlr"),
         (agent("grim"), "grim"),
         (Path("/usr/lib/libjpeg.so.8"), "libjpeg.so.8"),
-        (Path("/usr/lib/libgtk4-layer-shell.so.0"), "libgtk4-layer-shell.so.0"),
-        (
-            Path("/usr/lib/girepository-1.0/Gtk4LayerShell-1.0.typelib"),
-            "Gtk4LayerShell-1.0.typelib",
-        ),
     ]:
         shutil.copyfile(source, share / target)
 
@@ -195,10 +190,7 @@ glib-compile-schemas /usr/share/glib-2.0/schemas
 install -Dm755 /mnt/xdg-desktop-portal-wlr /usr/local/bin/xdg-desktop-portal-wlr
 install -Dm755 /mnt/grim /usr/local/bin/grim
 install -Dm755 /mnt/libjpeg.so.8 /usr/local/lib/libjpeg.so.8
-install -Dm755 /mnt/swaylock /usr/local/bin/swaylock
-install -Dm755 /mnt/libgtk4-layer-shell.so.0 /usr/local/lib/libgtk4-layer-shell.so.0
-install -Dm644 /mnt/Gtk4LayerShell-1.0.typelib /usr/local/lib/girepository-1.0/Gtk4LayerShell-1.0.typelib
-if ! test -e /etc/pam.d/swaylock; then
-    printf '%s\\n' 'auth include system-auth' > /etc/pam.d/swaylock
+if ! test -x /usr/libexec/ibus-wayland && ! test -x /usr/lib/ibus/ibus-wayland; then
+    install -Dm755 /mnt/ibus-wayland /usr/libexec/ibus-wayland
 fi
 """

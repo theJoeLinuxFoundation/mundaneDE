@@ -552,7 +552,6 @@ def appearance_and_speech(s, suite):
             lambda: "\n".join(s.tree()),
             s.read,
             wait,
-            gpui_shell=True,
         )
     finally:
         s.joe(f"gsettings set {reader} {previous_reader}")

@@ -53,7 +53,7 @@ pub struct Panel(Bus);
 impl Panel {
     pub fn start(tx: Sender<Event>, ctx: &glib::MainContext) -> Self {
         let active = Rc::new(RefCell::new(None));
-        if std::env::var_os("MUNDANE_IBUS_GPUI").is_some() {
+        if std::env::var_os("MUNDANE_IBUS_PANEL").is_some() {
             let out = active.clone();
             ctx.spawn_local(async move {
                 loop {

@@ -329,7 +329,7 @@ impl State {
                         }
                         if press && mods.ctrl && mods.alt && sym == keysyms::KEY_Tab
                             && state.desktop.watch_tasks && state.desktop.menu_surface.is_none()
-                            && !state.seat.get_keyboard().is_some_and(|k| k.is_grabbed())
+                            && !state.shell_shortcuts_grabbed()
                         {
                             state.shell_message(&serde_json::json!({"open":"taskbar","pointer":[state.cursor_location.x,state.cursor_location.y]}));
                             state.desktop.switcher_keys.insert(event.key_code().raw());

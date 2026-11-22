@@ -2,8 +2,6 @@
 
 from pathlib import Path
 import argparse
-import json
-import hashlib
 import shlex
 import shutil
 import time
@@ -61,37 +59,8 @@ def ppm(label, head=0):
     return tuple(map(int, dims.split())), pixels
 
 
-def protected(label, n, inactive=None):
-    _, pixels = ppm(label, n)
-    if pixels == inactive:
-        return False  # QEMU is still displaying its own disconnected-head message.
-    # An idle PAM surface and the compositor's independent fallback are both opaque.
-    assert pixels[:3] in (bytes.fromhex("182536"), bytes.fromhex("0a121a"))
-    assert pixels == pixels[:3] * (len(pixels) // 3)
-    return True
-
-
-def force_output(n, on):
-    assert n in (2, 3)
-    g.shell(
-        f"echo {'on' if on else 'off'} >/sys/class/drm/card0-Virtual-{n}/status; echo change >/sys/class/drm/card0/uevent"
-    )
-
-
 def launch(what, logfile):
     joe(f"({what}) </dev/null >{logfile} 2>&1 &")
-
-
-def logtext():
-    return g.shell("cat " + log + " 2>/dev/null || :")
-
-
-def authed(sid):
-    keys("j", "o", "e", "ret")
-    wait(
-        "PAM unlock",
-        lambda: g.shell(f"loginctl show-session {sid} -p LockedHint --value") == "no",
-    )
 
 
 assert g.qmp("query-status")["running"]
@@ -113,7 +82,10 @@ sid = wait(
     60,
 )
 assert g.shell(f"loginctl show-session {sid} -p Name --value") == "joe"
-wait("panel", lambda: g.shell("pgrep -u joe -f '/mundane/shell/panel.py' || :"))
+wait("shell", lambda: g.shell("pgrep -x -u joe mundane-shell || :"))
+joe(
+    "busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true"
+)
 share = g.run / "share"
 for source in [
     here / "shell_widgets.py",
@@ -135,41 +107,6 @@ g.key("esc")
 time.sleep(0.2)
 wait("Home on desktop", lambda: "button Home" in widget("list"))
 assert ppm("desktop-layout")[0] == (1920, 1080)
-# Launch through the actual searchable menu, then through the XDG Desktop directory.
-g.move(0.25, 0.7)
-time.sleep(0.2)
-g.click(0.026, 0.981)
-wait("Start search", lambda: "button Window overview" in widget("list"))
-keys("t", "e", "x", "t", "spc", "e", "d", "i", "t", "o", "r")
-time.sleep(0.45)
-keys("ret")
-wait(
-    "Text Editor from Start",
-    lambda: (
-        joe("pgrep -u joe -f '^/usr/bin/gnome-text-editor' || :")
-        and "application gnome-text-editor" in widget("list")
-    ),
-)
-g.key("meta_l", "q")
-joe("gio mime text/plain org.gnome.TextEditor.desktop")
-joe("printf 'Shell file launch\n' > ~/Desktop/Mundane-check.txt")
-wait("desktop file icon", lambda: "button Mundane-check.txt" in widget("list"))
-g.key("meta_l", "d")
-time.sleep(0.25)
-keys("down", "down", "ret")
-wait(
-    "file opened",
-    lambda: (
-        "frame Mundane-check.txt" in widget("list")
-        and "application gnome-text-editor" in widget("list")
-    ),
-)
-g.key("meta_l", "q")
-print(
-    "Bottom taskbar, keyboard Start search and XDG Desktop file launch passed",
-    flush=True,
-)
-
 # A real client negotiates SSD, creates a sandbox connection and inhibits idle while visible.
 work = joe("mktemp -d /run/user/1000/shell-probe.XXXXXX")
 probe = work + "/client.log"
@@ -220,22 +157,18 @@ wait(
     "restored from taskbar",
     lambda: ppm("ssd-task-restore")[1].count(rgb) >= 320 * 170 - 500,
 )
-g.key("meta_l", "spc")
-click("Window overview")
+click("Workspaces, current 1")
 click("Move →")
 wait("window moved to another workspace", lambda: rgb not in ppm("desk-1")[1])
 g.key("meta_l", "2")
 wait(
     "window on second workspace", lambda: ppm("desk-2")[1].count(rgb) >= 320 * 170 - 500
 )
-pid = g.shell("pgrep -u joe -f '/mundane/shell/panel.py' | head -1")
+pid = g.shell("pgrep -u joe -x mundane-shell || :")
 g.shell("kill " + pid)
 wait(
     "replacement panel",
-    lambda: (
-        (p := g.shell("pgrep -u joe -f '/mundane/shell/panel.py' | head -1"))
-        and p != pid
-    ),
+    lambda: (p := g.shell("pgrep -u joe -x mundane-shell || :")) and p != pid,
 )
 wait("same task after restart", lambda: "button Shell test window" in widget("list"))
 assert ppm("desk-2-after-restart")[1].count(rgb) >= 320 * 170 - 500
@@ -252,9 +185,8 @@ launch(
     second + "/client.log",
 )
 wait("second window", lambda: "button Companion" in widget("list"))
-g.key("meta_l", "spc")
-click("Window overview")
-wait("overview opened", lambda: "button Desk 2" in widget("list"))
+click("Workspaces, current 1")
+wait("overview opened", lambda: "Desk 2" in widget("list"))
 keys("w", "i", "n", "d", "o", "w")
 time.sleep(0.35)
 keys("ret")
@@ -294,7 +226,9 @@ for control, event in [
 # Virtual radio and two real PipeWire null sinks in the guest.
 g.shell("modprobe mac80211_hwsim")
 modules = [
-    joe("pactl load-module module-null-sink sink_name=" + name)
+    joe(
+        f"pactl load-module module-null-sink sink_name={name} sink_properties=device.description={name}"
+    )
     for name in ("mundane_first", "mundane_second")
 ]
 try:
@@ -303,18 +237,21 @@ try:
     wait(
         "Wi-Fi tile ready",
         lambda: (
-            "toggle button Wi-Fi, " + ("On" if radio == "enabled" else "Off")
-            in widget("list").splitlines()
+            "toggle button Wi-Fi" in widget("list").splitlines()
+            and widget("description", "Wi-Fi") in ("On", "Off")
         ),
     )
-    widget("click", "Wi-Fi, " + ("On" if radio == "enabled" else "Off"))
+    widget("click", "Wi-Fi")
     wait("NetworkManager radio toggled", lambda: joe("nmcli radio wifi") != radio)
     changed = joe("nmcli radio wifi")
     wait(
         "Wi-Fi state reflected",
-        lambda: "Wi-Fi, " + ("On" if changed == "enabled" else "Off") in widget("list"),
+        lambda: (
+            widget("description", "Wi-Fi").strip()
+            == ("On" if changed == "enabled" else "Off")
+        ),
     )
-    widget("click", "Wi-Fi, " + ("On" if changed == "enabled" else "Off"))
+    widget("click", "Wi-Fi")
     wait("NetworkManager radio restored", lambda: joe("nmcli radio wifi") == radio)
     active_sink = joe("wpctl inspect @DEFAULT_AUDIO_SINK@")
     other = "mundane_first" if "mundane_second" in active_sink else "mundane_second"
@@ -329,161 +266,5 @@ finally:
     for module in modules:
         joe("pactl unload-module " + module)
 print("Virtual Wi-Fi toggle and WirePlumber sink selection passed", flush=True)
-# Use a visible input probe to check OSD focus and locked input delivery.
-joe(
-    "busctl --user call org.joelinux.MundaneSessionTest /org/joelinux/MundaneSessionTest org.freedesktop.Application Activate 'a{sv}' 0"
-)
-wait("keyboard probe visible", lambda: "ready " in logtext())
-keys("a")
-wait("keyboard probe focused", lambda: "key a" in logtext())
-g.key("volumeup")
-keys("b")
-wait("volume OSD kept focus", lambda: "key b" in logtext())
-print("Tray activation, notification action and OSD focus passed", flush=True)
 
-force_output(2, True)
-time.sleep(0.5)
-g.key("meta_l", "l")
-wait(
-    "locked hint",
-    lambda: g.shell(f"loginctl show-session {sid} -p LockedHint --value") == "yes",
-)
-for i in (0, 1):
-    wait("covered output", lambda i=i: protected(f"locked-{i}", i))
-inactive = ppm("disconnected-third-output", 2)[1]
-force_output(3, True)
-wait("new output covered", lambda: protected("locked-hotplug", 2, inactive))
-g.shell("pkill -KILL -x swaylock")
-for i in range(3):
-    assert protected(f"locker-loss-{i}", i)
-wait("restarted locker", lambda: g.shell("pgrep -u joe -x swaylock || :"))
-before = logtext()
-keys("w", "r", "o", "n", "g", "ret")
-time.sleep(2)
-assert (
-    logtext() == before
-    and g.shell(f"loginctl show-session {sid} -p LockedHint --value") == "yes"
-)
-g.shell("systemctl suspend --no-block")
-wait("suspended", lambda: g.qmp("query-status")["status"] == "suspended")
-g.qmp("system_wakeup")
-g.sync_console()
-assert g.shell(f"loginctl show-session {sid} -p LockedHint --value") == "yes"
-authed(sid)
-force_output(3, False)
-force_output(2, False)
-keys("d")
-wait("app receives input again", lambda: "key d" in logtext())
-print(
-    "Two locked outputs, hotplug of a third, locker loss, refused password, S3 and PAM unlock passed",
-    flush=True,
-)
-
-# Put recorded dave.status/1 documents on the panel's PATH only. The beta1
-# image predates r3. The real installed dave and its deployment store stay intact.
-from upgrade_checks import snapshot
-
-fixture = "/tmp/mundane-shell-test"
-g.shell(
-    "set -eu; mkdir -p "
-    + fixture
-    + "/bin; install -m755 /usr/local/bin/mundane-panel "
-    + fixture
-    + "/panel.orig; "
-    "printf '%s\\n' '#!/bin/sh' 'test \"$*\" = \"status --json\" || exit 1' 'exec cat /tmp/mundane-shell-test/status.json' > "
-    + fixture
-    + "/bin/dave; "
-    "chmod 755 "
-    + fixture
-    + "/bin/dave; sed '2i export PATH=/tmp/mundane-shell-test/bin:$PATH' "
-    + fixture
-    + "/panel.orig > /usr/local/bin/mundane-panel"
-)
-
-
-def publish(status):
-    g.shell(
-        "printf '%s' "
-        + shlex.quote(json.dumps(status))
-        + " > "
-        + fixture
-        + "/pending && mv "
-        + fixture
-        + "/pending "
-        + fixture
-        + "/status.json"
-    )
-
-
-def restart_panel():
-    pid = g.shell("pgrep -u joe -f '/mundane/shell/panel.py' | head -1")
-    g.shell("kill " + pid)
-    wait(
-        "panel restarted",
-        lambda: (
-            (p := g.shell("pgrep -u joe -f '/mundane/shell/panel.py' | head -1"))
-            and p != pid
-        ),
-    )
-    wait("tray watcher ready", lambda: "button Start" in widget("list"))
-
-
-try:
-    publish(snapshot(1))
-    restart_panel()
-    stage = {
-        "id": "sha256:" + hashlib.sha256(work.encode()).hexdigest(),
-        "install": 2,
-        "remove": 0,
-        "summary": "2 to install or upgrade, 0 to remove",
-    }
-    publish(snapshot(2, stage))
-    wait(
-        "prepared notification",
-        lambda: "label Upgrade ready, restart to apply" in widget("list").splitlines(),
-        22,
-    )
-    restart_panel()
-    time.sleep(1)
-    assert "label Upgrade ready, restart to apply" not in widget("list").splitlines()
-    click("System menu")
-    wait("prepared status retained", lambda: stage["summary"] in widget("list"))
-    keys("esc")
-    publish(snapshot(3, outcome="not_running"))
-    time.sleep(16)
-    click("System menu")
-    time.sleep(0.4)
-    rows = widget("list")
-    assert (
-        "Upgrade ready, restart to apply" not in rows
-        and "Upgrade to deployment 5 failed" not in rows
-    )
-    keys("esc")
-    failed = snapshot(4, outcome="fallback")
-    failed["last_upgrade"]["event"] = "boot-" + work.rsplit("/", 1)[1]
-    publish(failed)
-    wait(
-        "automatic fallback toast",
-        lambda: "Returned to deployment 4." in widget("list"),
-        22,
-    )
-    restart_panel()
-    time.sleep(1)
-    assert "Returned to deployment 4." not in widget("list")
-    click("System menu")
-    wait(
-        "persistent recovery details",
-        lambda: (
-            "Upgrade to deployment 5 failed" in (details := widget("list"))
-            and "Returned to deployment 4." in details
-        ),
-    )
-    g.screen("recovery-details")
-    keys("esc")
-finally:
-    g.shell("install -m755 " + fixture + "/panel.orig /usr/local/bin/mundane-panel")
-    restart_panel()
-print(
-    "dave staged and fallback notifications, manual rollback suppression and restart deduplication passed",
-    flush=True,
-)
+# Lock, notification history, OSD focus and deployment notices have dedicated guest gates.

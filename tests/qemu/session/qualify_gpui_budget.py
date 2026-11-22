@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from guest import Guest
-from qualify_gpui_outputs import assert_preview, joe, plug
+from qualify_gpui_outputs import assert_session, joe, plug
 from qualify_menus import wait
 
 
@@ -17,7 +17,7 @@ def pixel(frame, x, y):
 
 def qualify(run, startup_only=False):
     g = Guest(run)
-    assert_preview(g)
+    assert_session(g)
 
     def journal(pattern):
         return g.shell(f"journalctl -b -o short-unix --no-pager --grep='{pattern}' -n1")
@@ -56,7 +56,7 @@ def qualify(run, startup_only=False):
     # Reuse the untouched system font caches from the image. Give GPUI/Mesa a
     # fresh user cache for the cold measurement and keep it for the warm logins.
     cache = joe(g, "mktemp -d /home/joe/.cache/gpui-qualification.XXXXXX")
-    entry = "/usr/share/wayland-sessions/mundane-gpui.desktop"
+    entry = "/usr/share/wayland-sessions/mundane.desktop"
     g.shell(
         f"sed -i -E 's! XDG_CACHE_HOME=[^ ]+!!;s!^Exec=/usr/bin/env !Exec=/usr/bin/env XDG_CACHE_HOME={cache} !' {entry}"
     )
@@ -131,7 +131,7 @@ def qualify(run, startup_only=False):
 
     def idle(label):
         time.sleep(60)
-        pid = assert_preview(g)
+        pid = assert_session(g)
 
         def cpu():
             fields = g.shell(f"cat /proc/{pid}/stat").split()
@@ -215,7 +215,7 @@ def qualify(run, startup_only=False):
         setting = "org.gnome.desktop.a11y.applications screen-reader-enabled"
         previous = joe(g, "gsettings get " + setting)
         joe(g, "gsettings set " + setting + " true")
-        reader = "pgrep -P " + str(assert_preview(g)) + " -f /usr/bin/orca || :"
+        reader = "pgrep -P " + str(assert_session(g)) + " -f /usr/bin/orca || :"
         wait("supervised Orca", lambda: g.shell(reader).isdigit())
         orca = int(g.shell(reader))
         try:

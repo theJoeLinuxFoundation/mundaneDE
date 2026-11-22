@@ -105,27 +105,22 @@ subprocess.run(
         "+stable",
         "build",
         "--locked",
+        "--release",
+        "--workspace",
         "--manifest-path",
         "settings-panel/Cargo.toml",
     ],
     cwd=ROOT,
     check=True,
 )
-settings = run / "mundane-settings"
-subprocess.run(
-    [
-        "objcopy",
-        "--strip-debug",
-        ROOT / "settings-panel/target/debug/mundane-settings",
-        settings,
-    ],
-    check=True,
-)
+gui = ROOT / "settings-panel/target/release"
+settings = gui / "mundane-settings"
 binary = ROOT / "target/release/mundane-de"
 source_hash = hashlib.sha256()
 for path in [
     binary,
     settings,
+    *(gui / name for name in ("mundane-session", "mundane-shell", "mundane-lock")),
     *sorted((ROOT / "session").rglob("*")),
     *(
         fixtures / n

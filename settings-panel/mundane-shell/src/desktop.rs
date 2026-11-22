@@ -79,6 +79,7 @@ pub fn watch(tx: Sender<Event>) -> Option<gio::FileMonitor> {
 }
 pub struct Desktop {
     scroll: ScrollHandle,
+    hovered: Option<String>,
     focus: HashMap<String, FocusHandle>,
 }
 impl Desktop {
@@ -107,24 +108,19 @@ impl Render for Desktop {
         let tile_h = 80. * factor;
         let rows = (((f32::from(size.height) - 52. * factor) / tile_h) as usize).max(1);
         let cols = icons.len().div_ceil(rows).max(1);
-        let extent = gpui::size(
-            px((cols as f32 * tile_w + 8.).min(f32::from(size.width))),
-            px((rows.min(icons.len().max(1)) as f32 * tile_h + 8.).min(f32::from(size.height))),
-        );
-        if extent != w.viewport_size() {
-            w.resize(extent);
-        }
         self.focus
             .retain(|uri, _| icons.iter().any(|i| &i.uri == uri));
         let mut grid = div()
             .id("desktop")
             .size_full()
             .flex()
-            .overflow_x_scroll()
+            .overflow_scroll()
             .track_scroll(&self.scroll)
             .p(px(4.));
         let mut handles = Vec::new();
+        let mut tallest = 0f32;
         for col in icons.chunks(rows) {
+            let mut height = 0f32;
             let mut column = div().flex().flex_col().flex_none();
             for icon in col {
                 let focus = self
@@ -133,6 +129,36 @@ impl Render for Desktop {
                     .or_insert_with(|| cx.focus_handle().tab_stop(true))
                     .clone();
                 handles.push(focus.clone());
+                let expanded = self.hovered.as_ref() == Some(&icon.uri)
+                    || (w.is_window_active() && focus.is_focused(w));
+                let line = px(17. * factor);
+                let mut caption = div()
+                    .w_full()
+                    .text_center()
+                    .line_height(line)
+                    .px(tokens::space::XS)
+                    .rounded(tokens::radius::CONTROL)
+                    .bg(rgb(theme.panel))
+                    .text_color(rgb(theme.text))
+                    .text_size(tokens::text::CONTROL);
+                let mut tile_height = tile_h;
+                if expanded {
+                    let run = w.text_style().to_run(icon.name.len());
+                    if let Ok(lines) = w.text_system().shape_text(
+                        icon.name.clone().into(),
+                        tokens::text::CONTROL.to_pixels(w.rem_size()),
+                        &[run],
+                        Some(px(tile_w - 12. * factor)),
+                        None,
+                    ) {
+                        let count: usize = lines.iter().map(|l| l.wrap_boundaries.len() + 1).sum();
+                        tile_height += count.saturating_sub(2) as f32 * f32::from(line);
+                    }
+                } else {
+                    caption = caption.line_clamp(2).text_ellipsis();
+                }
+                height += tile_height;
+                let uri = icon.uri.clone();
                 let open = {
                     let tx = tx.clone();
                     let uri = icon.uri.clone();
@@ -144,7 +170,15 @@ impl Render for Desktop {
                     mundane_ui::button_base(icon.name.clone(), &focus, theme, open.clone())
                         .on_a11y_action(AccessibleAction::Click, move |_, w, cx| open(w, cx))
                         .w(px(tile_w))
-                        .h(px(tile_h))
+                        .h(px(tile_height))
+                        .on_hover(cx.listener(move |view, over: &bool, _, cx| {
+                            if *over {
+                                view.hovered = Some(uri.clone());
+                            } else if view.hovered.as_ref() == Some(&uri) {
+                                view.hovered = None;
+                            }
+                            cx.notify();
+                        }))
                         .flex()
                         .flex_col()
                         .items_center()
@@ -156,20 +190,18 @@ impl Render for Desktop {
                             &icon.name,
                             tokens::icon::EXTRA_LARGE,
                         ))
-                        .child(
-                            div()
-                                .max_w_full()
-                                .truncate()
-                                .px(tokens::space::XS)
-                                .rounded(tokens::radius::CONTROL)
-                                .bg(rgb(theme.panel))
-                                .text_color(rgb(theme.text))
-                                .text_size(tokens::text::CONTROL)
-                                .child(icon.name.clone()),
-                        ),
+                        .child(caption.child(icon.name.clone())),
                 );
             }
+            tallest = tallest.max(height);
             grid = grid.child(column);
+        }
+        let extent = gpui::size(
+            px((cols as f32 * tile_w + 8.).min(f32::from(size.width))),
+            px((tallest + 8.).min(f32::from(size.height))),
+        );
+        if extent != w.viewport_size() {
+            w.resize(extent);
         }
         let scroll = self.scroll.clone();
         grid.on_key_down(move |event, w, cx| {
@@ -222,6 +254,7 @@ pub fn open(display: DisplayId, cx: &mut App) -> anyhow::Result<WindowHandle<Des
             cx.new(|_| Desktop {
                 focus: HashMap::new(),
                 scroll: ScrollHandle::new(),
+                hovered: None,
             })
         },
     )

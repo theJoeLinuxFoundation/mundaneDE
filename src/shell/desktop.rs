@@ -90,7 +90,7 @@ impl Desktop {
             idle: IdleNotifierState::new(dh, handle),
             inhibitors: vec![],
             presented: HashMap::new(),
-            lock: Lock::new(dh),
+            lock: Lock::new(),
             menu_surface: None,
             switcher: None,
             switcher_keys: Default::default(),

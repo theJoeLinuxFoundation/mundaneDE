@@ -1,31 +1,23 @@
 #!/bin/sh
-# Install session integration for distro packaging or into a staging tree.
+# Install the compositor and the four binaries from the settings-panel workspace.
 set -eu
 prefix=${PREFIX:-/usr/local}
 dest=${DESTDIR:-}
 here=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
+gui=${2:-"$here/../settings-panel/target/release"}
 install -Dm755 "${1:?path to built mundane-de}" "$dest$prefix/bin/mundane-de"
-install -Dm755 "$here/mundane-session" "$dest$prefix/bin/mundane-session"
-install -Dm644 "$here/50-mundane.gschema.override" "$dest/usr/share/glib-2.0/schemas/50-mundane.gschema.override"
-install -Dm644 "$here/org.joelinux.mundane.shell.gschema.xml" "$dest/usr/share/glib-2.0/schemas/org.joelinux.mundane.shell.gschema.xml"
+for binary in mundane-session mundane-shell mundane-settings mundane-lock; do
+    install -Dm755 "$gui/$binary" "$dest$prefix/bin/$binary"
+done
+install -Dm644 "$here/mundane-lock.pam" "$dest/usr/lib/pam.d/mundane-lock"
 install -d "$dest/usr/share/wayland-sessions"
 sed "s|@bindir@|$prefix/bin|g" "$here/mundane.desktop.in" > "$dest/usr/share/wayland-sessions/mundane.desktop"
-if [ -n "${2:-}" ]; then
-    install -Dm644 "$here/mundane-gpui-portals.conf" "$dest$prefix/share/xdg-desktop-portal/mundane-gpui-portals.conf"
-    install -Dm644 "$here/mundane-gpui-mimeapps.list" "$dest$prefix/share/applications/mundane-gpui-mimeapps.list"
-    locker=${3:-$(dirname "$2")/mundane-lock}
-    install -Dm755 "$locker" "$dest$prefix/bin/mundane-lock"
-    install -Dm644 "$here/mundane-lock.pam" "$dest/usr/lib/pam.d/mundane-lock"
-    install -Dm755 "$2" "$dest$prefix/bin/mundane-shell"
-    sed "s|@bindir@|$prefix/bin|g" "$here/mundane-gpui.desktop.in" > "$dest/usr/share/wayland-sessions/mundane-gpui.desktop"
-fi
+for schema in 50-mundane.gschema.override org.joelinux.mundane.shell.gschema.xml; do
+    install -Dm644 "$here/$schema" "$dest/usr/share/glib-2.0/schemas/$schema"
+done
 for unit in mundane-session.target mundane-ibus.service; do
     install -Dm644 "$here/$unit" "$dest$prefix/lib/systemd/user/$unit"
 done
+install -Dm644 "$here/mundane-mimeapps.list" "$dest$prefix/share/applications/mundane-mimeapps.list"
 install -Dm644 "$here/mundane-portals.conf" "$dest$prefix/share/xdg-desktop-portal/mundane-portals.conf"
-install -Dm755 "$here/mundane-panel" "$dest$prefix/bin/mundane-panel"
-for script in "$here"/shell/*.py; do
-    install -Dm644 "$script" "$dest$prefix/share/mundane/shell/$(basename "$script")"
-done
-
 install -Dm644 "$here/mundane.portal" "$dest$prefix/share/xdg-desktop-portal/portals/mundane.portal"

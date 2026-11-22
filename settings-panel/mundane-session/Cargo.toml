@@ -1,0 +1,12 @@
+[package]
+name = "mundane-session"
+version.workspace = true
+edition.workspace = true
+license = "BSD-3-Clause"
+description = "GDM session leader for mundaneDE"
+
+[dependencies]
+anyhow.workspace = true
+gio = "0.22"
+signal-hook = { version = "0.4", default-features = false }
+tempfile = "3"

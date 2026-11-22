@@ -28,6 +28,7 @@ pkgs.mkShell {
   ];
 
   buildInputs = with pkgs; [
+    glib
     # GPUI core deps
     vulkan-loader
     libxkbcommon

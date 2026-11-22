@@ -37,6 +37,8 @@ files are included in the vendored archive. Bindgen uses libclang at build time.
 The installed locker dynamically links system libpam.so.0 (Linux-PAM’s BSD
 licence option). The distribution supplies PAM modules and their notices.
 
+The native `mundane-session` leader is BSD-3-Clause. It uses GIO/GLib (MIT bindings), tempfile and signal-hook (MIT OR Apache-2.0).
+
 The lock clock uses the MIT-licensed glib Rust binding and the system GLib
 library. The input-method view exchanges messages using the IBus panel D-Bus
 interface. The distribution ships the IBus daemon, conversion engines and

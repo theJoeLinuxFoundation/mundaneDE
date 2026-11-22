@@ -10,7 +10,31 @@ from pathlib import Path
 
 from qualify_gpui_settings import Session
 from qualify_menus import wait
-from upgrade_checks import snapshot
+
+
+def snapshot(revision, prepared=None, outcome=None):
+    last = (
+        {
+            "event": "deployment-5",
+            "deployment": 5,
+            "outcome": outcome,
+            "message": "Boot check",
+        }
+        if outcome
+        else None
+    )
+    return dict(
+        schema="dave.status/1",
+        revision=str(revision),
+        managed=True,
+        complete=True,
+        running=4,
+        next_boot=4,
+        deployments=[],
+        prepared_upgrade=prepared,
+        last_upgrade=last,
+    )
+
 
 FIX = "/tmp/mundane-feedback-test"
 

@@ -16,7 +16,11 @@ HERE = Path(__file__).resolve().parent
 
 def prepare_ibus(base, host, launch):
     addr = "unix:path=" + str(base / "ibus")
-    host.update(IBUS_ADDRESS=addr, LC_ALL="C.UTF-8", MUNDANE_IBUS_PANEL="/usr/lib/ibus/ibus-ui-gtk3")
+    # This compositor-only probe exercises the input-popup protocol with an external client.
+    frontend = base / "test-input-method"
+    frontend.write_text('#!/bin/sh\nexec /usr/lib/ibus/ibus-ui-gtk3 --enable-wayland-im "$@"\n')
+    frontend.chmod(0o755)
+    host.update(IBUS_ADDRESS=addr, LC_ALL="C.UTF-8", MUNDANE_IBUS_PANEL=str(frontend))
     bus = launch(
         [
             "ibus-daemon",

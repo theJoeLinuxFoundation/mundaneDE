@@ -1,6 +1,7 @@
 { lib
 , rustPlatform
 , pam
+, glib
 , polkit
 , pkg-config
 , vulkan-loader
@@ -47,7 +48,10 @@ rustPlatform.buildRustPackage {
 
   nativeBuildInputs = [ pkg-config makeWrapper rustPlatform.bindgenHook ];
 
+  cargoBuildFlags = [ "-p" "mundane-settings" ];
+
   buildInputs = [
+    glib
     polkit
     pam
     vulkan-loader

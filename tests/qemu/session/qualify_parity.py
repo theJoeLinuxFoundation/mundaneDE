@@ -1,4 +1,4 @@
-"""Compare daily shell workflows on the baseline and revised 1920x1080 joe guest."""
+"""Exercise daily shell workflows in a 1920x1080 headless joe guest."""
 
 import argparse
 import shlex
@@ -11,7 +11,7 @@ from guest import Guest
 from qualify_menus import wait
 
 
-def qualify(run, output, baseline, gpui=False):
+def qualify(run, output):
     g = Guest(run)
     assert g.qmp("query-display-options")["type"] == "none"
     assert {n["node-name"] for n in g.qmp("query-named-block-nodes") if n["ro"]} >= {
@@ -51,28 +51,21 @@ def qualify(run, output, baseline, gpui=False):
         )
 
     def pin_control(name, pinned):
-        if gpui:
-            return "button " + name in launcher("list", "").splitlines() and launcher(
-                "description", name
-            ) == ("Pinned application" if pinned else "Application")
-        return has("button " + ("Unpin " if pinned else "Pin ") + name)
+        return "button " + name in launcher("list", "").splitlines() and launcher(
+            "description", name
+        ) == ("Pinned application" if pinned else "Application")
 
     def change_pin(verb, name):
-        if gpui:
-            launcher("focus", name)
-            key("menu")
-            wait(
-                "application context menu",
-                lambda: has("menu item " + verb + " " + name),
-            )
-            key("ret")
-        else:
-            widget("click", verb + " " + name)
+        launcher("focus", name)
+        key("menu")
+        wait(
+            "application context menu",
+            lambda: has("menu item " + verb + " " + name),
+        )
+        key("ret")
 
     def has(row):
         rows = widget("list").splitlines()
-        if gpui and row.startswith(("button Pin ", "button Unpin ")):
-            return row in rows or "toggle " + row in rows
         return row in rows
 
     def key(*names):
@@ -94,7 +87,7 @@ def qualify(run, output, baseline, gpui=False):
         time.sleep(0.35)
         ppm = g.screen("parity-" + name)
         assert ppm.startswith(b"P6\n1920 1080\n255\n")
-        path = output / (("before-" if baseline else "after-") + name + ".png")
+        path = output / ("after-" + name + ".png")
         with path.open("wb") as png:
             subprocess.run(["pnmtopng"], input=ppm, stdout=png, check=True)
 
@@ -121,13 +114,10 @@ def qualify(run, output, baseline, gpui=False):
             f"</dev/null >{profile}/editor.log 2>&1 &"
         )
 
-    if gpui:
-        wait(
-            "GPUI preview login", lambda: g.shell("pgrep -x -u joe mundane-shell || :")
-        )
-        joe(
-            "busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true"
-        )
+    wait("mundaneDE login", lambda: g.shell("pgrep -x -u joe mundane-shell || :"))
+    joe(
+        "busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true"
+    )
     wait("taskbar", lambda: has("button Start"))
     # Use a fresh login with a clear workspace for matching captures.
     assert not has("frame Calculator") and not editor("Week")
@@ -137,12 +127,7 @@ def qualify(run, output, baseline, gpui=False):
     wait("Start", lambda: has("frame Start menu"))
     shot("start")
     key("esc")
-    if baseline:
-        joe(
-            "gio launch /usr/share/applications/org.gnome.Calculator.desktop >/dev/null 2>&1"
-        )
-    else:
-        widget("click", "Calculator")
+    widget("click", "Calculator")
     wait("calculator window", lambda: has("frame Calculator") and active("Calculator"))
     joe(
         "printf 'Monday\n\nReview the desktop package\nCheck the hand-test notes\n' >/tmp/Week.txt; "
@@ -152,18 +137,14 @@ def qualify(run, output, baseline, gpui=False):
     held("alt", True)
     try:
         key("tab")
-        if not baseline:
-            wait("switcher", lambda: has("frame Switch windows"))
-            wait(
-                "two windows in switcher",
-                lambda: has("label 2 of 2  ·  Release Alt to switch"),
-            )
+        wait("switcher", lambda: has("frame Switch windows"))
+        wait(
+            "two windows in switcher",
+            lambda: has("label 2 of 2  ·  Release Alt to switch"),
+        )
         shot("switcher")
     finally:
         held("alt", False)
-    if baseline:
-        assert not has("frame Switch windows")
-        return
     wait("switcher closed", lambda: not has("frame Switch windows"))
     wait("release selects calculator", lambda: active("Calculator"))
     key("alt", "tab")
@@ -182,16 +163,15 @@ def qualify(run, output, baseline, gpui=False):
     widget("click", "Calculator")
     wait("running pin focuses same calculator", lambda: active("Calculator"))
     assert widget("list").splitlines().count("frame Calculator") == 1
-    if gpui:
-        assert widget("description", "Calculator") == "Running, active window"
-        assert widget("description", "Text Editor") == "Running"
-        shot("running")
+    assert widget("description", "Calculator") == "Running, active window"
+    assert widget("description", "Text Editor") == "Running"
+    shot("running")
     joe("printf 'Tuesday\n' > /tmp/Travel.txt; ")
     launch_editor("Travel.txt")
     wait("second document", lambda: (name := editor("Travel")) and active(name))
     widget("click", "Text Editor")
 
-    group_role = "menu item " if gpui else "button "
+    group_role = "menu item "
 
     def document_button():
         return next(
@@ -219,8 +199,7 @@ def qualify(run, output, baseline, gpui=False):
     # A minimized calculator remains reachable. An empty desk has no candidates.
     widget("click", "Minimize")
     wait("calculator minimized", lambda: not active("Calculator"))
-    if gpui:
-        assert widget("description", "Calculator") == "Running"
+    assert widget("description", "Calculator") == "Running"
     widget("click", "Calculator")
     wait("pin restores minimized calculator", lambda: active("Calculator"))
     key("meta_l", "2")
@@ -245,19 +224,12 @@ def qualify(run, output, baseline, gpui=False):
     wait("pin saved", lambda: pin_control("Calculator", True))
     key("esc")
     key("meta_l", "spc")
-    if gpui:
-        launcher("focus", "Categories")
-    else:
-        key("tab")
+    launcher("focus", "Categories")
     key("spc")
-    if gpui:
-        wait("shared searchable categories", lambda: has("entry Filter options"))
-        for letter in "util":
-            key(letter)
-        key("ret")
-    else:
-        wait("browse application categories", lambda: has("button Utilities"))
-        widget("click", "Utilities")
+    wait("shared searchable categories", lambda: has("entry Filter options"))
+    for letter in "util":
+        key(letter)
+    key("ret")
     wait(
         "Utilities category",
         lambda: (
@@ -272,75 +244,60 @@ def qualify(run, output, baseline, gpui=False):
     wait("Files removed from favourites", lambda: not pin_control("Files", True))
     key("esc")
     wait("Files pin removed from the bar", lambda: not has("button Files"))
-    panel_pid = (
-        "pgrep -x -u joe mundane-shell"
-        if gpui
-        else "pgrep -u joe -f '/mundane/shell/panel.py' | head -1"
-    )
+    panel_pid = "pgrep -x -u joe mundane-shell"
     pid = g.shell(panel_pid)
-    if gpui:
-        sid = joe("loginctl show-user joe -p Display --value")
-        key("meta_l", "l")
-        wait(
-            "session locked",
-            lambda: (
-                g.shell(f"loginctl show-session {sid} -p LockedHint --value") == "yes"
-            ),
-        )
+    sid = joe("loginctl show-user joe -p Display --value")
+    key("meta_l", "l")
+    wait(
+        "session locked",
+        lambda: g.shell(f"loginctl show-session {sid} -p LockedHint --value") == "yes",
+    )
     g.shell("kill " + str(int(pid)))
     wait(
         "new panel",
         lambda: (p := g.shell(panel_pid + " || :")) and p != pid,
     )
-    if gpui:
-        for character in ("j", "o", "e", "ret"):
-            key(character)
-        wait(
-            "PAM unlocked the same session",
-            lambda: (
-                g.shell(f"loginctl show-session {sid} -p LockedHint --value") == "no"
-            ),
-        )
+    for character in ("j", "o", "e", "ret"):
+        key(character)
+    wait(
+        "PAM unlocked the same session",
+        lambda: g.shell(f"loginctl show-session {sid} -p LockedHint --value") == "no",
+    )
     wait("pins survive panel restart", lambda: has("button Calculator"))
-    if gpui:
-        widget("click", "Text Editor")
-        wait(
-            "restarted shell recovers both running documents",
-            lambda: (
-                document_button()
-                and any(
-                    r.startswith("menu item Travel.txt")
-                    for r in widget("list").splitlines()
-                )
-            ),
-        )
-        key("esc")
+    widget("click", "Text Editor")
+    wait(
+        "restarted shell recovers both running documents",
+        lambda: (
+            document_button()
+            and any(
+                r.startswith("menu item Travel.txt")
+                for r in widget("list").splitlines()
+            )
+        ),
+    )
+    key("esc")
     key("meta_l", "spc")
     wait("persisted pin in favourites", lambda: pin_control("Calculator", True))
     assert not pin_control("Files", True)
-    if gpui:
-        # The removed pin must be appended, and the *presented* bar must
-        # follow that order even though the inherited list puts Files second.
-        for letter in "files":
-            key(letter)
-        wait("Files search result", lambda: pin_control("Files", False))
-        change_pin("Pin", "Files")
-        wait("Files pinned again", lambda: pin_control("Files", True))
+    for letter in "files":
+        key(letter)
+    wait("Files search result", lambda: pin_control("Files", False))
+    change_pin("Pin", "Files")
+    wait("Files pinned again", lambda: pin_control("Files", True))
     key("esc")
-    if gpui:
-        expected = [
-            "button " + name
-            for name in (
-                "Web Browser",
-                "Terminal",
-                "Text Editor",
-                "Calculator",
-                "Files",
-            )
-        ]
-        lines = widget("list").splitlines()
-        first = lines.index("frame Taskbar")
-        assert [row for row in lines[first:] if row in expected][:5] == expected
+    expected = [
+        "button " + name
+        for name in (
+            "Web Browser",
+            "Terminal",
+            "Text Editor",
+            "Calculator",
+            "Files",
+        )
+    ]
+    lines = widget("list").splitlines()
+    first = lines.index("frame Taskbar")
+    assert [row for row in lines[first:] if row in expected][:5] == expected
     joe("gsettings reset org.joelinux.mundane.shell favorite-apps")
     wait("inherited Files pin restored", lambda: has("button Files"))
     print(
@@ -352,7 +309,5 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("run", type=Path)
     p.add_argument("output", type=Path)
-    p.add_argument("--baseline", action="store_true")
-    p.add_argument("--gpui", action="store_true")
     a = p.parse_args()
-    qualify(a.run, a.output, a.baseline, a.gpui)
+    qualify(a.run, a.output)

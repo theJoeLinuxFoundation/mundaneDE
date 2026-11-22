@@ -9,6 +9,19 @@ pub struct Switcher {
 }
 
 impl State {
+    /// A typing frontend can hold its keyboard grab across application focus changes.
+    /// A popup or other exclusive grab still gets first refusal on shell shortcuts.
+    pub fn shell_shortcuts_grabbed(&self) -> bool {
+        self.seat
+            .get_keyboard()
+            .and_then(|keyboard| {
+                keyboard.with_grab(|_, grab| {
+                    !grab.is::<smithay::wayland::input_method::InputMethodKeyboardGrab>()
+                })
+            })
+            .unwrap_or(false)
+    }
+
     pub fn finish_switcher(&mut self, activate: bool) {
         if let Some(switcher) = self.desktop.switcher.take() {
             self.shell_message(&serde_json::json!({"switcher":null}));
@@ -50,7 +63,10 @@ impl State {
         }
         if self.desktop.switcher.is_none() {
             let kb = self.seat.get_keyboard().unwrap();
-            if kb.is_grabbed() || self.desktop.showing_desktop || self.window_menu.is_some() {
+            if self.shell_shortcuts_grabbed()
+                || self.desktop.showing_desktop
+                || self.window_menu.is_some()
+            {
                 return false;
             }
             let windows: Vec<_> = self

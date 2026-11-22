@@ -431,7 +431,7 @@ mod tests {
         for role in [
             Role::Application,
             Role::Shell,
-            Role::Locker,
+            Role::InputMethod,
             Role::GpuiLocker(2),
             Role::GpuiLocker(3),
         ] {

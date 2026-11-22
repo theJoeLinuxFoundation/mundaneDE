@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-default-members = ["mundane-settings", "mundane-settings-core"]
 members = [
     "mundane-settings",
     "mundane-settings-core",
     "mundane-shell",
+    "mundane-session",
     "mundane-lock",
 ]
 

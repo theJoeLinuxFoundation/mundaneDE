@@ -7,7 +7,7 @@ import time
 from . import suite_checks
 
 
-def check(g, joe, launch, tree, speech, read, wait, gpui_shell=False):
+def check(g, joe, launch, tree, speech, read, wait):
     widgets = "python3 -W ignore /tmp/m7/shell_widgets.py "
 
     def activate(label):
@@ -99,7 +99,6 @@ def check(g, joe, launch, tree, speech, read, wait, gpui_shell=False):
             tree,
             read,
             wait,
-            gpui_shell=gpui_shell,
             widgets=widgets,
         )
         # Exercise the same live window across actual DRM fractional-scale changes.
@@ -175,28 +174,27 @@ def check(g, joe, launch, tree, speech, read, wait, gpui_shell=False):
             activate(target)
             wait("shell authentication", lambda: "password text Password" in tree())
 
-        if gpui_shell:
-            choose()
-            offset = len(speech())
-            for key in ("x", "z", "9"):
-                g.key(key)
-                time.sleep(0.14)
-            assert joe(widgets + "protected Password") == "protected"
-            g.key("ret")
-            wait(
-                "wrong password inline",
-                lambda: (
-                    "Authentication failed. Try again." in tree()
-                    and "password text Password" in tree()
-                ),
-            )
-            g.key("esc")
-            wait(
-                "Escape cancelled",
-                lambda: "frame Authentication required" not in tree(),
-            )
-            assert g.shell("timedatectl show -p Timezone --value") == original
-            assert not set(speech()[offset:]) & {"x", "z", "9", "xz9"}
+        choose()
+        offset = len(speech())
+        for key in ("x", "z", "9"):
+            g.key(key)
+            time.sleep(0.14)
+        assert joe(widgets + "protected Password") == "protected"
+        g.key("ret")
+        wait(
+            "wrong password inline",
+            lambda: (
+                "Authentication failed. Try again." in tree()
+                and "password text Password" in tree()
+            ),
+        )
+        g.key("esc")
+        wait(
+            "Escape cancelled",
+            lambda: "frame Authentication required" not in tree(),
+        )
+        assert g.shell("timedatectl show -p Timezone --value") == original
+        assert not set(speech()[offset:]) & {"x", "z", "9", "xz9"}
         choose()
         activate("Cancel")
         wait("cancelled", lambda: "frame Authentication required" not in tree())
@@ -223,14 +221,12 @@ def check(g, joe, launch, tree, speech, read, wait, gpui_shell=False):
                 g.key(key)
                 time.sleep(0.14)
 
-        if gpui_shell:
-            wait(
-                "protected locker field",
-                lambda: (
-                    "frame Session locked" in tree()
-                    and "password text Password" in tree()
-                ),
-            )
+        wait(
+            "protected locker field",
+            lambda: (
+                "frame Session locked" in tree() and "password text Password" in tree()
+            ),
+        )
         password()
         wait(
             "unlocked",

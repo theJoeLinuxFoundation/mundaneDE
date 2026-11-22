@@ -25,16 +25,11 @@ parser.add_argument(
     "--refresh", action="store_true", help="update an already prepared overlay"
 )
 parser.add_argument(
-    "--gpui-shell", type=Path, help="install and select the GPUI preview"
-)
-parser.add_argument(
     "--trace-frames",
     action="store_true",
     help="log GPUI qualification timestamps in the guest journal",
 )
 args = parser.parse_args()
-if args.trace_frames and not args.gpui_shell:
-    parser.error("--trace-frames requires --gpui-shell")
 guest = Guest(args.run)
 share = guest.run / "share"
 nodes = {n["node-name"]: n for n in guest.qmp("query-named-block-nodes")}
@@ -43,8 +38,10 @@ for source, name in (
     (args.binary, "mundane-de"),
     (args.libseat, "libseat.so.1"),
     (args.settings, "mundane-settings"),
-    (args.gpui_shell, "mundane-shell"),
-    (args.gpui_shell.with_name("mundane-lock") if args.gpui_shell else None, "mundane-lock"),
+    *(
+        (args.settings.with_name(n), n)
+        for n in ("mundane-shell", "mundane-session", "mundane-lock")
+    ),
 ):
     if source and source.resolve() != (share / name).resolve():
         shutil.copyfile(source, share / name)
@@ -54,17 +51,17 @@ with tempfile.TemporaryDirectory(dir=guest.run) as stage:
         [
             ROOT / "session/install.sh",
             share / "mundane-de",
-            *([share / "mundane-shell"] if args.gpui_shell else []),
+            share,
         ],
         env={**os.environ, "DESTDIR": stage, "PREFIX": "/usr/local"},
         check=True,
     )
     if args.trace_frames:
-        entry = Path(stage) / "usr/share/wayland-sessions/mundane-gpui.desktop"
+        entry = Path(stage) / "usr/share/wayland-sessions/mundane.desktop"
         entry.write_text(
             entry.read_text().replace(
-                "Exec=/usr/local/bin/mundane-session",
-                "Exec=/usr/bin/env RUST_LOG=info,mundane_shell_frames=debug /usr/local/bin/mundane-session",
+                "\nExec=/usr/local/bin/mundane-session",
+                "\nExec=/usr/bin/env RUST_LOG=info,mundane_shell_frames=debug /usr/local/bin/mundane-session",
             )
         )
     with tarfile.open(share / "session.tar", "w") as archive:
@@ -111,15 +108,30 @@ install -Dm755 /mnt/libseat.so.1 /usr/local/lib/libseat.so.1
         + INSTALL_SHELL
         + """
 ldconfig
-install -Dm755 /mnt/mundane-settings /usr/local/bin/mundane-settings
+# These names belonged to earlier versions of this harness on persistent overlays.
+rm -f /usr/local/bin/mundane-panel /usr/share/wayland-sessions/mundane-gpui.desktop
+rm -rf /usr/local/share/mundane/shell
+rm -f /usr/local/share/applications/mundane-gpui-mimeapps.list /usr/local/share/xdg-desktop-portal/mundane-gpui-portals.conf
+# Remove helper copies staged by earlier harness revisions, when still identical.
+for name in swaylock libgtk4-layer-shell.so.0 Gtk4LayerShell-1.0.typelib; do
+    case $name in
+        swaylock) path=/usr/local/bin/$name ;;
+        *.typelib) path=/usr/local/lib/girepository-1.0/$name ;;
+        *) path=/usr/local/lib/$name ;;
+    esac
+    if test -f "/mnt/$name" && cmp -s "/mnt/$name" "$path"; then rm -f "$path"; fi
+done
+# beta1's portal frontend also searches its compiled-in data directory.
+install -Dm644 /usr/local/share/xdg-desktop-portal/mundane-portals.conf /usr/share/xdg-desktop-portal/mundane-portals.conf
+install -Dm644 /usr/local/share/xdg-desktop-portal/portals/mundane.portal /usr/share/xdg-desktop-portal/portals/mundane.portal
+
 install -Dm644 /mnt/shell_widgets.py /usr/local/libexec/mundane-test-widgets
 install -Dm755 /mnt/probe.py /usr/local/libexec/mundane-login-probe
 install -Dm644 /mnt/org.joelinux.MundaneSessionTest.service /usr/local/share/dbus-1/services/org.joelinux.MundaneSessionTest.service
 test -x /usr/local/bin/mundane-de
 """
-        + "session="
-        + ("mundane-gpui" if args.gpui_shell else "mundane")
         + """
+session=mundane
 for method in SetSession:$session SetSessionType:wayland; do
     gdbus call --system --dest org.freedesktop.Accounts --object-path /org/freedesktop/Accounts/User1000 --method "org.freedesktop.Accounts.User.${method%:*}" "${method#*:}"
 done

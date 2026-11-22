@@ -82,14 +82,17 @@ def login(index):
         "compositor and agent",
         lambda: (
             g.shell(
-                "pgrep -u joe -f '^/usr/local/bin/mundane-de --session-notify ' && pgrep -u joe -f '^python3 .*share/mundane/shell/panel.py$' || :"
+                "pgrep -u joe -f '^/usr/local/bin/mundane-de --session-notify ' && pgrep -u joe -x mundane-shell || :"
             ).count("\n")
             == 1
         ),
     )
     pid = int(g.shell("pgrep -u joe -f '^/usr/local/bin/mundane-de --session-notify '"))
-    agent = int(g.shell("pgrep -u joe -f '^python3 .*share/mundane/shell/panel.py$'"))
-    for p in (pid, agent):
+    agent = int(g.shell("pgrep -u joe -x mundane-shell"))
+    leader = int(g.shell("pgrep -u joe -x mundane-session"))
+    assert g.shell(f"readlink /proc/{leader}/exe") == "/usr/local/bin/mundane-session"
+    assert g.shell(f"readlink /proc/{agent}/exe") == "/usr/local/bin/mundane-shell"
+    for p in (leader, pid, agent):
         assert f"session-{sid}.scope" in g.shell(f"cat /proc/{p}/cgroup")
     assert as_joe(
         "systemctl --user is-active mundane-session.target graphical-session.target"
@@ -185,6 +188,17 @@ def power_cycle(data):
     wait(
         "resume remains locked",
         lambda: g.shell(f"loginctl show-session {sid} -p LockedHint --value") == "yes",
+    )
+    as_joe(
+        "busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true"
+    )
+    g.move(0.26, 0.31)
+    wait(
+        "PAM conversation ready",
+        lambda: (
+            "password text Password"
+            in as_joe("python3 -W ignore /usr/local/libexec/mundane-test-widgets list")
+        ),
     )
     for key in ("j", "o", "e", "ret"):
         g.key(key)

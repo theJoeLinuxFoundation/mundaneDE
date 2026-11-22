@@ -841,7 +841,7 @@ fn main() -> anyhow::Result<()> {
     }
     anyhow::ensure!(
         std::env::var("WAYLAND_SOCKET").as_deref() == Ok("0"),
-        "Start mundane-shell through mundane-session --gpui"
+        "Start mundane-shell through mundane-session"
     );
     // Own a CLOEXEC duplicate. Keep logging and descendants away from the shell command channel.
     let fd = std::io::stdout().as_fd().try_clone_to_owned()?;

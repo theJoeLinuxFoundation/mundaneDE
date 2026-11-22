@@ -28,7 +28,6 @@ def check(
     tree,
     read,
     wait,
-    gpui_shell=False,
     widgets="python3 -W ignore /tmp/mundane-gpui-step2/shell_widgets.py ",
 ):
     # Start over the open Settings window. AT-SPI actions on Settings do not
@@ -45,11 +44,10 @@ def check(
         )
 
     def palette(terminal, taskbar):
-        if gpui_shell:
-            taskbar = {"1b2130": "222e2a", "fafafa": "e9eeea"}.get(taskbar, taskbar)
+        taskbar = {"1b2130": "222e2a", "fafafa": "e9eeea"}.get(taskbar, taskbar)
         pixels = frame()
         grid = region(pixels, 1640, 510, 180, 60)
-        bar = region(pixels, 1000 if gpui_shell else 620, 1054, 120, 12)
+        bar = region(pixels, 1000, 1054, 120, 12)
         return (
             grid.count(bytes.fromhex(terminal)) > 9000
             and bar.count(bytes.fromhex(taskbar)) > 700
@@ -61,14 +59,11 @@ def check(
     terminal = launch("/usr/local/bin/mundane-terminal", "suite-terminal")
     try:
         wait("mapped suite Terminal", lambda: "frame Terminal" in tree())
-        if gpui_shell:
-            wait(
-                "presented and focused Terminal",
-                lambda: "active" in joe(widgets + "frame-state Terminal").split(),
-            )
-            joe(widgets + "--frame Terminal click Maximize")
-        else:
-            drag_from_centre(g, 0.76, 0.5)
+        wait(
+            "presented and focused Terminal",
+            lambda: "active" in joe(widgets + "frame-state Terminal").split(),
+        )
+        joe(widgets + "--frame Terminal click Maximize")
         wait("initial dark Terminal grid", lambda: palette("17201e", "1b2130"))
         activate("Dark appearance")
         wait(
@@ -103,20 +98,14 @@ def check(
         )
         # A header action leaves keyboard focus on Restore. Focus the terminal grid
         # before sampling its caret colour.
-        if gpui_shell:
-            g.click(0.7, 0.57)
+        g.click(0.7, 0.57)
         # The focused terminal cursor uses the shared theme's accent.
         activate("Accent colour")
         wait("new native app accent", lambda: native("accent", "teal"))
         wait(
             "accent on Terminal cursor",
             lambda: (
-                (
-                    region(frame(), 8, 45, 1850, 860)
-                    if gpui_shell
-                    else region(frame(), 1020, 220, 835, 650)
-                ).count(bytes.fromhex("2190a4"))
-                >= 50
+                (region(frame(), 8, 45, 1850, 860)).count(bytes.fromhex("2190a4")) >= 50
             ),
         )
     finally:

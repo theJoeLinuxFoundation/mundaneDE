@@ -2,15 +2,15 @@
 
 Use joe’s beta1 `--test` desktop image with its serial test console and GDM
 autologin account. From the repository root on an x86 KVM host, build the
-compositor and Settings. Supply a logind-enabled libseat compatible with the guest. The harness stages GTK 4 layer-shell and swaylock in the overlay. The shell registers the polkit agent. The host and guest used glibc 2.44.
+compositor and the settings-panel workspace. Supply a logind-enabled libseat compatible with the guest. The shell registers the polkit agent. The host and guest used glibc 2.44.
 
 ```sh
 cargo build --release --locked --bins --examples
-cargo build --locked --manifest-path settings-panel/Cargo.toml
+cargo build --release --locked --workspace --manifest-path settings-panel/Cargo.toml
 run=$(tests/qemu/session/boot.sh)
 python3 tests/qemu/session/prepare.py "$run" \
     --libseat /usr/lib/libseat.so.1 \
-    --settings settings-panel/target/debug/mundane-settings
+    --settings settings-panel/target/release/mundane-settings
 python3 tests/qemu/session/qualify.py "$run"
 python3 tests/qemu/session/guest.py "$run" qmp system_powerdown
 ```
@@ -85,8 +85,8 @@ The guest has no network interface or host device passthrough.
 
 The reference x86 host supplies KVM, QEMU with GTK display support, OVMF,
 rustup stable and the compositor and Settings build dependencies. Install
-libseat, GTK 4 layer-shell and its GI typelib, binutils, curl and bsdtar.
-The helper uses installed grim and swaylock when available and can extract
+libseat, binutils, curl and bsdtar.
+The helper uses installed grim and ibus-wayland when available and can extract
 checksum-verified binaries from the Arch package archive. The beta1 overlay
 also receives Orca 51.1 and python-dasbus for screen-reader tests.
 
@@ -111,32 +111,14 @@ python3 tests/qemu/session/qualify_shell.py "$MUNDANE_TRY_DIR"
 python3 tests/qemu/session/guest.py "$MUNDANE_TRY_DIR" qmp system_powerdown
 ```
 
-QMP captures the actual scanouts and delivers virtual seat input. Guest AT-SPI
-activates named controls. The gate exercises Start, desktop files, server-side
-window buttons, workspace moves, panel restart, app notifications, a
-StatusNotifierItem, virtual Wi-Fi and audio devices,
-three locked displays, locker loss, wrong and correct passwords and S3.
-The beta1 image predates dave 0.4.0-r3. The panel reads schema-1 fixtures
-through its normal unprivileged command, including repeated polls and shell
-restarts. The actual deployment and failed-boot evidence belongs to joe’s
-dave VM suite.
-
-```sh
-python3 tests/qemu/session/upgrade_checks.py
-runtime=$(mktemp -d)
-env -i HOME="$runtime" PATH=/usr/bin:/bin XDG_RUNTIME_DIR="$runtime" \
-  dbus-run-session -- python3 tests/qemu/session/device_checks.py
-```
-
+QMP captures the scanouts and delivers seat input. This gate covers server-side window buttons, idle inhibition, workspace moves, shell replacement, per-window activation, a StatusNotifierItem, a notification action, Wi-Fi and audio routing between two guest sinks. The dedicated feedback and lock drivers below cover dave events and multi-output PAM locking.
 
 ### Headless menu retest
 
 On a freshly booted, dedicated 1920×1080 headless guest, run
 `python3 tests/qemu/session/qualify_menus.py "$MUNDANE_TRY_DIR"`. The test
 drives the virtual pointer and keyboard, counts actual clicks and keystrokes
-in a GTK client, activates a tray menu action and checks Wi-Fi, notifications
-and PipeWire volume against the guest services. A GTK fixture supplies laptop
-battery, backlight and Bluetooth states. QMP samples the workspace transition
+in a GTK client and activates a tray menu action. The separate Settings driver checks Wi-Fi, notifications, PipeWire volume and virtual laptop devices. QMP samples the workspace transition
 with animations enabled and with reduced motion. [Comparison screenshots](../../../docs/screenshots/shell/README.md)
 
 ### Daily desktop parity
@@ -150,8 +132,7 @@ Install Netpbm on the host for lossless QMP-to-PNG conversion.
 python3 tests/qemu/session/qualify_parity.py "$MUNDANE_TRY_DIR" target/parity-screenshots
 ```
 
-To capture the baseline, install commit `2a0c8d0` in a second overlay and run
-the same test driver with `--baseline`. [Comparison and images](../../../docs/parity.md)
+[Historical comparison and images](../../../docs/parity.md)
 
 ### Headless portal qualification
 
@@ -170,7 +151,7 @@ The gate compares a portal PNG with QMP scanout samples and checks the
 decoded Firefox video against two known colour bands. A contrasting window
 covers the shared window on the first display. Stop, unplug, browser exit
 and lock must remove the PipeWire node and the shell indicator. The gate
-also exercises screenshot denial, the GTK file chooser, the preferred URI
+also exercises screenshot denial, the GPUI file chooser, the preferred URI
 handler and a round trip from a shell notification button to its caller.
 
 ### Headless Settings and accessibility qualification
@@ -201,11 +182,7 @@ and authority bus inside the guest.
 
 ### GPUI shell step 1
 
-Build the preview from the repository root. Create a fresh 1920×1080 headless
-guest with three available virtual connectors and the frozen beta1 image.
-The optional installer argument adds the GPUI preview entry alongside the
-reference entry. The trace flag enables layer-commit and DRM redraw timestamps
-only in the guest’s preview session.
+Build all five release binaries from the repository root. Create a fresh 1920×1080 headless guest with three available virtual connectors and the frozen beta1 image. The trace flag enables layer-commit and DRM redraw timestamps in the normal mundaneDE session.
 
 ```sh
 cargo build --release --locked --bin mundane-de --example nested-capabilities
@@ -218,10 +195,10 @@ PYTHONPATH=tests/qemu/session python3 -c 'import sys; from machine import boot; 
 driver=tests/qemu/session
 python3 "$driver/prepare.py" "$run" --libseat /usr/lib/libseat.so.1 \
   --settings settings-panel/target/release/mundane-settings \
-  --gpui-shell settings-panel/target/release/mundane-shell --trace-frames
-python3 "$driver/qualify_parity.py" "$run" "$run/screenshots" --gpui
+  --trace-frames
+python3 "$driver/qualify_parity.py" "$run" "$run/screenshots"
 python3 "$driver/guest.py" "$run" shell 'systemctl restart gdm'
-python3 "$driver/qualify_menus.py" "$run" --gpui-screenshots "$run/screenshots"
+python3 "$driver/qualify_menus.py" "$run" --screenshots "$run/screenshots"
 python3 "$driver/qualify_gpui_outputs.py" "$run"
 python3 "$driver/qualify_gpui_budget.py" "$run"
 python3 "$driver/guest.py" "$run" shell 'sync && systemd-run --on-active=1s systemctl poweroff'
@@ -235,7 +212,7 @@ and records 20 warm logins, idle CPU, PSS, clock updates and redraws.
 
 ### GPUI shell step 2
 
-Use the headless GPUI preview guest prepared above. Build the real Terminal
+Use the headless GPUI guest prepared above. Build the real Terminal
 and motion probe from the same mundane-apps revision as the desktop. In this
 example `suite` points to the mundane-apps revision in `settings-panel/Cargo.toml`. Its build output stays in
 the test run directory.
@@ -264,19 +241,19 @@ Prepare the headless GPUI preview as in step 1 and install the wlr and grim vers
 
 ```sh
 python3 "$driver/qualify_gpui_feedback.py" "$run" "$run/screenshots"
-python3 "$driver/qualify_portals.py" "$portal_run" --gpui-screenshots "$portal_run/screenshots"
+python3 "$driver/qualify_portals.py" "$portal_run" --screenshots "$portal_run/screenshots"
 ```
 
 The feedback driver checks notification ownership, actions, expiration, bounded history, Do Not Disturb, typing through a volume OSD and persistent dave notice IDs. The step 2 laptop and Orca cases also check a brightness key on a virtual keyboard and speech for a notification in history. Use mundane-apps at the desktop’s pin for the live Terminal test.
 
-The portal driver compares an occluded window and a second monitor against the pixels delivered through the public portal. It checks cancellation, Stop on both taskbars, window close, browser exit, hot-unplug, lock and loss of either service. It changes the monitor pattern on a live stream and again after revocation, checks the PipeWire graph and worker exit, and observes an appearance change through the recovered frontend. It also opens and cancels a GTK file chooser, follows an associated URI and invokes a notification action. The budget driver measures the idle session with all three backends registered.
+The portal driver compares an occluded window and a second monitor against the pixels delivered through the public portal. It checks cancellation, Stop on both taskbars, window close, browser exit, hot-unplug, lock and loss of either service. It changes the monitor pattern on a live stream and again after revocation, checks the PipeWire graph and worker exit, and observes an appearance change through the recovered frontend. It also opens and cancels the GPUI file chooser, follows an associated URI and invokes a notification action. The budget driver measures the idle session with all three backends registered.
 
 ### GPUI shell step 4
 
-Boot the GPUI preview in a dedicated headless joe guest with the accessibility dependencies installed. Use the GPUI echo example and the suite's Terminal and motion example from the pinned workspace, as in the milestone 7 accessibility test.
+Boot mundaneDE in a dedicated headless joe guest with the accessibility dependencies installed. Use the GPUI echo example and the suite's Terminal and motion example from the pinned workspace, as in the milestone 7 accessibility test.
 
 ```sh
-python3 "$driver/qualify_accessibility.py" "$run" --gpui --echo "$echo_binary" --suite-target "$suite_target"
+python3 "$driver/qualify_accessibility.py" "$run" --echo "$echo_binary" --suite-target "$suite_target"
 python3 "$driver/qualify_gpui_budget.py" "$budget_run"
 ```
 
@@ -292,16 +269,16 @@ Run the lock driver last on its own overlay. It temporarily moves the locker exe
 python3 "$driver/qualify_gpui_lock.py" "$run" "$run/locker-screenshots"
 ```
 
-The driver checks whole scanouts, monitors delivery to a background client, examines the protected AT-SPI field and records Orca’s speech. It verifies both wrong-password and PAM account denial, fresh conversations after VT and S3, and actual focus restoration after success. The compositor’s Rust tests also exercise public, shell, legacy and replacement locker connections, replayed tickets, a queued completion from a closed peer and obsolete generations. [Protocol and measurements](../../../docs/shell-gpui.md#step-5-gpui-lock)
+The driver checks whole scanouts, monitors delivery to a background client, examines the protected AT-SPI field and records Orca’s speech. It verifies both wrong-password and PAM account denial, fresh conversations after VT and S3, and actual focus restoration after success. The compositor’s Rust tests also exercise public, shell, input-method and replacement locker connections, replayed tickets, a queued completion from a closed peer and obsolete generations. [Protocol and measurements](../../../docs/shell-gpui.md#step-5-gpui-lock)
 
 ### GPUI shell step 6
 
-Use the headless preview overlay described above. Install the release binaries and run the session installer with the preview enabled. Install the preview portal routing in the portal frontend’s data path and its MIME defaults in the applications data directory. The guest needs Nautilus, Text Editor, Firefox, the IBus daemon, its Python GI typelib and standalone `ibus-wayland`. Frozen beta1 omits the Wayland frontend, so supply a compatible upstream binary in the overlay. The desktop driver registers its own conversion engine for the session. The portal grant test needs Flatpak, Bubblewrap, the document portal and the guest’s own dynamic libraries. It constructs and removes a tiny local Flatpak and runtime without using an external app remote.
+Use the ordinary headless mundaneDE overlay described above. The guest needs Nautilus, Text Editor, Firefox, the IBus daemon, its Python GI typelib and standalone `ibus-wayland`. Frozen beta1 omits the Wayland frontend, so supply a compatible upstream binary in the overlay. The desktop driver registers its own conversion engine for the session. The portal grant test needs Flatpak, Bubblewrap, the document portal and the guest’s own dynamic libraries. It constructs and removes a tiny local Flatpak and runtime without using an external app remote.
 
 ```sh
 cc -O2 "$driver/portals/grant.c" -o "$run/file-grant" $(pkg-config --cflags --libs gio-2.0)
 python3 "$driver/qualify_gpui_desktop.py" "$run" "$run/step6-screenshots"
-python3 "$driver/qualify_portals.py" "$run" --gpui-screenshots "$run/step6-screenshots" --flatpak-client "$run/file-grant"
+python3 "$driver/qualify_portals.py" "$run" --screenshots "$run/step6-screenshots" --flatpak-client "$run/file-grant"
 python3 "$driver/qualify_gpui_lock.py" "$run" "$run/step6-screenshots"
 ```
 

@@ -12,6 +12,59 @@ from qualify_gpui_settings import HERE, RT, Session
 from qualify_menus import wait
 
 
+def captions(s, folder):
+    name = "Zebra field observations from the western foothills.txt"
+    path = f"{folder}/{shlex.quote(name)}"
+    s.joe(f"test ! -e {path}")
+    try:
+        s.joe(f"touch {path}")
+        wait("long filename", lambda: "button " + name in s.tree())
+
+        def bounds():
+            return tuple(map(int, s.widget("bounds", name, "Desktop icons").split()))
+
+        s.g.move(0.35, 0.45)
+        x, y, w, h = bounds()
+        # Count separate runs of text ink below the 32-pixel artwork in the tile.
+        pixels = s.g.screen("caption-lines").split(b"\n", 3)[3]
+        ink = []
+        for row in range(y + h // 2, y + h):
+            colors = [
+                pixels[(row * 1920 + col) * 3 : (row * 1920 + col) * 3 + 3]
+                for col in range(x + 8, x + w - 8)
+            ]
+            bg = max(set(colors), key=colors.count)
+            if colors.count(bg) >= len(colors) // 2 and any(
+                sum(abs(a - b) for a, b in zip(c, bg)) > 145 for c in colors
+            ):
+                ink.append(row)
+        assert len([v for v in ink if v - 1 not in ink]) >= 2, (
+            "two visible filename lines",
+            ink,
+        )
+        s.shot("icon-label")
+        s.g.move((x + w / 2) / 1920, (y + h / 2) / 1080)
+        wait("hover expands the full wrapped caption", lambda: bounds()[3] > h + 10)
+        s.shot("icon-label-hover")
+        s.g.move(0.40, 0.40)
+        wait("pointer exit restores the grid", lambda: bounds()[3] == h)
+        s.key("meta_l", "d")
+        s.key("end")
+        wait(
+            "selection expands without the pointer",
+            lambda: (
+                "focused" in s.widget("state", name, "Desktop icons").split()
+                and bounds()[3] > h + 10
+            ),
+        )
+        s.shot("icon-label-selected")
+        s.key("home")
+        wait("changing selection restores two lines", lambda: bounds()[3] == h)
+        s.key("meta_l", "d")
+    finally:
+        s.joe(f"rm -f {path}")
+
+
 def desktop(s):
     folder = shlex.quote(s.joe("xdg-user-dir DESKTOP"))
     work = s.joe("mktemp -d")
@@ -38,6 +91,7 @@ def desktop(s):
             < icons.index("button Trash")
             < icons.index("button " + item)
         )
+        captions(s, folder)
         for label, scheme, contrast in (
             ("light", "prefer-light", "false"),
             ("dark", "prefer-dark", "false"),
@@ -96,9 +150,7 @@ def desktop(s):
                 not in s.widget("list", frame="Desktop icons").splitlines()
             ),
         )
-        assert "org.gnome.Nautilus.desktop" in s.joe(
-            "XDG_CURRENT_DESKTOP=mundane-gpui:mundane gio mime inode/directory"
-        )
+        assert "org.gnome.Nautilus.desktop" in s.joe("gio mime inode/directory")
         s.widget("click", "Home", "Desktop icons")
         wait(
             "folder handler opened Home",
@@ -221,7 +273,7 @@ def input_method(s):
         open_candidates()
         s.joe(f"mkdir {work}/profile")
         prefs = 'user_pref("widget.wayland.text_input_v3.enabled",true);\nuser_pref("browser.aboutwelcome.enabled",false);\nuser_pref("browser.shell.checkDefaultBrowser",false);\nuser_pref("browser.startup.homepage_override.mstone","ignore");'
-        page = '<meta charset="utf-8"><title>Conversion test</title><input autofocus oninput="document.title=this.value">'
+        page = '<meta charset="utf-8"><title>Conversion test</title><input aria-label="Conversion field" style="width:240px;height:40px;background:#aa33bb" oninput="document.title=this.value">'
         s.joe(
             f"printf %s {shlex.quote(prefs)} >{work}/profile/user.js && printf %s {shlex.quote(page)} >{work}/input.html"
         )
@@ -231,9 +283,20 @@ def input_method(s):
                 "ime-firefox",
             )
         )
-        wait(
-            "Firefox focuses its input", lambda: logged("ime-firefox", ".enable()"), 35
-        )
+        # Firefox initially enables text-input on its browser chrome. Click the
+        # form itself on scanout before checking where the old preedit went.
+        fill = bytes.fromhex("aa33bb") * 20
+
+        def form_point():
+            pixels = s.g.screen("conversion-field").split(b"\n", 3)[3]
+            start = pixels.find(fill)
+            if start >= 0:
+                y, x = divmod(start // 3, 1920)
+                return ((x + 10) / 1920, (y + 10) / 1080)
+
+        wait("Firefox presents the conversion field", form_point, 35)
+        s.g.click(*form_point())
+        wait("Firefox focuses the form", lambda: logged("ime-firefox", ".enable()"))
         wait(
             "focus change clears old candidates",
             lambda: not candidates() and logged("input", ".leave(wl_surface"),

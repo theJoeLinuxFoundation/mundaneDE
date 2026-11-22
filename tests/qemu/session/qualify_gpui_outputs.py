@@ -28,7 +28,7 @@ def plug(g, on):
     )
 
 
-def assert_preview(g):
+def assert_session(g):
     assert g.qmp("query-display-options")["type"] == "none"
     nodes = {n["node-name"]: n["ro"] for n in g.qmp("query-named-block-nodes")}
     assert nodes["base"] and nodes["basefile"] and not nodes["layer"]
@@ -60,7 +60,7 @@ def bar_presented(g, head, width, height, scale):
 
 def qualify(run, probe):
     g = Guest(run)
-    pid = assert_preview(g)
+    pid = assert_session(g)
     shutil.copyfile(probe, g.run / "share/nested-capabilities")
     g.shell(
         "mount -t 9p -o trans=virtio,version=9p2000.L,ro mundane /mnt && install -m755 /mnt/nested-capabilities /tmp/gpui-client && umount /mnt"
@@ -144,7 +144,7 @@ def qualify(run, probe):
                 joe(g, "mundane-de output revert")
             plug(g, False)
             wait("one surviving bar", lambda: bars() == 1 and len(outputs()) == 1)
-            assert assert_preview(g) == pid
+            assert assert_session(g) == pid
         print(
             "Distinct 1× and 2× work areas, two reconnects and unprivileged registries passed."
         )

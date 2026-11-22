@@ -26,7 +26,6 @@ pub enum Role {
     #[default]
     Application,
     Shell,
-    Locker,
     GpuiLocker(u64),
     Capture,
     Screenshot,
@@ -58,12 +57,7 @@ impl Drop for Helper {
 }
 impl State {
     fn launch_service(&self, program: &std::ffi::OsStr, role: Role) -> anyhow::Result<Child> {
-        let mut cmd = Command::new(program);
-        if role == Role::InputMethod && std::env::var_os("MUNDANE_IBUS_GPUI").is_none() {
-            cmd.arg("--enable-wayland-im");
-        }
-        cmd.env("GDK_BACKEND", "wayland");
-        self.trusted_child(role, cmd)
+        self.trusted_child(role, Command::new(program))
     }
     pub(crate) fn start_services(&mut self) -> anyhow::Result<()> {
         for (key, role) in [
