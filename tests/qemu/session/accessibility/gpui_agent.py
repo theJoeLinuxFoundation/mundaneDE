@@ -75,6 +75,9 @@ def qualify(g, joe, launch, tree, speech, wait):
         assert "AccessDenied" in denied, denied
         command("BeginAuthentication", "chooser")
         wait("two-identity helper conversation", prompt)
+        assert "org.joelinux.test" not in tree()
+        g.click(0.02, 0.98)
+        assert prompt() and "frame Start menu" not in tree()
         joe(widgets + "Details")
         wait(
             "action and details",
@@ -83,8 +86,14 @@ def qualify(g, joe, launch, tree, speech, wait):
             ),
         )
         assert "Administrator: root" in tree()
-        joe(widgets + "'Choose administrator'")
-        joe(widgets + "joe")
+        joe(widgets + "Details")
+        joe(widgets + "Change")
+        option = next(
+            row.split(" ", 2)[-1]
+            for row in tree().splitlines()
+            if row.startswith("menu item ") and row.endswith((" joe", "(joe)"))
+        )
+        joe(widgets + shlex.quote(option))
         wait(
             "new conversation for joe",
             lambda: "Administrator: joe" in tree() and prompt(),
@@ -109,6 +118,47 @@ def qualify(g, joe, launch, tree, speech, wait):
                 ),
             )
         joe("gsettings set org.gnome.desktop.a11y.interface high-contrast false")
+
+        # Track the long horizontal focus border as the denied password field
+        # reappears. Both the motion and the stationary retry use real scanout.
+        def field_x():
+            pixels = g.screen("polkit-retry").split(b"\n", 3)[3]
+            border = bytes.fromhex("2190a4") * 300  # suite's teal accent
+            edge = pixels.find(border, 320 * 1920 * 3, 800 * 1920 * 3)
+            return edge // 3 % 1920 if edge >= 0 else None
+
+        for animations in (True, False):
+            joe(
+                "gsettings set org.gnome.desktop.interface enable-animations "
+                + str(animations).lower()
+            )
+            time.sleep(0.3)
+            baseline = field_x()
+            assert baseline is not None
+            g.key("x")
+            time.sleep(0.12)
+            g.key("ret")
+            deadline = time.monotonic() + 8
+            pending = False
+            positions = []
+            while time.monotonic() < deadline:
+                x = field_x()
+                if x is None:
+                    pending = True
+                elif pending:
+                    if not positions:
+                        deadline = time.monotonic() + 0.45
+                    positions.append(x)
+            assert pending and positions and positions[-1] == baseline, (
+                baseline,
+                positions,
+            )
+            assert (max(positions) != min(positions)) == animations, positions
+            assert "Authentication failed. Try again." in tree()
+        print(
+            "Password retry moved with animations enabled and stayed still with reduced motion.",
+            flush=True,
+        )
         command("CancelAuthentication", "stale")
         wait("old cookie returned", lambda: audit("CancelAuthentication stale ok"))
         assert prompt()
@@ -136,7 +186,11 @@ def qualify(g, joe, launch, tree, speech, wait):
                 "BeginAuthentication locked org.freedesktop.PolicyKit1.Error.Cancelled"
             ),
         )
-        assert not prompt()
+        assert "frame Authentication required" not in tree()
+        wait(
+            "protected locker field",
+            lambda: "frame Session locked" in tree() and prompt(),
+        )
         for key in ("j", "o", "e", "ret"):
             g.key(key)
             time.sleep(0.14)

@@ -249,7 +249,7 @@ impl Render for Dialog {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{denial_offset, px};
 
     #[test]
     fn denial_shake_decays_to_the_resting_field_position() {

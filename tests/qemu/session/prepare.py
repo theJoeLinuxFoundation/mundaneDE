@@ -44,6 +44,7 @@ for source, name in (
     (args.libseat, "libseat.so.1"),
     (args.settings, "mundane-settings"),
     (args.gpui_shell, "mundane-shell"),
+    (args.gpui_shell.with_name("mundane-lock") if args.gpui_shell else None, "mundane-lock"),
 ):
     if source and source.resolve() != (share / name).resolve():
         shutil.copyfile(source, share / name)

@@ -333,6 +333,11 @@ def captures():
                         bytes(map(int, c.split(","))).hex() for c in line.split()[2:]
                     ]
                     assert near(palette, green), line
+            if args.gpui_screenshots:
+                wait(
+                    "GPUI locker accepts input",
+                    lambda: "password text Password" in widgets(),
+                )
             for key in ("j", "o", "e", "ret"):
                 g.key(key)
                 time.sleep(0.15)

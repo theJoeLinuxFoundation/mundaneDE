@@ -8,7 +8,7 @@ use smithay::{
         rustix::event::{poll, PollFd, PollFlags, Timespec},
         rustix::net::{socketpair, AddressFamily, SocketFlags, SocketType},
         wayland_protocols::xdg::shell::server::xdg_toplevel,
-        wayland_server::{backend::ClientId, protocol::wl_surface::WlSurface, Resource},
+        wayland_server::{backend::ClientId, protocol::wl_surface::WlSurface, Client, Resource},
     },
     utils::{Logical, Size},
     wayland::{
@@ -54,8 +54,10 @@ pub(super) struct Attempt {
     slots: HashMap<Output, Slot>,
 }
 impl Attempt {
-    fn owns(&self, active: bool, role: Option<u64>, client: Option<ClientId>) -> bool {
-        active && role == Some(self.epoch) && client.as_ref() == Some(&self.client)
+    fn owns(&self, active: bool, client: Option<&Client>) -> bool {
+        active
+            && client
+                .is_some_and(|c| role(c) == Role::GpuiLocker(self.epoch) && c.id() == self.client)
     }
     fn completion(&self, epoch: u64, packet: &[u8]) -> bool {
         if epoch != self.epoch || packet != format!("authenticated/1 {epoch}").as_bytes() {
@@ -265,11 +267,7 @@ impl State {
         let Some(a) = self.desktop.lock.gpui.as_mut() else {
             return;
         };
-        if !a.owns(
-            self.desktop.lock.active,
-            locker_epoch(s),
-            s.client().map(|c| c.id()),
-        ) {
+        if !a.owns(self.desktop.lock.active, s.client().as_ref()) {
             return;
         }
         if a.slots
@@ -360,12 +358,24 @@ mod tests {
     fn lock_authority_requires_active_generation_live_peer_and_exact_connection() {
         let display = Display::<()>::new().unwrap();
         let mut handle = display.handle();
-        let (wl, _client) = UnixStream::pair().unwrap();
-        let locker = handle.insert_client(wl, Arc::new(())).unwrap().id();
-        let (wl, _other) = UnixStream::pair().unwrap();
-        let other = handle.insert_client(wl, Arc::new(())).unwrap().id();
         let event_loop = calloop::EventLoop::<()>::try_new().unwrap();
-        let (_ping, receiver) = calloop::ping::make_ping().unwrap();
+        let (ping, receiver) = calloop::ping::make_ping().unwrap();
+        let mut connect = |role| {
+            let (server, peer) = UnixStream::pair().unwrap();
+            let client = handle
+                .insert_client(
+                    server,
+                    Arc::new(crate::state::ClientState {
+                        context: None,
+                        on_exit: ping.clone(),
+                        compositor_state: Default::default(),
+                        role,
+                    }),
+                )
+                .unwrap();
+            (client, peer)
+        };
+        let (locker, _live) = connect(Role::GpuiLocker(3));
         let source = event_loop
             .handle()
             .insert_source(receiver, |_, _, _| {})
@@ -377,18 +387,29 @@ mod tests {
             None,
         )
         .unwrap();
-        let attempt = Attempt {
+        let mut attempt = Attempt {
             epoch: 3,
-            client: locker.clone(),
+            client: locker.id(),
             channel: server.into(),
             source,
             slots: HashMap::new(),
         };
-        assert!(attempt.owns(true, Some(3), Some(locker.clone())));
-        assert!(!attempt.owns(false, Some(3), Some(locker.clone())));
-        assert!(!attempt.owns(true, None, Some(other.clone()))); // application or shell
-        assert!(!attempt.owns(true, Some(3), Some(other)));
-        assert!(!attempt.owns(true, Some(2), Some(locker)));
+        assert!(attempt.owns(true, Some(&locker)));
+        assert!(!attempt.owns(false, Some(&locker)));
+        assert!(!attempt.owns(true, None));
+        attempt.epoch += 1;
+        assert!(!attempt.owns(true, Some(&locker)));
+        attempt.epoch -= 1;
+        for role in [
+            Role::Application,
+            Role::Shell,
+            Role::Locker,
+            Role::GpuiLocker(2),
+            Role::GpuiLocker(3),
+        ] {
+            let (other, _peer) = connect(role);
+            assert!(!attempt.owns(true, Some(&other)), "{role:?}");
+        }
         assert!(!attempt.completion(2, b"authenticated/1 3"));
         assert!(!attempt.completion(3, b"authenticated/1 2"));
         for invalid in [
@@ -399,7 +420,12 @@ mod tests {
             assert!(!attempt.completion(3, invalid));
         }
         assert!(attempt.completion(3, b"authenticated/1 3"));
+        let peer = UnixDatagram::from(peer);
+        peer.send(b"authenticated/1 3").unwrap();
         drop(peer);
-        assert!(!attempt.completion(3, b"authenticated/1 3"));
+        let mut pending = [0; 32];
+        let n = attempt.channel.recv(&mut pending).unwrap();
+        assert_eq!(&pending[..n], b"authenticated/1 3");
+        assert!(!attempt.completion(3, &pending[..n]));
     }
 }
