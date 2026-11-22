@@ -1,7 +1,7 @@
 """An ordinary guest application using the public desktop portal."""
 
 import os
-import subprocess
+import time
 import sys
 import uuid
 from pathlib import Path
@@ -126,43 +126,39 @@ elif mode == "cast":
         None,
     )
     fd = fds.get(result.unpack()[0])
-    with subprocess.Popen(
-        [
-            "gst-launch-1.0",
-            "-q",
-            "pipewiresrc",
-            # Keep the preroll buffer independent of the first playing frame.
-            "min-buffers=3",
-            "do-timestamp=true",
-            "fd=" + str(fd),
-            "path=" + str(node),
-            "!",
-            "videoconvert",
-            "!",
-            "videoscale",
-            "!",
-            "video/x-raw,format=RGB,width=32,height=24",
-            "!",
-            "fdsink",
-            "sync=false",
-            "async=false",
-            "fd=1",
-        ],
-        pass_fds=(fd,),
-        stdout=subprocess.PIPE,
-    ) as consumer:
-        try:
-            while frame := consumer.stdout.read(32 * 24 * 3):
-                print(
-                    "WINDOW", frame[624:627].hex(), frame[1776:1779].hex(), flush=True
-                )
-                if frame[624:627] == bytes.fromhex("cc1919") and frame[
-                    1776:1779
-                ] == bytes.fromhex("8c1919"):
-                    break
-        finally:
-            consumer.terminate()
-            os.close(fd)
+    import gi
+
+    gi.require_version("Gst", "1.0")
+    from gi.repository import Gst
+
+    Gst.init(None)
+    # Sample a static window as soon as its pixels arrive. A playback clock
+    # can schedule the first valid portal timestamp far after a zero preroll.
+    pipeline = Gst.parse_launch(
+        f"pipewiresrc fd={fd} target-object={metadata['pipewire-serial']} min-buffers=3 "
+        "! videoconvert ! videoscale ! video/x-raw,format=RGB,width=32,height=24 "
+        "! appsink name=pixels sync=false max-buffers=2 drop=true"
+    )
+    pipeline.use_clock(None)
+    sink = pipeline.get_by_name("pixels")
+    try:
+        assert pipeline.set_state(Gst.State.PLAYING) != Gst.StateChangeReturn.FAILURE
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline:
+            sample = sink.emit("try-pull-sample", Gst.SECOND)
+            if sample is None:
+                continue
+            buf = sample.get_buffer()
+            top = buf.extract_dup(624, 3).hex()
+            bottom = buf.extract_dup(1776, 3).hex()
+            print("WINDOW", top, bottom, flush=True)
+            if (top, bottom) == ("cc1919", "8c1919"):
+                break
+        else:
+            raise AssertionError("selected window's two colour bands did not arrive")
+    finally:
+        pipeline.set_state(Gst.State.NULL)
+        os.close(fd)
     bus.call_sync(
         name,
         session,
