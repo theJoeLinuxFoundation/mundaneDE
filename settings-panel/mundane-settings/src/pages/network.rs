@@ -6,8 +6,8 @@ use crate::pages::{Page, PageState};
 use crate::theme;
 use crate::widgets::prompt;
 use gpui::{
-    div, px, rgb, AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Window,
+    div, px, rgb, AnyElement, Context, IntoElement, ParentElement, Render, SharedString, Styled,
+    Window,
 };
 use mundane_settings_core::dbus::network as backend;
 
@@ -59,7 +59,13 @@ impl NetworkPage {
         cx.notify();
         cx.spawn(async move |weak, async_cx| {
             let password = if secured {
-                match prompt::password("Connect to Wi-Fi", &format!("Password for {ssid}")).await {
+                match prompt::password(
+                    "Connect to Wi-Fi",
+                    &format!("Password for {ssid}"),
+                    async_cx,
+                )
+                .await
+                {
                     Ok(Some(p)) if !p.is_empty() => Some(p),
                     Ok(_) => {
                         weak.update(async_cx, |this, cx| {
@@ -100,7 +106,7 @@ impl NetworkPage {
 }
 
 impl Render for NetworkPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.state.should_refresh(Page::Network.ttl()) {
             self.spawn_refresh(cx);
         }
@@ -108,7 +114,8 @@ impl Render for NetworkPage {
         let error = self.last_error.clone();
         let body: AnyElement = match &self.state {
             PageState::Loaded { data, .. } => {
-                data_view(data, connecting.as_deref(), error.as_deref(), cx).into_any_element()
+                data_view(window, data, connecting.as_deref(), error.as_deref(), cx)
+                    .into_any_element()
             }
             _ => skeleton().into_any_element(),
         };
@@ -148,6 +155,7 @@ fn skeleton() -> gpui::Div {
 }
 
 fn data_view(
+    window: &mut Window,
     data: &NetworkData,
     connecting: Option<&str>,
     error: Option<&str>,
@@ -161,7 +169,7 @@ fn data_view(
         ));
     } else {
         for w in &data.wifi {
-            col = col.child(wifi_row(w, connecting, cx));
+            col = col.child(wifi_row(window, w, connecting, cx));
         }
     }
     if let Some(e) = error {
@@ -204,6 +212,7 @@ fn empty_card(message: &str) -> gpui::Div {
 }
 
 fn wifi_row(
+    window: &mut Window,
     w: &backend::WifiNetwork,
     connecting: Option<&str>,
     cx: &mut Context<NetworkPage>,
@@ -221,41 +230,34 @@ fn wifi_row(
     } else {
         None
     };
-    let mut row = div()
-        .id(SharedString::from(format!("wifi-row:{}", w.ssid)))
-        .role(gpui::Role::Button)
-        .aria_label(w.ssid.clone())
-        .tab_index(0)
-        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-        .flex()
-        .flex_col()
-        .gap_1()
-        .px_4()
-        .py_3()
-        .bg(rgb(theme::palette().panel))
-        .rounded(px(10.))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(theme::palette().panel)))
-        .on_click(cx.listener(move |this, _e, _w, cx| {
+    let mut row = crate::widgets::action(
+        SharedString::from(format!("wifi-row:{}", w.ssid)),
+        w.ssid.clone(),
+        window,
+        cx,
+        move |this, cx| {
             this.start_connect(ssid_for_listener.clone(), secured, cx);
-        }))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_color(rgb(theme::palette().text))
-                        .child(w.ssid.clone()),
-                )
-                .child(
-                    div()
-                        .text_color(rgb(theme::palette().secondary))
-                        .child(format!("{}%", w.strength)),
-                ),
-        );
+        },
+    )
+    .flex()
+    .flex_col()
+    .child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .text_color(rgb(theme::palette().text))
+                    .child(w.ssid.clone()),
+            )
+            .child(
+                div()
+                    .text_color(rgb(theme::palette().secondary))
+                    .child(format!("{}%", w.strength)),
+            ),
+    );
     if let Some((label, color)) = chip {
         row = row.child(div().text_color(rgb(color)).child(label.to_string()));
     }

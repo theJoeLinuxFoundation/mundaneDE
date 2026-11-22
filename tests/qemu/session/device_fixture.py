@@ -21,17 +21,29 @@ def method(_b, sender, path, iface, method, args, req):
     if method == "RegisterAgent":
         agent = (sender, args.unpack()[0])
         req.return_value(None)
+    if method == "SetBrightness":
+        subsystem, name, raw = args.unpack()
+        assert (subsystem, name) == ("backlight", "virt-panel") and 0 <= raw <= 400
+        Path(sys.argv[2], "brightness").write_text(str(raw))
+        notify(f"brightness {raw}")
+        req.return_value(None)
+    if method == "CancelPairing":
+        req.return_value(None)
     if method == "GetManagedObjects":
         req.return_value(
             GLib.Variant(
                 "(a{oa{sa{sv}}})",
                 (
                     {
+                        "/org/bluez/hci0": {
+                            "org.bluez.Adapter1": {"Powered": GLib.Variant("b", True)}
+                        },
                         root: {
                             "org.bluez.Device1": {
-                                "Address": GLib.Variant("s", "11:22:33:44:55:66")
+                                "Alias": GLib.Variant("s", "Guest keyboard"),
+                                "Address": GLib.Variant("s", "11:22:33:44:55:66"),
                             }
-                        }
+                        },
                     },
                 ),
             )
@@ -57,7 +69,7 @@ def method(_b, sender, path, iface, method, args, req):
             GLib.Variant("(ou)", (root, 123456)),
             None,
             Gio.DBusCallFlags.NONE,
-            3000,
+            15000,
             None,
             confirmed,
         )
@@ -81,7 +93,10 @@ register(
     "/org/bluez",
     '<interface name="org.bluez.AgentManager1"><method name="RegisterAgent"><arg type="o"/><arg type="s"/></method></interface>',
 )
-register(root, '<interface name="org.bluez.Device1"><method name="Pair"/></interface>')
+register(
+    root,
+    '<interface name="org.bluez.Device1"><method name="Pair"/><method name="CancelPairing"/></interface>',
+)
 register(
     "/org/freedesktop/UPower/devices/DisplayDevice",
     '<interface name="org.freedesktop.UPower.Device"><property type="b" name="IsPresent" access="read"/><property type="d" name="Percentage" access="read"/></interface>',
@@ -89,6 +104,13 @@ register(
         GLib.Variant("b", True) if key == "IsPresent" else GLib.Variant("d", 72.4)
     ),
 )
-for name in ("org.bluez", "org.freedesktop.UPower"):
+names = ["org.bluez", "org.freedesktop.UPower"]
+if len(sys.argv) == 3:
+    register(
+        "/org/freedesktop/login1/session/auto",
+        '<interface name="org.freedesktop.login1.Session"><method name="SetBrightness"><arg type="s"/><arg type="s"/><arg type="u"/></method></interface>',
+    )
+    names.append("org.freedesktop.login1")
+for name in names:
     Gio.bus_own_name_on_connection(bus, name, Gio.BusNameOwnerFlags.NONE, None, None)
 GLib.MainLoop().run()

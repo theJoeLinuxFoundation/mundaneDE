@@ -72,6 +72,7 @@ impl Render for App {
 /// Open the main window and run the event loop.
 pub fn run(initial: Page) {
     mundane_ui::run(move |cx: &mut GpuiApp| {
+        mundane_ui::bind_text_keys(cx);
         theme::watch(cx);
         let bounds = Bounds::centered(None, size(px(1100.), px(700.)), cx);
         let opts = WindowOptions {

@@ -8,7 +8,7 @@
 use crate::pages::{Page, PageState};
 use crate::theme;
 use gpui::{
-    div, px, rgb, Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    div, px, rgb, Context, InteractiveElement, IntoElement, ParentElement, Render,
     StatefulInteractiveElement, Styled, Window,
 };
 use mundane_settings_core::compositor as backend;
@@ -28,8 +28,11 @@ pub struct CompositorData {
 
 pub struct CompositorPage {
     state: PageState<CompositorData>,
-    in_flight: u32,
+    saving: bool,
+    pending: Vec<Edit>,
     last_error: Option<String>,
+    sliders: [mundane_ui::ValueSlider; 6],
+    modes: [gpui::FocusHandle; 5],
 }
 
 /// What changed on this step — kept as a tagged enum so the write closure for `update`
@@ -50,7 +53,10 @@ impl CompositorPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let s = Self {
             state: PageState::Empty,
-            in_flight: 0,
+            sliders: std::array::from_fn(|_| mundane_ui::ValueSlider::new(cx)),
+            modes: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
+            saving: false,
+            pending: Vec::new(),
             last_error: None,
         };
         s.spawn_refresh(cx);
@@ -90,88 +96,61 @@ impl CompositorPage {
 
     /// Apply an edit optimistically, then persist. On failure, revert and surface the error.
     fn apply(&mut self, edit: Edit, cx: &mut Context<Self>) {
-        let prev = match &self.state {
-            PageState::Loaded { data, .. } => data.clone(),
-            _ => return,
+        let PageState::Loaded { data, .. } = &mut self.state else {
+            return;
         };
-        if let PageState::Loaded { data, .. } = &mut self.state {
-            match &edit {
-                Edit::Stiffness(v) => data.stiffness = *v,
-                Edit::Damping(v) => data.damping = *v,
-                Edit::Mass(v) => data.mass = *v,
-                Edit::Radius(v) => data.attraction_radius = *v,
-                Edit::OuterGap(v) => data.outer_gap = *v,
-                Edit::InnerGap(v) => data.inner_gap = *v,
-                Edit::WallpaperMode(s) => data.wallpaper_mode = s.clone(),
-            }
+        match &edit {
+            Edit::Stiffness(v) => data.stiffness = *v,
+            Edit::Damping(v) => data.damping = *v,
+            Edit::Mass(v) => data.mass = *v,
+            Edit::Radius(v) => data.attraction_radius = *v,
+            Edit::OuterGap(v) => data.outer_gap = *v,
+            Edit::InnerGap(v) => data.inner_gap = *v,
+            Edit::WallpaperMode(m) => data.wallpaper_mode = m.clone(),
         }
-        self.in_flight += 1;
+        self.pending
+            .retain(|old| std::mem::discriminant(old) != std::mem::discriminant(&edit));
+        self.pending.push(edit);
         self.last_error = None;
         cx.notify();
+        if !self.saving {
+            self.save(cx);
+        }
+    }
 
-        let mutate_edit = clone_edit(&edit);
-        let snapshot = self.snapshot();
-        cx.spawn(async move |weak, async_cx| {
-            let result = backend::update(move |f| match mutate_edit {
-                Edit::Stiffness(_) | Edit::Damping(_) | Edit::Mass(_) => {
-                    f.set_spring(snapshot.stiffness, snapshot.damping, snapshot.mass);
-                }
-                Edit::Radius(_) | Edit::OuterGap(_) | Edit::InnerGap(_) => {
-                    f.set_wm(
-                        snapshot.attraction_radius,
-                        snapshot.outer_gap,
-                        snapshot.inner_gap,
-                    );
-                }
-                Edit::WallpaperMode(ref m) => {
-                    f.set_wallpaper_mode(m);
+    fn save(&mut self, cx: &mut Context<Self>) {
+        self.saving = true;
+        let batch = std::mem::take(&mut self.pending);
+        cx.spawn(async move |weak, cx| {
+            let result = backend::update(move |f| {
+                for edit in batch {
+                    let (k, d, m) = f.spring();
+                    let (radius, outer, inner) = f.wm();
+                    match edit {
+                        Edit::Stiffness(v) => f.set_spring(v, d, m),
+                        Edit::Damping(v) => f.set_spring(k, v, m),
+                        Edit::Mass(v) => f.set_spring(k, d, v),
+                        Edit::Radius(v) => f.set_wm(v, outer, inner),
+                        Edit::OuterGap(v) => f.set_wm(radius, v, inner),
+                        Edit::InnerGap(v) => f.set_wm(radius, outer, v),
+                        Edit::WallpaperMode(mode) => f.set_wallpaper_mode(&mode),
+                    }
                 }
             })
             .await;
-            weak.update(async_cx, move |this, cx| {
-                this.in_flight = this.in_flight.saturating_sub(1);
-                match result {
-                    Ok(()) => {}
-                    Err(e) => {
-                        // Revert.
-                        if let PageState::Loaded { data, .. } = &mut this.state {
-                            *data = prev;
-                        }
-                        this.last_error = Some(e.to_string());
-                    }
+            let _ = weak.update(cx, |this, cx| {
+                this.saving = false;
+                if let Err(error) = result {
+                    this.pending.clear();
+                    this.last_error = Some(error.to_string());
+                    this.spawn_refresh(cx);
+                } else if !this.pending.is_empty() {
+                    this.save(cx);
                 }
                 cx.notify();
-            })
-            .ok();
+            });
         })
         .detach();
-    }
-
-    fn snapshot(&self) -> CompositorData {
-        match &self.state {
-            PageState::Loaded { data, .. } => data.clone(),
-            _ => CompositorData {
-                stiffness: 100.0,
-                damping: 20.0,
-                mass: 1.0,
-                attraction_radius: 24,
-                outer_gap: 8,
-                inner_gap: 8,
-                wallpaper_mode: "fill".into(),
-            },
-        }
-    }
-}
-
-fn clone_edit(e: &Edit) -> Edit {
-    match e {
-        Edit::Stiffness(v) => Edit::Stiffness(*v),
-        Edit::Damping(v) => Edit::Damping(*v),
-        Edit::Mass(v) => Edit::Mass(*v),
-        Edit::Radius(v) => Edit::Radius(*v),
-        Edit::OuterGap(v) => Edit::OuterGap(*v),
-        Edit::InnerGap(v) => Edit::InnerGap(*v),
-        Edit::WallpaperMode(s) => Edit::WallpaperMode(s.clone()),
     }
 }
 
@@ -187,16 +166,18 @@ fn zeta(stiffness: f64, damping: f64, mass: f64) -> f64 {
 
 impl Render for CompositorPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.state.should_refresh(Page::Compositor.ttl()) {
+        if !self.saving && self.state.should_refresh(Page::Compositor.ttl()) {
             self.spawn_refresh(cx);
         }
-        let in_flight = self.in_flight > 0;
+
         let last_error = self.last_error.clone();
         let body = match &self.state {
-            PageState::Loaded { data, .. } => data_view(data.clone(), in_flight, cx),
+            PageState::Loaded { data, .. } => self.data_view(data.clone(), cx),
             _ => skeleton(),
         };
         let mut root = div()
+            .id("compositor-scroll")
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .size_full()
@@ -255,332 +236,78 @@ fn skel_row(label: &'static str) -> gpui::Div {
         )
 }
 
-fn data_view(d: CompositorData, in_flight: bool, cx: &mut Context<CompositorPage>) -> gpui::Div {
-    let mut col = div().flex().flex_col().gap_3();
-    col = col.child(section_header("Spring physics"));
-    col = col.child(stepper_row_f64(
-        "Stiffness",
-        d.stiffness,
-        10.0,
-        1.0,
-        500.0,
-        in_flight,
-        |v| Edit::Stiffness(v),
-        cx,
-    ));
-    col = col.child(stepper_row_f64(
-        "Damping",
-        d.damping,
-        1.0,
-        0.0,
-        60.0,
-        in_flight,
-        |v| Edit::Damping(v),
-        cx,
-    ));
-    col = col.child(stepper_row_f64(
-        "Mass",
-        d.mass,
-        0.1,
-        0.1,
-        10.0,
-        in_flight,
-        |v| Edit::Mass(v),
-        cx,
-    ));
-    col = col.child(
-        div()
-            .px_4()
-            .py_2()
-            .text_color(rgb(theme::palette().secondary))
-            .child(format!(
-                "ζ (damping ratio) = {:.2}",
-                zeta(d.stiffness, d.damping, d.mass)
-            )),
-    );
-
-    col = col.child(section_header("Magnetic window manager"));
-    col = col.child(stepper_row_i32(
-        "Attraction radius (px)",
-        d.attraction_radius,
-        4,
-        0,
-        96,
-        in_flight,
-        |v| Edit::Radius(v),
-        cx,
-    ));
-    col = col.child(stepper_row_i32(
-        "Outer gap (px)",
-        d.outer_gap,
-        2,
-        0,
-        32,
-        in_flight,
-        |v| Edit::OuterGap(v),
-        cx,
-    ));
-    col = col.child(stepper_row_i32(
-        "Inner gap (px)",
-        d.inner_gap,
-        2,
-        0,
-        32,
-        in_flight,
-        |v| Edit::InnerGap(v),
-        cx,
-    ));
-
-    col = col.child(section_header("Wallpaper"));
-    col = col.child(mode_picker_row(&d.wallpaper_mode, in_flight, cx));
-
-    col
-}
-
-fn section_header(label: &'static str) -> gpui::Div {
-    div()
-        .mt_2()
-        .text_color(rgb(theme::palette().secondary))
-        .child(label)
-}
-
-fn stepper_button_style() -> gpui::Div {
-    div()
-        .w(px(32.))
-        .h(px(32.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(rgb(theme::palette().panel))
-        .text_color(rgb(theme::palette().text))
-        .rounded(px(6.))
-        .cursor_pointer()
-}
-
-fn stepper_row_f64(
-    label: &'static str,
-    value: f64,
-    step: f64,
-    min: f64,
-    max: f64,
-    in_flight: bool,
-    edit: impl Fn(f64) -> Edit + Copy + 'static,
-    cx: &mut Context<CompositorPage>,
-) -> gpui::Div {
-    let down_v = (value - step).max(min);
-    let up_v = (value + step).min(max);
-    let down_btn = stepper_button_style()
-        .id(SharedString::from(format!("dn:{label}")))
-        .role(gpui::Role::Button)
-        .aria_label(format!("Decrease {label}, {value}"))
-        .tab_index(0)
-        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-        .hover(|s| s.bg(rgb(theme::palette().surface)))
-        .on_click(cx.listener(move |this, _e, _w, cx| this.apply(edit(down_v), cx)))
-        .child("−");
-    let up_btn = stepper_button_style()
-        .id(SharedString::from(format!("up:{label}")))
-        .role(gpui::Role::Button)
-        .aria_label(format!("Increase {label}, {value}"))
-        .tab_index(0)
-        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-        .hover(|s| s.bg(rgb(theme::palette().surface)))
-        .on_click(cx.listener(move |this, _e, _w, cx| this.apply(edit(up_v), cx)))
-        .child("+");
-    let mut row = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .h(px(56.))
-        .px_4()
-        .bg(rgb(theme::palette().panel))
-        .rounded(px(10.))
-        .child(
-            div()
-                .text_color(rgb(theme::palette().secondary))
-                .child(label),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .child(down_btn)
-                .child(
-                    div()
-                        .id(SharedString::from(format!("range:{label}")))
-                        .role(gpui::Role::SpinButton)
-                        .aria_label(label)
-                        .aria_numeric_value(value as f64)
-                        .aria_min_numeric_value(min as f64)
-                        .aria_max_numeric_value(max as f64)
-                        .aria_numeric_value_step(step as f64)
-                        .on_a11y_action(gpui::AccessibleAction::Increment, {
-                            let entity = cx.weak_entity();
-                            move |_, _, cx| {
-                                entity
-                                    .update(cx, |this, cx| this.apply(edit(up_v), cx))
-                                    .ok();
-                            }
-                        })
-                        .on_a11y_action(gpui::AccessibleAction::Decrement, {
-                            let entity = cx.weak_entity();
-                            move |_, _, cx| {
-                                entity
-                                    .update(cx, |this, cx| this.apply(edit(down_v), cx))
-                                    .ok();
-                            }
-                        })
-                        .w(px(72.))
-                        .text_color(rgb(theme::palette().text))
-                        .child(format!("{value:.1}")),
+impl CompositorPage {
+    fn data_view(&self, d: CompositorData, cx: &Context<Self>) -> gpui::Div {
+        let mut col = div().flex().flex_col().gap_2();
+        let theme = mundane_ui::Theme::current(cx);
+        for (idx, (label, value, min, max, step)) in [
+            ("Stiffness", d.stiffness, 1., 500., 1.),
+            ("Damping", d.damping, 0., 60., 1.),
+            ("Mass", d.mass, 0.1, 10., 0.1),
+            (
+                "Attraction radius (px)",
+                d.attraction_radius.into(),
+                0.,
+                96.,
+                1.,
+            ),
+            ("Outer gap (px)", d.outer_gap.into(), 0., 32., 1.),
+            ("Inner gap (px)", d.inner_gap.into(), 0., 32., 1.),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if idx == 0 {
+                col = col.child(mundane_ui::heading("springs", "Spring physics"));
+            }
+            if idx == 3 {
+                col = col
+                    .child(format!(
+                        "ζ (damping ratio) = {:.2}",
+                        zeta(d.stiffness, d.damping, d.mass)
+                    ))
+                    .child(mundane_ui::heading("magnetic", "Magnetic window manager"));
+            }
+            let view = cx.weak_entity();
+            col = col.child(self.sliders[idx].render(
+                label,
+                mundane_ui::SliderRange::new(min, max, step).unwrap(),
+                value,
+                true,
+                theme,
+                move |v, _, cx| {
+                    let edit = match idx {
+                        0 => Edit::Stiffness(v),
+                        1 => Edit::Damping(v),
+                        2 => Edit::Mass(v),
+                        3 => Edit::Radius(v as i32),
+                        4 => Edit::OuterGap(v as i32),
+                        _ => Edit::InnerGap(v as i32),
+                    };
+                    let _ = view.update(cx, |page, cx| page.apply(edit, cx));
+                },
+            ));
+        }
+        let mut modes = div().flex().gap_2();
+        for (&mode, focus) in MODES.iter().zip(&self.modes) {
+            let view = cx.weak_entity();
+            modes = modes.child(
+                mundane_ui::toggle(
+                    mode,
+                    focus,
+                    d.wallpaper_mode == mode,
+                    true,
+                    theme,
+                    move |_, _, cx| {
+                        let _ = view.update(cx, |page, cx| {
+                            page.apply(Edit::WallpaperMode(mode.into()), cx)
+                        });
+                    },
                 )
-                .child(up_btn),
-        );
-    if in_flight {
-        row = row.border_b_2().border_color(rgb(theme::palette().focus));
+                .aria_label(format!("Wallpaper mode {mode}")),
+            );
+        }
+        col.child(mundane_ui::heading("wallpaper", "Wallpaper scaling mode"))
+            .child(modes)
     }
-    row
-}
-
-fn stepper_row_i32(
-    label: &'static str,
-    value: i32,
-    step: i32,
-    min: i32,
-    max: i32,
-    in_flight: bool,
-    edit: impl Fn(i32) -> Edit + Copy + 'static,
-    cx: &mut Context<CompositorPage>,
-) -> gpui::Div {
-    let down_v = (value - step).max(min);
-    let up_v = (value + step).min(max);
-    let down_btn = stepper_button_style()
-        .id(SharedString::from(format!("dn:{label}")))
-        .role(gpui::Role::Button)
-        .aria_label(format!("Decrease {label}, {value}"))
-        .tab_index(0)
-        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-        .hover(|s| s.bg(rgb(theme::palette().surface)))
-        .on_click(cx.listener(move |this, _e, _w, cx| this.apply(edit(down_v), cx)))
-        .child("−");
-    let up_btn = stepper_button_style()
-        .id(SharedString::from(format!("up:{label}")))
-        .role(gpui::Role::Button)
-        .aria_label(format!("Increase {label}, {value}"))
-        .tab_index(0)
-        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-        .hover(|s| s.bg(rgb(theme::palette().surface)))
-        .on_click(cx.listener(move |this, _e, _w, cx| this.apply(edit(up_v), cx)))
-        .child("+");
-    let mut row = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .h(px(56.))
-        .px_4()
-        .bg(rgb(theme::palette().panel))
-        .rounded(px(10.))
-        .child(
-            div()
-                .text_color(rgb(theme::palette().secondary))
-                .child(label),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_2()
-                .child(down_btn)
-                .child(
-                    div()
-                        .id(SharedString::from(format!("range:{label}")))
-                        .role(gpui::Role::SpinButton)
-                        .aria_label(label)
-                        .aria_numeric_value(value as f64)
-                        .aria_min_numeric_value(min as f64)
-                        .aria_max_numeric_value(max as f64)
-                        .aria_numeric_value_step(step as f64)
-                        .on_a11y_action(gpui::AccessibleAction::Increment, {
-                            let entity = cx.weak_entity();
-                            move |_, _, cx| {
-                                entity
-                                    .update(cx, |this, cx| this.apply(edit(up_v), cx))
-                                    .ok();
-                            }
-                        })
-                        .on_a11y_action(gpui::AccessibleAction::Decrement, {
-                            let entity = cx.weak_entity();
-                            move |_, _, cx| {
-                                entity
-                                    .update(cx, |this, cx| this.apply(edit(down_v), cx))
-                                    .ok();
-                            }
-                        })
-                        .w(px(72.))
-                        .text_color(rgb(theme::palette().text))
-                        .child(format!("{value}")),
-                )
-                .child(up_btn),
-        );
-    if in_flight {
-        row = row.border_b_2().border_color(rgb(theme::palette().focus));
-    }
-    row
-}
-
-fn mode_picker_row(current: &str, in_flight: bool, cx: &mut Context<CompositorPage>) -> gpui::Div {
-    let mut row = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .h(px(56.))
-        .px_4()
-        .bg(rgb(theme::palette().panel))
-        .rounded(px(10.))
-        .child(
-            div()
-                .text_color(rgb(theme::palette().secondary))
-                .child("Scaling mode"),
-        );
-    let mut picker = div().flex().flex_row().gap_2();
-    for &m in MODES {
-        let is_cur = m == current;
-        let mode_owned = m.to_string();
-        let chip = div()
-            .id(SharedString::from(format!("mode:{m}")))
-            .role(gpui::Role::Button)
-            .aria_label(format!("Wallpaper mode {m}"))
-            .tab_index(0)
-            .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-            .px_3()
-            .py_1()
-            .rounded(px(6.))
-            .cursor_pointer()
-            .bg(rgb(if is_cur {
-                theme::palette().focus
-            } else {
-                theme::palette().panel
-            }))
-            .text_color(rgb(if is_cur {
-                theme::palette().surface
-            } else {
-                theme::palette().text
-            }))
-            .on_click(cx.listener(move |this, _e, _w, cx| {
-                this.apply(Edit::WallpaperMode(mode_owned.clone()), cx);
-            }))
-            .child(m.to_string());
-        picker = picker.child(chip);
-    }
-    row = row.child(picker);
-    if in_flight {
-        row = row.border_b_2().border_color(rgb(theme::palette().focus));
-    }
-    row
 }

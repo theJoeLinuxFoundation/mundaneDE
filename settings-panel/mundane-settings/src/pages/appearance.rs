@@ -207,15 +207,16 @@ impl AppearancePage {
 }
 
 impl Render for AppearancePage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.state.should_refresh(Page::Appearance.ttl()) {
             self.spawn_refresh(cx);
         }
         let body = match &self.state {
-            PageState::Loaded { data, .. } => data_view(data, &self.in_flight, self.open, cx),
+            PageState::Loaded { data, .. } => {
+                data_view(window, data, &self.in_flight, self.open, cx)
+            }
             _ => skeleton(),
         };
-        use mundane_ui::ControlRole;
         let prefs = theme::current();
         let palette = mundane_ui::Theme::current(cx);
         let dark = !palette.light;
@@ -235,18 +236,14 @@ impl Render for AppearancePage {
         ];
         let accent = choices
             [(choices.iter().position(|s| *s == prefs.accent).unwrap_or(0) + 1) % choices.len()];
-        for (idx, (id, label, value, schema, key, next, toggle)) in [
+        for (idx, (_id, label, value, schema, key, next, toggle)) in [
             (
                 "dark",
                 "Dark appearance",
                 dark.to_string(),
                 "org.gnome.desktop.interface",
                 "color-scheme",
-                if dark {
-                    "prefer-light"
-                } else {
-                    "prefer-dark"
-                },
+                if dark { "prefer-light" } else { "prefer-dark" },
                 Some(dark),
             ),
             (
@@ -297,44 +294,39 @@ impl Render for AppearancePage {
         .into_iter()
         .enumerate()
         {
-            let mut control = if toggle.is_some() {
-                gpui::Role::Switch
-            } else {
-                gpui::Role::Button
-            }
-            .control(id, label);
-            if let Some(on) = toggle {
-                control = control.aria_toggled(if on {
-                    gpui::Toggled::True
-                } else {
-                    gpui::Toggled::False
-                });
-            }
-            let control = mundane_ui::focus_ring(control, &self.controls[idx], theme::palette())
-                .px_3()
-                .py_1()
-                .flex()
-                .justify_between()
-                .child(label)
-                .child(match toggle {
-                    Some(true) => "On".into(),
-                    Some(false) => "Off".into(),
-                    None => value,
-                })
-                .on_click(cx.listener(move |_, _, _, cx| {
+            let view = cx.weak_entity();
+            let change = move |_: &mut Window, cx: &mut gpui::App| {
+                let _ = view.update(cx, |_, cx| {
                     cx.spawn(async move |weak, cx| {
                         let error = theme_scan::gsettings_set(schema, key, next)
                             .await
                             .err()
                             .map(|e| e.to_string());
-                        weak.update(cx, |this, cx| {
+                        let _ = weak.update(cx, |this, cx| {
                             this.error = error;
-                            cx.notify()
-                        })
-                        .ok();
+                            cx.notify();
+                        });
                     })
                     .detach();
-                }));
+                });
+            };
+            let control = if let Some(on) = toggle {
+                mundane_ui::labelled_switch(
+                    label,
+                    &self.controls[idx],
+                    on,
+                    true,
+                    palette,
+                    move |_, w, cx| change(w, cx),
+                )
+            } else {
+                mundane_ui::button_base(label, &self.controls[idx], palette, change)
+                    .flex()
+                    .justify_between()
+                    .px_2()
+                    .child(label)
+                    .child(value)
+            };
             form = form.child(control);
         }
         if let Some(e) = &self.error {
@@ -381,6 +373,7 @@ fn skeleton_row(label: &'static str) -> gpui::Div {
 }
 
 fn data_view(
+    window: &mut Window,
     data: &AppearanceData,
     in_flight: &HashSet<&'static str>,
     open: Option<Section>,
@@ -388,6 +381,7 @@ fn data_view(
 ) -> gpui::Div {
     let mut col = div().flex().flex_col().gap_3();
     col = col.child(picker_row(
+        window,
         Section::GtkTheme,
         "GTK theme",
         &data.gtk_theme,
@@ -397,6 +391,7 @@ fn data_view(
     ));
     if open == Some(Section::GtkTheme) {
         col = col.child(theme_list(
+            window,
             &data.themes_available,
             &data.gtk_theme,
             Section::GtkTheme,
@@ -404,6 +399,7 @@ fn data_view(
         ));
     }
     col = col.child(picker_row(
+        window,
         Section::IconTheme,
         "Icon theme",
         &data.icon_theme,
@@ -413,6 +409,7 @@ fn data_view(
     ));
     if open == Some(Section::IconTheme) {
         col = col.child(theme_list(
+            window,
             &data.icons_available,
             &data.icon_theme,
             Section::IconTheme,
@@ -420,6 +417,7 @@ fn data_view(
         ));
     }
     col = col.child(picker_row(
+        window,
         Section::Wallpaper,
         "Wallpaper",
         &data.wallpaper_uri,
@@ -429,6 +427,7 @@ fn data_view(
     ));
     if open == Some(Section::Wallpaper) {
         col = col.child(wallpaper_list(
+            window,
             &data.wallpapers_available,
             &data.wallpaper_uri,
             cx,
@@ -446,7 +445,7 @@ fn data_view(
             &data.monospace_font,
         ),
     ] {
-        col = col.child(picker_row(section, label, current, false, open, cx));
+        col = col.child(picker_row(window, section, label, current, false, open, cx));
         if open == Some(section) {
             let (family, points) = current
                 .rsplit_once(' ')
@@ -458,6 +457,7 @@ fn data_view(
                 .map(|name| format!("{name} {points}"))
                 .collect();
             col = col.child(theme_list(
+                window,
                 &names,
                 &format!("{family} {points}"),
                 section,
@@ -469,6 +469,7 @@ fn data_view(
 }
 
 fn picker_row(
+    window: &mut Window,
     section: Section,
     label: &str,
     value: &str,
@@ -477,45 +478,39 @@ fn picker_row(
     cx: &mut Context<AppearancePage>,
 ) -> AnyElement {
     let chevron = if open == Some(section) { "▾" } else { "▸" };
-    let mut row = div()
-        .id(SharedString::from(format!("picker:{label}")))
-        .role(gpui::Role::Button)
-        .aria_label(label.to_string())
-        .tab_index(0)
-        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .h(px(56.))
-        .px_4()
-        .bg(rgb(theme::palette().panel))
-        .rounded(px(10.))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(theme::palette().panel)))
-        .on_click(cx.listener(move |this, _e, _w, cx| this.toggle_section(section, cx)))
-        .child(
-            div()
-                .text_color(rgb(theme::palette().secondary))
-                .child(label.to_string()),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap_3()
-                .child(
-                    div()
-                        .text_color(rgb(theme::palette().text))
-                        .child(short_label(value)),
-                )
-                .child(
-                    div()
-                        .text_color(rgb(theme::palette().secondary))
-                        .child(chevron.to_string()),
-                ),
-        );
+    let mut row = crate::widgets::action(
+        SharedString::from(format!("picker:{label}")),
+        label.to_string(),
+        window,
+        cx,
+        move |this, cx| this.toggle_section(section, cx),
+    )
+    .flex()
+    .flex_row()
+    .items_center()
+    .justify_between()
+    .child(
+        div()
+            .text_color(rgb(theme::palette().secondary))
+            .child(label.to_string()),
+    )
+    .child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .text_color(rgb(theme::palette().text))
+                    .child(short_label(value)),
+            )
+            .child(
+                div()
+                    .text_color(rgb(theme::palette().secondary))
+                    .child(chevron.to_string()),
+            ),
+    );
     if in_flight {
         row = row.border_b_2().border_color(rgb(theme::palette().focus));
     }
@@ -523,6 +518,7 @@ fn picker_row(
 }
 
 fn theme_list(
+    window: &mut Window,
     available: &[String],
     current: &str,
     section: Section,
@@ -549,22 +545,12 @@ fn theme_list(
     for name in available {
         let is_current = name == current;
         let name_owned = name.clone();
-        let row = div()
-            .id(SharedString::from(format!("theme-opt:{name}")))
-            .role(gpui::Role::Button)
-            .aria_label(name.to_string())
-            .tab_index(0)
-            .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .px_4()
-            .py_2()
-            .rounded(px(8.))
-            .cursor_pointer()
-            .hover(|s| s.bg(rgb(theme::palette().panel)))
-            .on_click(cx.listener(move |this, _e, _w, cx| match section {
+        let row = crate::widgets::action(
+            SharedString::from(format!("theme-opt:{name}")),
+            name.to_string(),
+            window,
+            cx,
+            move |this, cx| match section {
                 Section::GtkTheme => this.pick_gtk_theme(name_owned.clone(), cx),
                 Section::IconTheme => this.pick_icon_theme(name_owned.clone(), cx),
                 Section::InterfaceFont => this.set_gsettings(
@@ -584,27 +570,33 @@ fn theme_list(
                     cx,
                 ),
                 Section::Wallpaper => {}
-            }))
-            .child(
-                div()
-                    .text_color(rgb(theme::palette().text))
-                    .child(name.clone()),
-            )
-            .child(
-                div()
-                    .text_color(rgb(if is_current {
-                        theme::palette().focus
-                    } else {
-                        theme::palette().secondary
-                    }))
-                    .child(if is_current { "Current" } else { "" }.to_string()),
-            );
+            },
+        )
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .text_color(rgb(theme::palette().text))
+                .child(name.clone()),
+        )
+        .child(
+            div()
+                .text_color(rgb(if is_current {
+                    theme::palette().focus
+                } else {
+                    theme::palette().secondary
+                }))
+                .child(if is_current { "Current" } else { "" }.to_string()),
+        );
         col = col.child(row);
     }
     col
 }
 
 fn wallpaper_list(
+    window: &mut Window,
     available: &[PathBuf],
     current_uri: &str,
     cx: &mut Context<AppearancePage>,
@@ -636,34 +628,29 @@ fn wallpaper_list(
         let uri = format!("file://{}", path.display());
         let is_current = uri == current_uri;
         let path_owned = path.clone();
-        let row = div()
-            .id(SharedString::from(format!("wp-opt:{}", path.display())))
-            .role(gpui::Role::Button)
-            .aria_label(display.clone())
-            .tab_index(0)
-            .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .px_4()
-            .py_2()
-            .rounded(px(8.))
-            .cursor_pointer()
-            .hover(|s| s.bg(rgb(theme::palette().panel)))
-            .on_click(cx.listener(move |this, _e, _w, cx| {
+        let row = crate::widgets::action(
+            SharedString::from(format!("wp-opt:{}", path.display())),
+            display.clone(),
+            window,
+            cx,
+            move |this, cx| {
                 this.pick_wallpaper(path_owned.clone(), cx);
-            }))
-            .child(div().text_color(rgb(theme::palette().text)).child(display))
-            .child(
-                div()
-                    .text_color(rgb(if is_current {
-                        theme::palette().focus
-                    } else {
-                        theme::palette().secondary
-                    }))
-                    .child(if is_current { "Current" } else { "" }.to_string()),
-            );
+            },
+        )
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .child(div().text_color(rgb(theme::palette().text)).child(display))
+        .child(
+            div()
+                .text_color(rgb(if is_current {
+                    theme::palette().focus
+                } else {
+                    theme::palette().secondary
+                }))
+                .child(if is_current { "Current" } else { "" }.to_string()),
+        );
         col = col.child(row);
     }
     col

@@ -1,100 +1,146 @@
-//! Modal text and password prompts.
-//!
-//! Wraps `zenity` as a subprocess: the dialog is its own GTK window, so it
-//! sidesteps the missing GPUI text-input primitive entirely. Returns
-//! `Ok(Some(text))` on submit, `Ok(None)` on cancel/close, `Err(_)` only on
-//! genuinely unexpected failure (zenity missing, permission error, etc.).
-//!
-//! Zenity needs to be on PATH. In a development shell without it, the future
-//! resolves to an error instead of panicking.
+//! GPUI forms resolve on Submit, Escape, Cancel or window close.
+use anyhow::Result;
+use gpui::{prelude::*, *};
+use mundane_ui::{tokens, TextField, Theme};
 
-use anyhow::{Context, Result};
-use mundane_settings_core::on_runtime;
-use tokio::process::Command;
-
-/// One-line free-text prompt. `initial` pre-fills the entry box. Currently no caller
-/// in the panel uses this; kept available for future free-text settings.
-#[allow(dead_code)]
-pub async fn text(title: &str, label: &str, initial: &str) -> Result<Option<String>> {
-    run_zenity(&[
-        "--entry",
-        "--title",
-        title,
-        "--text",
-        label,
-        "--entry-text",
-        initial,
-    ])
-    .await
+struct Form {
+    title: &'static str,
+    detail: String,
+    fields: Vec<Entity<TextField>>,
+    cancel: FocusHandle,
+    submit: FocusHandle,
+    result: async_channel::Sender<Vec<String>>,
 }
-
-/// Single masked-entry password prompt.
-pub async fn password(title: &str, label: &str) -> Result<Option<String>> {
-    // zenity's `--password` doesn't accept `--text`; use `--entry --hide-text`
-    // so we can still show a caller-supplied label.
-    run_zenity(&[
-        "--entry",
-        "--hide-text",
-        "--title",
-        title,
-        "--text",
-        label,
-    ])
-    .await
-}
-
-/// Two-field prompt for name + value pairs (e.g. flatpak remote name + URL).
-/// Returns `(name, url)` on submit. Cancel returns `Ok(None)`.
-pub async fn name_and_url(
-    title: &str,
-    name_label: &str,
-    url_label: &str,
-) -> Result<Option<(String, String)>> {
-    let out = run_zenity_raw(&[
-        "--forms",
-        "--title",
-        title,
-        "--text",
-        title,
-        "--separator=|",
-        &format!("--add-entry={name_label}"),
-        &format!("--add-entry={url_label}"),
-    ])
-    .await?;
-    let Some(text) = out else { return Ok(None) };
-    let mut parts = text.splitn(2, '|');
-    let name = parts.next().unwrap_or("").trim().to_string();
-    let url = parts.next().unwrap_or("").trim().to_string();
-    if name.is_empty() || url.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some((name, url)))
-}
-
-async fn run_zenity(args: &[&str]) -> Result<Option<String>> {
-    run_zenity_raw(args).await
-}
-
-async fn run_zenity_raw(args: &[&str]) -> Result<Option<String>> {
-    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    on_runtime(async move {
-        let out = Command::new("zenity")
-            .args(&args)
-            .output()
-            .await
-            .context("failed to spawn zenity")?;
-        // zenity convention: exit 0 = submitted, 1 = cancelled/closed.
-        match out.status.code() {
-            Some(0) => {
-                let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                Ok(Some(text))
-            }
-            Some(1) => Ok(None),
-            _ => Err(anyhow::anyhow!(
-                "zenity exited unexpectedly: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            )),
+impl Form {
+    fn submit(&self, w: &mut Window, cx: &App) {
+        let values: Vec<_> = self
+            .fields
+            .iter()
+            .map(|f| f.read(cx).text().to_owned())
+            .collect();
+        if values.iter().all(|v| !v.is_empty()) {
+            let _ = self.result.try_send(values);
+            w.remove_window();
         }
-    })
-    .await
+    }
+}
+impl Render for Form {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::current(cx);
+        let mut form = div()
+            .size_full()
+            .p(tokens::space::LG)
+            .gap(tokens::space::MD)
+            .flex()
+            .flex_col()
+            .bg(rgb(theme.surface))
+            .text_color(rgb(theme.text))
+            .child(mundane_ui::heading("form-heading", self.title));
+        if !self.detail.is_empty() {
+            form = form.child(self.detail.clone());
+        }
+        for f in &self.fields {
+            form = form.child(f.clone());
+        }
+        let view = cx.weak_entity();
+        let actions = div()
+            .flex()
+            .justify_end()
+            .gap(tokens::space::SM)
+            .child(mundane_ui::button("Cancel", &self.cancel, theme, |w, _| {
+                w.remove_window()
+            }))
+            .child(mundane_ui::button(
+                "Submit",
+                &self.submit,
+                theme,
+                move |w, cx| {
+                    let _ = view.update(cx, |v, cx| v.submit(w, cx));
+                },
+            ));
+        form.child(actions)
+            .on_key_down(cx.listener(|v, e: &KeyDownEvent, w, cx| {
+                match e.keystroke.key.as_str() {
+                    "escape" => w.remove_window(),
+                    "tab" if e.keystroke.modifiers.shift => w.focus_prev(cx),
+                    "tab" => w.focus_next(cx),
+                    "enter"
+                        if v.fields
+                            .iter()
+                            .any(|f| f.read(cx).focus_handle(cx).is_focused(w)) =>
+                    {
+                        v.submit(w, cx)
+                    }
+                    _ => return,
+                }
+                cx.stop_propagation();
+            }))
+    }
+}
+async fn form(
+    title: &'static str,
+    detail: String,
+    labels: &[&'static str],
+    masked: bool,
+    cx: &mut AsyncApp,
+) -> Result<Option<Vec<String>>> {
+    let (tx, rx) = async_channel::bounded(1);
+    let bounds = cx.update(|cx| Bounds::centered(None, size(px(440.), px(250.)), cx));
+    cx.open_window(
+        WindowOptions {
+            kind: WindowKind::Dialog,
+            app_id: Some("org.joelinux.MundaneSettings".into()),
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        },
+        |w, cx| {
+            w.set_window_title(title);
+            cx.new(|cx| {
+                let fields: Vec<_> = labels
+                    .iter()
+                    .map(|label| {
+                        cx.new(|cx| {
+                            if masked {
+                                TextField::password(label, Theme::current(cx), cx)
+                            } else {
+                                TextField::new(label, Theme::current(cx), cx)
+                            }
+                        })
+                    })
+                    .collect();
+                w.focus(&fields[0].read(cx).focus_handle(cx), cx);
+                Form {
+                    title,
+                    detail,
+                    fields,
+                    cancel: cx.focus_handle().tab_stop(true),
+                    submit: cx.focus_handle().tab_stop(true),
+                    result: tx,
+                }
+            })
+        },
+    )?;
+    Ok(rx.recv().await.ok())
+}
+pub async fn password(
+    title: &'static str,
+    label: &str,
+    cx: &mut AsyncApp,
+) -> Result<Option<String>> {
+    Ok(form(title, label.into(), &["Password"], true, cx)
+        .await?
+        .and_then(|mut vs| vs.pop()))
+}
+pub async fn name_and_url(
+    title: &'static str,
+    name: &'static str,
+    url: &'static str,
+    cx: &mut AsyncApp,
+) -> Result<Option<(String, String)>> {
+    Ok(form(title, String::new(), &[name, url], false, cx)
+        .await?
+        .and_then(|v| {
+            let (name, url) = (v[0].trim(), v[1].trim());
+            (!name.is_empty() && !url.is_empty()).then(|| (name.into(), url.into()))
+        }))
 }

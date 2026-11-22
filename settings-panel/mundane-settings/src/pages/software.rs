@@ -4,8 +4,8 @@ use crate::pages::{Page, PageState};
 use crate::theme;
 use crate::widgets::prompt;
 use gpui::{
-    div, px, rgb, AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Window,
+    div, px, rgb, AnyElement, Context, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Window,
 };
 use mundane_settings_core::dbus::flatpak as backend;
 use std::collections::HashSet;
@@ -41,6 +41,7 @@ impl SoftwarePage {
                 "Add Flatpak remote",
                 "Name (e.g. flathub-beta)",
                 "URL (.flatpakrepo or repo root)",
+                async_cx,
             )
             .await
             {
@@ -144,12 +145,13 @@ impl SoftwarePage {
 }
 
 impl Render for SoftwarePage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.state.should_refresh(Page::Software.ttl()) {
             self.spawn_refresh(cx);
         }
         let body: AnyElement = match &self.state {
             PageState::Loaded { data, .. } => remotes_view(
+                window,
                 data,
                 &self.in_flight,
                 self.add_pending,
@@ -202,6 +204,7 @@ fn error_view(msg: &str) -> gpui::Div {
 }
 
 fn remotes_view(
+    window: &mut Window,
     remotes: &[backend::Remote],
     in_flight: &HashSet<String>,
     add_pending: bool,
@@ -215,9 +218,9 @@ fn remotes_view(
             .child("Flatpak remotes"),
     );
     for r in remotes {
-        col = col.child(remote_row(r, in_flight.contains(&r.name), cx));
+        col = col.child(remote_row(window, r, in_flight.contains(&r.name), cx));
     }
-    col = col.child(add_remote_button(add_pending, cx));
+    col = col.child(add_remote_button(window, add_pending, cx));
     if let Some(err) = add_error {
         col = col.child(
             div()
@@ -230,84 +233,53 @@ fn remotes_view(
     col
 }
 
-fn remote_row(r: &backend::Remote, in_flight: bool, cx: &mut Context<SoftwarePage>) -> AnyElement {
+fn remote_row(
+    window: &mut Window,
+    r: &backend::Remote,
+    in_flight: bool,
+    cx: &mut Context<SoftwarePage>,
+) -> AnyElement {
     let name = r.name.clone();
-    let mut row = div()
-        .id(SharedString::from(format!("remote-row:{}", name)))
-        .role(gpui::Role::Button)
-        .aria_label(format!("Toggle {name}"))
-        .tab_index(0)
-        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
+    let focus = crate::widgets::focus(SharedString::from(format!("remote-row:{name}")), window, cx);
+    let view = cx.weak_entity();
+    div()
         .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .px_4()
-        .py_3()
-        .bg(rgb(theme::palette().panel))
-        .rounded(px(10.))
-        .cursor_pointer()
-        .on_click(cx.listener(move |this, _event, _window, cx| {
-            this.toggle_enabled(cx, name.clone());
-        }))
+        .flex_col()
         .child(
-            div()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .text_color(rgb(theme::palette().text))
-                        .child(r.name.clone()),
-                )
-                .child(
-                    div()
-                        .text_color(rgb(theme::palette().secondary))
-                        .child(r.url.clone()),
-                ),
+            mundane_ui::labelled_switch(
+                r.name.clone(),
+                &focus,
+                r.enabled,
+                !in_flight,
+                theme::palette(),
+                move |_, _, cx| {
+                    let _ = view.update(cx, |this, cx| this.toggle_enabled(cx, name.clone()));
+                },
+            )
+            .aria_description(r.url.clone()),
         )
-        .child(
-            div()
-                .text_color(if r.enabled {
-                    rgb(theme::palette().focus)
-                } else {
-                    rgb(theme::palette().secondary)
-                })
-                .child(if r.enabled { "enabled" } else { "disabled" }.to_string()),
-        );
-    if in_flight {
-        row = row.border_b_2().border_color(rgb(theme::palette().focus));
-    }
-    row.into_any_element()
+        .child(mundane_ui::text_label("remote-url", r.url.clone()).child(r.url.clone()))
+        .into_any_element()
 }
 
-fn add_remote_button(pending: bool, cx: &mut Context<SoftwarePage>) -> gpui::Div {
-    let button = div()
-        .id("add-remote")
-        .role(gpui::Role::Button)
-        .aria_label("Add remote")
-        .tab_index(0)
-        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-        .h(px(40.))
-        .px_4()
-        .flex()
-        .items_center()
-        .bg(rgb(if pending {
-            theme::palette().panel
+fn add_remote_button(
+    window: &mut Window,
+    pending: bool,
+    cx: &mut Context<SoftwarePage>,
+) -> gpui::Div {
+    let button = crate::widgets::action("add-remote", "Add remote", window, cx, |this, cx| {
+        this.start_add_remote(cx)
+    })
+    .flex()
+    .items_center()
+    .child(
+        if pending {
+            "Adding…"
         } else {
-            theme::palette().focus
-        }))
-        .text_color(rgb(theme::palette().surface))
-        .rounded(px(8.))
-        .cursor_pointer()
-        .on_click(cx.listener(|this, _event, _window, cx| this.start_add_remote(cx)))
-        .child(
-            if pending {
-                "Adding…"
-            } else {
-                "+ Add remote…"
-            }
-            .to_string(),
-        );
+            "+ Add remote…"
+        }
+        .to_string(),
+    );
 
     div()
         .flex()

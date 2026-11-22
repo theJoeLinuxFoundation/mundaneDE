@@ -3,10 +3,7 @@
 use crate::pages::{Page, PageState};
 use crate::theme;
 use crate::widgets::prompt;
-use gpui::{
-    div, px, rgb, Context, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window,
-};
+use gpui::{div, px, rgb, Context, IntoElement, ParentElement, Render, Styled, Window};
 use mundane_settings_core::dbus::accounts::{self as backend, AccountType, UserAccount};
 
 pub struct UsersPage {
@@ -61,7 +58,7 @@ impl UsersPage {
         self.password_status = None;
         cx.notify();
         cx.spawn(async move |weak, async_cx| {
-            let new = match prompt::password("Change password", "New password").await {
+            let new = match prompt::password("Change password", "New password", async_cx).await {
                 Ok(Some(s)) if !s.is_empty() => s,
                 Ok(_) => {
                     weak.update(async_cx, |this, cx| {
@@ -81,17 +78,18 @@ impl UsersPage {
                     return;
                 }
             };
-            let confirm = match prompt::password("Confirm password", "Re-enter to confirm").await {
-                Ok(Some(s)) => s,
-                _ => {
-                    weak.update(async_cx, |this, cx| {
-                        this.password_pending = false;
-                        cx.notify();
-                    })
-                    .ok();
-                    return;
-                }
-            };
+            let confirm =
+                match prompt::password("Confirm password", "Re-enter to confirm", async_cx).await {
+                    Ok(Some(s)) => s,
+                    _ => {
+                        weak.update(async_cx, |this, cx| {
+                            this.password_pending = false;
+                            cx.notify();
+                        })
+                        .ok();
+                        return;
+                    }
+                };
             if new != confirm {
                 weak.update(async_cx, |this, cx| {
                     this.password_pending = false;
@@ -118,36 +116,26 @@ impl UsersPage {
 }
 
 impl Render for UsersPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.state.should_refresh(Page::Users.ttl()) {
             self.spawn_refresh(cx);
         }
         let pending = self.password_pending;
-        let change_password_button = div()
-            .id("change-password")
-            .role(gpui::Role::Button)
-            .aria_label("Change password")
-            .tab_index(0)
-            .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-            .px_4()
-            .py_2()
-            .bg(rgb(if pending {
-                theme::palette().panel
+        let change_password_button = crate::widgets::action(
+            "change-password",
+            "Change password",
+            window,
+            cx,
+            |this, cx| this.start_change_password(cx),
+        )
+        .child(
+            if pending {
+                "Changing…"
             } else {
-                theme::palette().focus
-            }))
-            .rounded(px(8.))
-            .text_color(rgb(theme::palette().surface))
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _event, _window, cx| this.start_change_password(cx)))
-            .child(
-                if pending {
-                    "Changing…"
-                } else {
-                    "Change password…"
-                }
-                .to_string(),
-            );
+                "Change password…"
+            }
+            .to_string(),
+        );
 
         let status_line = match &self.password_status {
             Some(PasswordStatus::Ok) => {

@@ -3,8 +3,8 @@
 use crate::pages::{Page, PageState};
 use crate::theme;
 use gpui::{
-    div, px, rgb, AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Window,
+    div, px, rgb, AnyElement, Context, IntoElement, ParentElement, Render, SharedString, Styled,
+    Window,
 };
 use mundane_settings_core::datetime::{self as backend, DateTimeStatus};
 
@@ -104,15 +104,20 @@ impl DateTimePage {
 }
 
 impl Render for DateTimePage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.status.should_refresh(Page::DateTime.ttl()) {
             self.spawn_refresh(cx);
         }
         let body: AnyElement = match &self.status {
-            PageState::Loaded { data, .. } => {
-                loaded_view(data, &self.tz_list, self.tz_open, self.in_flight, cx)
-                    .into_any_element()
-            }
+            PageState::Loaded { data, .. } => loaded_view(
+                window,
+                data,
+                &self.tz_list,
+                self.tz_open,
+                self.in_flight,
+                cx,
+            )
+            .into_any_element(),
             PageState::Error(e) => error_view(e).into_any_element(),
             _ => skeleton().into_any_element(),
         };
@@ -158,6 +163,7 @@ fn error_view(msg: &str) -> gpui::Div {
 }
 
 fn loaded_view(
+    window: &mut Window,
     d: &DateTimeStatus,
     tz_list: &[String],
     tz_open: bool,
@@ -185,66 +191,62 @@ fn loaded_view(
                     .child(d.local_time.clone()),
             ),
     );
-    col = col.child(tz_row(&d.timezone, tz_open, in_flight, cx));
+    col = col.child(tz_row(window, &d.timezone, tz_open, in_flight, cx));
     if tz_open {
-        col = col.child(tz_list_view(tz_list, &d.timezone, cx));
+        col = col.child(tz_list_view(window, tz_list, &d.timezone, cx));
     }
-    col = col.child(ntp_row(d.ntp_enabled, in_flight, cx));
+    col = col.child(ntp_row(window, d.ntp_enabled, in_flight, cx));
     col
 }
 
 fn tz_row(
+    window: &mut Window,
     current: &str,
     open: bool,
     in_flight: bool,
     cx: &mut Context<DateTimePage>,
 ) -> AnyElement {
     let chevron = if open { "▾" } else { "▸" };
-    let mut row = div()
-        .id("tz-row")
-        .role(gpui::Role::Button)
-        .aria_label("Timezone")
-        .tab_index(0)
-        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .h(px(56.))
-        .px_4()
-        .bg(rgb(theme::palette().panel))
-        .rounded(px(10.))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(theme::palette().panel)))
-        .on_click(cx.listener(|this, _e, _w, cx| this.toggle_tz_list(cx)))
-        .child(
-            div()
-                .text_color(rgb(theme::palette().secondary))
-                .child("Timezone"),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .gap_3()
-                .child(
-                    div()
-                        .text_color(rgb(theme::palette().text))
-                        .child(current.to_string()),
-                )
-                .child(
-                    div()
-                        .text_color(rgb(theme::palette().secondary))
-                        .child(chevron.to_string()),
-                ),
-        );
+    let mut row = crate::widgets::action("tz-row", "Timezone", window, cx, |this, cx| {
+        this.toggle_tz_list(cx)
+    })
+    .flex()
+    .flex_row()
+    .items_center()
+    .justify_between()
+    .child(
+        div()
+            .text_color(rgb(theme::palette().secondary))
+            .child("Timezone"),
+    )
+    .child(
+        div()
+            .flex()
+            .flex_row()
+            .gap_3()
+            .child(
+                div()
+                    .text_color(rgb(theme::palette().text))
+                    .child(current.to_string()),
+            )
+            .child(
+                div()
+                    .text_color(rgb(theme::palette().secondary))
+                    .child(chevron.to_string()),
+            ),
+    );
     if in_flight {
         row = row.border_b_2().border_color(rgb(theme::palette().focus));
     }
     row.into_any_element()
 }
 
-fn tz_list_view(tz_list: &[String], current: &str, cx: &mut Context<DateTimePage>) -> gpui::Div {
+fn tz_list_view(
+    window: &mut Window,
+    tz_list: &[String],
+    current: &str,
+    cx: &mut Context<DateTimePage>,
+) -> gpui::Div {
     let mut col = div()
         .flex()
         .flex_col()
@@ -274,75 +276,53 @@ fn tz_list_view(tz_list: &[String], current: &str, cx: &mut Context<DateTimePage
     for tz in limited {
         let is_current = tz == current;
         let tz_owned = tz.clone();
-        let row = div()
-            .id(SharedString::from(format!("tz-opt:{tz}")))
-            .role(gpui::Role::Button)
-            .aria_label(tz.clone())
-            .tab_index(0)
-            .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .px_4()
-            .py_2()
-            .rounded(px(8.))
-            .cursor_pointer()
-            .hover(|s| s.bg(rgb(theme::palette().panel)))
-            .on_click(cx.listener(move |this, _e, _w, cx| this.set_tz(tz_owned.clone(), cx)))
-            .child(
-                div()
-                    .text_color(rgb(theme::palette().text))
-                    .child(tz.clone()),
-            )
-            .child(
-                div()
-                    .text_color(rgb(if is_current {
-                        theme::palette().focus
-                    } else {
-                        theme::palette().secondary
-                    }))
-                    .child(if is_current { "Current" } else { "" }.to_string()),
-            );
+        let row = crate::widgets::action(
+            SharedString::from(format!("tz-opt:{tz}")),
+            tz.clone(),
+            window,
+            cx,
+            move |this, cx| this.set_tz(tz_owned.clone(), cx),
+        )
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .text_color(rgb(theme::palette().text))
+                .child(tz.clone()),
+        )
+        .child(
+            div()
+                .text_color(rgb(if is_current {
+                    theme::palette().focus
+                } else {
+                    theme::palette().secondary
+                }))
+                .child(if is_current { "Current" } else { "" }.to_string()),
+        );
         col = col.child(row);
     }
     col
 }
 
-fn ntp_row(enabled: bool, in_flight: bool, cx: &mut Context<DateTimePage>) -> AnyElement {
-    let mut row = div()
-        .id("ntp-row")
-        .role(gpui::Role::Button)
-        .aria_label("Sync time over the network")
-        .tab_index(0)
-        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .h(px(56.))
-        .px_4()
-        .bg(rgb(theme::palette().panel))
-        .rounded(px(10.))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(theme::palette().panel)))
-        .on_click(cx.listener(|this, _e, _w, cx| this.toggle_ntp(cx)))
-        .child(
-            div()
-                .text_color(rgb(theme::palette().secondary))
-                .child("Sync time over the network (NTP)"),
-        )
-        .child(
-            div()
-                .text_color(if enabled {
-                    rgb(theme::palette().focus)
-                } else {
-                    rgb(theme::palette().secondary)
-                })
-                .child(if enabled { "On" } else { "Off" }.to_string()),
-        );
-    if in_flight {
-        row = row.border_b_2().border_color(rgb(theme::palette().focus));
-    }
-    row.into_any_element()
+fn ntp_row(
+    window: &mut Window,
+    enabled: bool,
+    in_flight: bool,
+    cx: &mut Context<DateTimePage>,
+) -> AnyElement {
+    let focus = crate::widgets::focus("ntp-row", window, cx);
+    let view = cx.weak_entity();
+    mundane_ui::labelled_switch(
+        "Sync time over the network",
+        &focus,
+        enabled,
+        !in_flight,
+        theme::palette(),
+        move |_, _, cx| {
+            let _ = view.update(cx, |this, cx| this.toggle_ntp(cx));
+        },
+    )
+    .into_any_element()
 }

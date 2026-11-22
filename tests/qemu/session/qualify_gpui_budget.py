@@ -1,4 +1,4 @@
-"""Measure step 1 on a trace-enabled private joe guest. Run on a fresh overlay."""
+"""Measure the GPUI shell on a trace-enabled private joe guest. Run on a fresh overlay."""
 
 import argparse
 import statistics
@@ -44,8 +44,8 @@ def qualify(run):
         p = frame()
         return (
             p
-            and pixel(p, 200, 615) == pixel(p, 500, 1054)
-            and pixel(p, 600, 615) != pixel(p, 200, 615)
+            and pixel(p, 19, 515) == pixel(p, 500, 1054)
+            and pixel(p, 600, 515) != pixel(p, 19, 515)
         )
 
     # Reuse the untouched system font caches from the image. Give GPUI/Mesa a

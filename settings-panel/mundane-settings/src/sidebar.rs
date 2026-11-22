@@ -1,14 +1,4 @@
-//! Sidebar — rendered inline from `App::render`. Stateless; selection lives
-//! on the parent `App` entity, which we receive as a handle so click handlers
-//! can update it.
-//!
-//! Selection is painted as a background on the selected row itself, not as a
-//! separately-positioned overlay — an `.absolute()` overlay covers the row's
-//! hit area and blocks `on_click`. Animating a sliding indicator while keeping
-//! clicks pass-through requires either `pointer-events: none` (not exposed in
-//! GPUI today) or per-row background-color tweening; the second option is the
-//! follow-up, the first option doesn't exist.
-
+//! Settings navigation uses the same active panel button as desktop chrome.
 use crate::app::App;
 use crate::pages::Page;
 use crate::theme;
@@ -62,37 +52,25 @@ fn row(
     app: Entity<App>,
     nav: &[gpui::FocusHandle; 9],
 ) -> impl IntoElement {
-    let is_selected = page == selected;
-    use mundane_ui::ControlRole;
-    let mut row = mundane_ui::focus_ring(
-        gpui::Role::Button.control(("sidebar-row", page as usize), page.label()),
+    let content = div()
+        .flex()
+        .items_center()
+        .gap(mundane_ui::tokens::space::MD)
+        .child(div().w(mundane_ui::tokens::icon::LARGE).child(page.icon()))
+        .child(page.label());
+    mundane_ui::panel_button(
+        page.label(),
+        content,
         &nav[page as usize],
+        mundane_ui::PanelState {
+            active: page == selected,
+            ..Default::default()
+        },
         theme::palette(),
+        move |_, cx| {
+            app.update(cx, |app, cx| app.select(page, cx));
+        },
     )
-    .flex()
-    .flex_row()
-    .items_center()
-    .gap_3()
-    .px_3()
     .h(px(ROW_HEIGHT))
-    .rounded(px(8.))
-    .text_color(if is_selected {
-        rgb(theme::palette().text)
-    } else {
-        rgb(theme::palette().secondary)
-    })
-    .cursor_pointer()
-    .hover(|s| {
-        s.bg(rgb(theme::palette().panel))
-            .text_color(rgb(theme::palette().text))
-    })
-    .on_click(move |_event, _window, cx| {
-        app.update(cx, |app, cx| app.select(page, cx));
-    })
-    .child(div().w(px(20.)).child(page.icon()))
-    .child(page.label());
-    if is_selected {
-        row = row.bg(rgb(theme::palette().panel));
-    }
-    row
+    .justify_start()
 }

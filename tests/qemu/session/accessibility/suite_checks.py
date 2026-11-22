@@ -20,7 +20,7 @@ def drag_from_centre(g, x, y):
     time.sleep(0.25)
 
 
-def check(g, joe, launch, activate, tree, read, wait):
+def check(g, joe, launch, activate, tree, read, wait, gpui_shell=False):
     # Start over the open Settings window. AT-SPI actions on Settings do not
     # raise it. Only sample Terminal's grid, clear of its header and shell chrome.
     def frame():
@@ -35,9 +35,11 @@ def check(g, joe, launch, activate, tree, read, wait):
         )
 
     def palette(terminal, taskbar):
+        if gpui_shell:
+            taskbar = {"1b2130": "222e2a", "fafafa": "e9eeea"}.get(taskbar, taskbar)
         pixels = frame()
         grid = region(pixels, 1640, 510, 180, 60)
-        bar = region(pixels, 620, 1054, 120, 12)
+        bar = region(pixels, 1000 if gpui_shell else 620, 1054, 120, 12)
         return (
             grid.count(bytes.fromhex(terminal)) > 9000
             and bar.count(bytes.fromhex(taskbar)) > 700
@@ -49,7 +51,21 @@ def check(g, joe, launch, activate, tree, read, wait):
     terminal = launch("/usr/local/bin/mundane-terminal", "suite-terminal")
     try:
         wait("mapped suite Terminal", lambda: "frame Terminal" in tree())
-        drag_from_centre(g, 0.76, 0.5)
+        if gpui_shell:
+            wait(
+                "presented and focused Terminal",
+                lambda: (
+                    "active"
+                    in joe(
+                        "python3 -W ignore /tmp/mundane-gpui-step2/shell_widgets.py frame-state Terminal"
+                    ).split()
+                ),
+            )
+            joe(
+                "python3 -W ignore /tmp/mundane-gpui-step2/shell_widgets.py --frame Terminal click Maximize"
+            )
+        else:
+            drag_from_centre(g, 0.76, 0.5)
         wait("initial dark Terminal grid", lambda: palette("17201e", "1b2130"))
         activate("Dark appearance")
         wait(
@@ -82,13 +98,21 @@ def check(g, joe, launch, activate, tree, read, wait):
             "dark restored",
             lambda: native("dark", True) and palette("17201e", "1b2130"),
         )
+        # A header action leaves keyboard focus on Restore. Focus the terminal grid
+        # before sampling its caret colour.
+        if gpui_shell:
+            g.click(0.7, 0.57)
         # The focused terminal cursor uses the shared theme's accent.
         activate("Accent colour")
         wait("new native app accent", lambda: native("accent", "teal"))
         wait(
             "accent on Terminal cursor",
             lambda: (
-                region(frame(), 1020, 220, 835, 650).count(bytes.fromhex("2190a4"))
+                (
+                    region(frame(), 8, 45, 1850, 860)
+                    if gpui_shell
+                    else region(frame(), 1020, 220, 835, 650)
+                ).count(bytes.fromhex("2190a4"))
                 >= 50
             ),
         )

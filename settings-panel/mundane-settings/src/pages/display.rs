@@ -94,7 +94,7 @@ impl DisplayPage {
 }
 
 impl Render for DisplayPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.state.should_refresh(Page::Display.ttl()) {
             self.state = PageState::Loading;
             self.spawn_refresh(cx);
@@ -151,9 +151,13 @@ impl Render for DisplayPage {
                             output.position = position;
                             let selected = mode.clone();
                             let positions = positions.clone();
-                            card =
-                                card.child(control(format!("{}-{index}", m.name), label).on_click(
-                                    cx.listener(move |this, _, _, cx| {
+                            card = card.child(
+                                crate::widgets::action(
+                                    gpui::SharedString::from(format!("{}-{index}", m.name)),
+                                    label.clone(),
+                                    window,
+                                    cx,
+                                    move |this, cx| {
                                         let mut next =
                                             (selected.clone(), scale, rotation, position);
                                         match index {
@@ -190,8 +194,10 @@ impl Render for DisplayPage {
                                         }
                                         this.selections.insert(output.name.clone(), next);
                                         cx.notify()
-                                    }),
-                                ));
+                                    },
+                                )
+                                .child(label),
+                            );
                         }
                     }
                     col = col.child(card);
@@ -214,8 +220,10 @@ impl Render for DisplayPage {
         if self.trial {
             for (label, keep) in [("Keep layout", true), ("Revert layout", false)] {
                 content = content.child(
-                    control(label.into(), label.into())
-                        .on_click(cx.listener(move |this, _, _, cx| this.apply(None, keep, cx))),
+                    crate::widgets::action(label, label, window, cx, move |this, cx| {
+                        this.apply(None, keep, cx)
+                    })
+                    .child(label),
                 );
             }
         }
@@ -264,20 +272,6 @@ fn error_view(msg: &str) -> gpui::Div {
         .rounded(px(10.))
         .text_color(rgb(theme::palette().secondary))
         .child(format!("Couldn't query displays: {msg}"))
-}
-
-fn control(id: String, label: String) -> gpui::Stateful<gpui::Div> {
-    use mundane_ui::ControlRole;
-    gpui::Role::Button
-        .control(gpui::SharedString::from(id), label.clone())
-        .tab_index(0)
-        .border_1()
-        .border_color(rgb(theme::palette().border))
-        .focus(|s| s.border_color(rgb(theme::palette().focus)))
-        .cursor_pointer()
-        .px_3()
-        .py_1()
-        .child(label)
 }
 
 fn monitor_card(m: &Monitor) -> gpui::Div {

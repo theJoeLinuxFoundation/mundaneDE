@@ -5,8 +5,8 @@
 use crate::pages::{Page, PageState};
 use crate::theme;
 use gpui::{
-    div, px, rgb, AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Window,
+    div, px, rgb, AnyElement, Context, IntoElement, ParentElement, Render, SharedString, Styled,
+    Window,
 };
 use mundane_settings_core::sound::{self as backend, AudioSink};
 use std::collections::HashSet;
@@ -70,14 +70,14 @@ impl SoundPage {
 }
 
 impl Render for SoundPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.state.should_refresh(Page::Sound.ttl()) {
             self.spawn_refresh(cx);
         }
         let body: AnyElement = match &self.state {
             PageState::Loaded { data, .. } if data.is_empty() => empty_view().into_any_element(),
             PageState::Loaded { data, .. } => {
-                sinks_view(data, &self.in_flight, cx).into_any_element()
+                sinks_view(window, data, &self.in_flight, cx).into_any_element()
             }
             PageState::Error(e) => error_view(e).into_any_element(),
             _ => skeleton().into_any_element(),
@@ -136,6 +136,7 @@ fn error_view(msg: &str) -> gpui::Div {
 }
 
 fn sinks_view(
+    window: &mut Window,
     sinks: &[AudioSink],
     in_flight: &HashSet<String>,
     cx: &mut Context<SoundPage>,
@@ -147,60 +148,59 @@ fn sinks_view(
             .child("Output device"),
     );
     for s in sinks {
-        col = col.child(sink_row(s, in_flight.contains(&s.name), cx));
+        col = col.child(sink_row(window, s, in_flight.contains(&s.name), cx));
     }
     col
 }
 
-fn sink_row(s: &AudioSink, in_flight: bool, cx: &mut Context<SoundPage>) -> AnyElement {
+fn sink_row(
+    window: &mut Window,
+    s: &AudioSink,
+    in_flight: bool,
+    cx: &mut Context<SoundPage>,
+) -> AnyElement {
     let name_owned = s.name.clone();
-    let mut row = div()
-        .id(SharedString::from(format!("sink:{}", s.name)))
-        .role(gpui::Role::Button)
-        .aria_label(s.description.clone())
-        .tab_index(0)
-        .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .px_4()
-        .py_3()
-        .bg(rgb(theme::palette().panel))
-        .rounded(px(10.))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(theme::palette().panel)))
-        .on_click(cx.listener(move |this, _e, _w, cx| this.make_default(name_owned.clone(), cx)))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .text_color(rgb(theme::palette().text))
-                        .child(s.description.clone()),
-                )
-                .child(
-                    div()
-                        .text_color(rgb(theme::palette().secondary))
-                        .child(format!(
-                            "{}{}",
-                            s.name,
-                            s.volume_percent
-                                .map(|v| format!("  •  {v}%"))
-                                .unwrap_or_default()
-                        )),
-                ),
-        )
-        .child(
-            div()
-                .text_color(if s.is_default {
-                    rgb(theme::palette().focus)
-                } else {
-                    rgb(theme::palette().secondary)
-                })
-                .child(if s.is_default { "Default" } else { "" }.to_string()),
-        );
+    let mut row = crate::widgets::action(
+        SharedString::from(format!("sink:{}", s.name)),
+        s.description.clone(),
+        window,
+        cx,
+        move |this, cx| this.make_default(name_owned.clone(), cx),
+    )
+    .flex()
+    .flex_row()
+    .items_center()
+    .justify_between()
+    .child(
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .text_color(rgb(theme::palette().text))
+                    .child(s.description.clone()),
+            )
+            .child(
+                div()
+                    .text_color(rgb(theme::palette().secondary))
+                    .child(format!(
+                        "{}{}",
+                        s.name,
+                        s.volume_percent
+                            .map(|v| format!("  •  {v}%"))
+                            .unwrap_or_default()
+                    )),
+            ),
+    )
+    .child(
+        div()
+            .text_color(if s.is_default {
+                rgb(theme::palette().focus)
+            } else {
+                rgb(theme::palette().secondary)
+            })
+            .child(if s.is_default { "Default" } else { "" }.to_string()),
+    );
     if in_flight {
         row = row.border_b_2().border_color(rgb(theme::palette().focus));
     }

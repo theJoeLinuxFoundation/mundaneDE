@@ -1,6 +1,11 @@
 //! Candidate GPUI shell. The compositor supplies both the Wayland connection and control socket.
+mod appearance;
+mod bluetooth;
 mod catalog;
 mod choices;
+mod devices;
+mod launcher;
+mod quick;
 mod tray;
 mod view;
 
@@ -23,6 +28,8 @@ struct Task {
     title: String,
     workspace: u8,
     minimized: bool,
+    #[serde(default)]
+    active: bool,
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -30,6 +37,8 @@ struct Message {
     open: Option<String>,
     #[serde(default)]
     dismiss_menu: bool,
+    #[serde(default)]
+    escape_menu: bool,
     #[serde(default)]
     logout: bool,
     locked: Option<bool>,
@@ -47,6 +56,9 @@ struct Message {
 }
 #[derive(Clone)]
 enum Service {
+    Pair(String, String),
+    PairAnswer(u64, String),
+    CancelPair,
     Launch(String),
     Pin(String),
     TrayActivate(String),
@@ -55,6 +67,9 @@ enum Service {
 }
 #[derive(Clone)]
 enum Event {
+    Devices(devices::Devices),
+    PairPrompt(Option<bluetooth::Prompt>),
+    DeviceMessage(String),
     Message(Message),
     Switcher(Message, Vec<String>),
     HideSwitcher,
@@ -65,6 +80,7 @@ enum Event {
     MenuRows(String, i32, Vec<tray::Entry>),
     Clock(String),
     ReduceMotion(bool),
+    TextScale(f32),
     Open(DisplayId, Page),
     OpenAt(DisplayId, Page, f32),
     Dismiss,
@@ -73,6 +89,10 @@ enum Event {
     Quit,
 }
 struct Shell {
+    devices: devices::Devices,
+    device_tx: Sender<devices::Request>,
+    pairing: Option<bluetooth::Prompt>,
+    device_message: String,
     events: Sender<Event>,
     service: Sender<Service>,
     socket: Arc<UnixDatagram>,
@@ -82,6 +102,7 @@ struct Shell {
     desk: u8,
     tray: Vec<tray::Item>,
     clock: String,
+    text_scale: f32,
     bars: HashMap<DisplayId, WindowHandle<Surface>>,
     menu: Option<(DisplayId, Page, WindowHandle<Surface>)>,
     rows: Vec<tray::Entry>,
@@ -92,9 +113,16 @@ struct Shell {
 }
 impl Global for Shell {}
 
-fn services(tx: Sender<Event>, rx: Receiver<Service>) -> anyhow::Result<()> {
+fn services(
+    tx: Sender<Event>,
+    rx: Receiver<Service>,
+    device_tx: Sender<devices::Request>,
+) -> anyhow::Result<()> {
     let context = glib::MainContext::new();
     context.with_thread_default(|| -> anyhow::Result<()> {
+        let _appearance = appearance::register()?;
+        let _devices = devices::watch(device_tx);
+        let agent = bluetooth::Agent::new(tx.clone()).ok();
         let tray = tray::Tray::new(tx.clone())?;
         let desktop = gio::Settings::new("org.gnome.desktop.interface");
         let motion = tx.clone();
@@ -104,6 +132,17 @@ fn services(tx: Sender<Event>, rx: Receiver<Service>) -> anyhow::Result<()> {
         report(&desktop);
         desktop.connect_changed(Some("enable-animations"), move |settings, _| {
             report(settings)
+        });
+        let scale_tx = tx.clone();
+        let text_scale = move |settings: &gio::Settings| {
+            let factor = settings.double("text-scaling-factor") as f32;
+            if factor.is_finite() && factor > 0. {
+                let _ = scale_tx.try_send(Event::TextScale(factor));
+            }
+        };
+        text_scale(&desktop);
+        desktop.connect_changed(Some("text-scaling-factor"), move |settings, _| {
+            text_scale(settings)
         });
         let pins = std::rc::Rc::new(Favourites::new());
         let publish = {
@@ -129,6 +168,25 @@ fn services(tx: Sender<Event>, rx: Receiver<Service>) -> anyhow::Result<()> {
         context.spawn_local(async move {
             while let Ok(action) = rx.recv().await {
                 match action {
+                    Service::Pair(path, name) => {
+                        let result = agent
+                            .as_ref()
+                            .ok_or_else(|| anyhow::anyhow!("System bus unavailable"))
+                            .and_then(|a| a.pair(path, name));
+                        if let Err(e) = result {
+                            let _ = tx.try_send(Event::DeviceMessage(e.to_string()));
+                        }
+                    }
+                    Service::CancelPair => {
+                        if let Some(a) = &agent {
+                            a.cancel();
+                        }
+                    }
+                    Service::PairAnswer(id, input) => {
+                        if let Some(a) = &agent {
+                            a.answer(id, input);
+                        }
+                    }
                     Service::Launch(id) => {
                         if let Some(app) = gio_unix::DesktopAppInfo::new(&id) {
                             if let Err(e) = app.launch(&[], None::<&gio::AppLaunchContext>) {
@@ -160,7 +218,14 @@ fn services(tx: Sender<Event>, rx: Receiver<Service>) -> anyhow::Result<()> {
 }
 
 fn close_menu(cx: &mut App) {
-    if let Some((_, _, window)) = cx.global_mut::<Shell>().menu.take() {
+    if let Some((_, page, window)) = cx.global_mut::<Shell>().menu.take() {
+        if page == Page::System {
+            let s = cx.global_mut::<Shell>();
+            let _ = s.device_tx.try_send(devices::Request::Visible(false));
+            let _ = s.service.try_send(Service::CancelPair);
+            s.pairing = None;
+            s.device_message.clear();
+        }
         let _ = window.update(cx, |_, w, _| w.remove_window());
         cx.refresh_windows();
     }
@@ -184,6 +249,12 @@ fn open_menu(display: DisplayId, page: Page, anchor: Option<f32>, cx: &mut App) 
     }
     match view::open(display, page.clone(), anchor, cx) {
         Ok(w) => {
+            if page == Page::System {
+                let _ = cx
+                    .global::<Shell>()
+                    .device_tx
+                    .try_send(devices::Request::Visible(true));
+            }
             cx.global_mut::<Shell>().menu = Some((display, page, w));
             cx.refresh_windows();
         }
@@ -219,10 +290,29 @@ fn target(m: &Message, cx: &App) -> Option<DisplayId> {
 }
 fn handle(event: Event, cx: &mut App) {
     match event {
+        Event::Devices(d) => cx.global_mut::<Shell>().devices = d,
+        Event::PairPrompt(p) => {
+            if !matches!(cx.global::<Shell>().menu, Some((_, Page::System, _))) {
+                return;
+            }
+            cx.global_mut::<Shell>().pairing = p;
+        }
+        Event::DeviceMessage(m) => cx.global_mut::<Shell>().device_message = m,
         Event::Message(mut m) => {
             if m.logout {
                 cx.quit();
                 return;
+            }
+            if m.escape_menu {
+                let window = cx.global::<Shell>().menu.as_ref().map(|(_, _, w)| *w);
+                if let Some(window) = window {
+                    if !window
+                        .update(cx, |v, w, cx| v.escape(w, cx))
+                        .unwrap_or(false)
+                    {
+                        close_menu(cx);
+                    }
+                }
             }
             if m.dismiss_menu || m.locked == Some(true) {
                 close_menu(cx);
@@ -230,6 +320,13 @@ fn handle(event: Event, cx: &mut App) {
             if let Some(d) = target(&m, cx) {
                 match m.open.as_deref() {
                     Some("start") => open_menu(d, Page::Start, None, cx),
+                    Some("taskbar") => {
+                        let shell = cx.global::<Shell>();
+                        if let Some(bar) = shell.bars.get(&d).copied() {
+                            let _ = shell.socket.send(b"focus-taskbar");
+                            let _ = bar.update(cx, |v, w, cx| v.focus_start(w, cx));
+                        }
+                    }
                     Some("system") => open_menu(d, Page::System, None, cx),
                     _ => {}
                 }
@@ -301,6 +398,18 @@ fn handle(event: Event, cx: &mut App) {
         }
         Event::Pins(v) => cx.global_mut::<Shell>().pins = v,
         Event::Catalog(v) => cx.global_mut::<Shell>().apps = v,
+        Event::TextScale(factor) => {
+            let s = cx.global_mut::<Shell>();
+            if s.text_scale == factor {
+                return;
+            }
+            s.text_scale = factor;
+            let bars = std::mem::take(&mut s.bars);
+            for (_, bar) in bars {
+                let _ = bar.update(cx, |_, w, _| w.remove_window());
+            }
+            display_bars(cx);
+        }
         Event::ReduceMotion(reduce) => {
             let cmd = if reduce {
                 "reduced-motion on"
@@ -401,15 +510,21 @@ fn main() -> anyhow::Result<()> {
         });
         mundane_ui::bind_text_keys(cx);
         cx.set_quit_mode(QuitMode::Explicit);
+        let device_tx = devices::start(tx.clone());
+        let watchers = device_tx.clone();
         let worker = tx.clone();
         std::thread::spawn(move || {
-            if let Err(e) = services(worker.clone(), actions) {
+            if let Err(e) = services(worker.clone(), actions, watchers) {
                 eprintln!("Shell services: {e:#}");
                 let _ = worker.try_send(Event::Quit);
             }
         });
         let _ = socket.send(b"watch-tasks");
         cx.set_global(Shell {
+            devices: Default::default(),
+            device_tx,
+            pairing: None,
+            device_message: String::new(),
             events: tx,
             service,
             socket,
@@ -419,6 +534,7 @@ fn main() -> anyhow::Result<()> {
             desk: 1,
             tray: vec![],
             clock: String::new(),
+            text_scale: 1.,
             bars: HashMap::new(),
             menu: None,
             rows: vec![],
@@ -456,8 +572,9 @@ fn main() -> anyhow::Result<()> {
                         cx.global::<Shell>().bars.get(&id).copied(),
                         cx.displays().into_iter().find(|d| d.id() == id),
                     ) {
+                        let height = gpui::px(44. * cx.global::<Shell>().text_scale);
                         let _ = w.update(cx, |_, win, _| {
-                            win.resize(gpui::size(d.bounds().size.width, gpui::px(44.)))
+                            win.resize(gpui::size(d.bounds().size.width, height))
                         });
                     }
                 }

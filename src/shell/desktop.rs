@@ -64,6 +64,7 @@ pub struct Desktop {
     pub showing_desktop: bool,
     pub channel: Option<UnixDatagram>,
     pub watch_tasks: bool,
+    pub active_task: Option<Window>,
     pub panel: Option<std::process::Child>,
     pub panel_source: Option<calloop::RegistrationToken>,
 }
@@ -98,6 +99,7 @@ impl Desktop {
             channel: None,
             panel: None,
             watch_tasks: false,
+            active_task: None,
             panel_source: None,
         }
     }
@@ -325,7 +327,14 @@ impl State {
                             "workspace":t.workspace,"minimized":self.minimized.contains(w)
                         });
                         if self.desktop.watch_tasks {
-                            task["title"] = t.handle.title().chars().take(512).collect::<String>().into();
+                            task["active"] = (self.desktop.active_task.as_ref() == Some(w)).into();
+                            task["title"] = t
+                                .handle
+                                .title()
+                                .chars()
+                                .take(512)
+                                .collect::<String>()
+                                .into();
                             task["app"] = t.handle.app_id().into();
                         }
                         task
@@ -334,6 +343,33 @@ impl State {
                 self.shell_message(
                     &serde_json::json!({"workspace":self.desktop.workspace,"tasks":tasks}),
                 );
+            }
+            "focus-taskbar" | "leave-taskbar"
+                if self.desktop.watch_tasks && self.desktop.menu_surface.is_none() =>
+            {
+                let bar = self
+                    .space
+                    .output_under(self.cursor_location)
+                    .next()
+                    .or_else(|| self.space.outputs().next())
+                    .and_then(|o| {
+                        layer_map_for_output(o)
+                            .layers()
+                            .find(|l| l.namespace() == "mundane-taskbar")
+                            .map(|l| l.wl_surface().clone())
+                    });
+                if let Some(bar) = bar {
+                    if op == "focus-taskbar" {
+                        self.layer_focus(&bar);
+                    } else if self
+                        .seat
+                        .get_keyboard()
+                        .and_then(|k| k.current_focus())
+                        .is_some_and(|f| f.surface == bar)
+                    {
+                        crate::focus::refocus(self);
+                    }
+                }
             }
             "lock" => self.begin_lock(),
             "logout" => self.request_logout(),

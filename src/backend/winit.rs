@@ -307,12 +307,20 @@ impl State {
                                 "key":[!press,mask,sym,xkbcommon::xkb::keysym_to_utf32(handle.modified_sym()),code]}));
                             if grab {return FilterResult::Intercept(());}
                         }
+                        if press && mods.ctrl && mods.alt && sym == keysyms::KEY_Tab
+                            && state.desktop.watch_tasks && state.desktop.menu_surface.is_none()
+                            && !state.seat.get_keyboard().is_some_and(|k| k.is_grabbed())
+                        {
+                            state.shell_message(&serde_json::json!({"open":"taskbar","pointer":[state.cursor_location.x,state.cursor_location.y]}));
+                            state.desktop.switcher_keys.insert(event.key_code().raw());
+                            return FilterResult::Intercept(());
+                        }
                         if state.switcher_key(sym, mods, press) {
                             state.desktop.switcher_keys.insert(event.key_code().raw());
                             return FilterResult::Intercept(());
                         }
                         if press && state.desktop.watch_tasks && state.desktop.menu_surface.is_some() && sym == keysyms::KEY_Escape {
-                            state.shell_message(&serde_json::json!({"dismiss_menu": true}));
+                            state.shell_message(&serde_json::json!({"escape_menu": true}));
                             state.desktop.switcher_keys.insert(event.key_code().raw());
                             return FilterResult::Intercept(());
                         }
@@ -484,7 +492,7 @@ impl State {
                 });
                 if !self.desktop.lock.active && button_state == ButtonState::Pressed {
                     if let Some((_, _, l)) = &layer {
-                        if l.can_receive_keyboard_focus() {
+                        if l.can_receive_keyboard_focus() && !(self.desktop.watch_tasks && l.namespace() == "mundane-taskbar") {
                             self.layer_focus(l.wl_surface());
                         }
                     }

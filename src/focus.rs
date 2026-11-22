@@ -111,6 +111,10 @@ pub fn set_keyboard_focus(state: &mut State, window: Option<&Window>) {
             }
         }
     }
+    if state.desktop.active_task.as_ref() != window {
+        state.desktop.active_task = window.cloned();
+        state.publish_tasks();
+    }
     let focus = window.and_then(|w| {
         Some(KeyboardFocus {
             surface: w.wl_surface()?.into_owned(),

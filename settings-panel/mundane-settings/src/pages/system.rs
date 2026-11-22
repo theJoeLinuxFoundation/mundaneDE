@@ -2,10 +2,7 @@
 
 use crate::pages::{Page, PageState};
 use crate::theme;
-use gpui::{
-    div, px, rgb, Context, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window,
-};
+use gpui::{div, px, rgb, Context, IntoElement, ParentElement, Render, Styled, Window};
 use mundane_settings_core::{
     os_release::{self, OsRelease},
     system::{self as sys, LogLine},
@@ -90,7 +87,7 @@ impl SystemPage {
 }
 
 impl Render for SystemPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.state.should_refresh(Page::System.ttl()) {
             self.spawn_refresh(cx);
         }
@@ -102,25 +99,10 @@ impl Render for SystemPage {
         } else {
             "Check for Updates"
         };
-        let upgrade_button = div()
-            .id("check-updates")
-            .role(gpui::Role::Button)
-            .aria_label(label)
-            .tab_index(0)
-            .focus(|s| s.border_2().border_color(rgb(theme::palette().focus)))
-            .px_4()
-            .py_2()
-            .bg(rgb(if upgrading {
-                theme::palette().panel
-            } else {
-                theme::palette().focus
-            }))
-            .text_color(rgb(theme::palette().surface))
-            .rounded(px(8.))
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _event, _window, cx| {
+        let upgrade_button =
+            crate::widgets::action("check-updates", label, window, cx, |this, cx| {
                 this.start_upgrade(cx);
-            }))
+            })
             .child(if upgrading { "Updating…" } else { label }.to_string());
 
         let body = match &self.state {

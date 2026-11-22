@@ -34,7 +34,7 @@ impl Page {
             Self::Bar => "Taskbar",
             Self::Start => "Start menu",
             Self::Workspaces => "Workspaces",
-            Self::System => "System menu",
+            Self::System => "Quick Settings",
             Self::Group(id) => s
                 .apps
                 .iter()
@@ -53,14 +53,42 @@ impl Page {
     }
 }
 pub struct Surface {
+    pub(super) pin_menu: Option<crate::launcher::PinMenu>,
+    pub(super) hold: Option<Task<()>>,
     page: Page,
+    quick: Option<Entity<crate::quick::Quick>>,
     display: DisplayId,
-    field: Option<Entity<TextField>>,
-    focus: HashMap<String, FocusHandle>,
+    pub(super) field: Option<Entity<TextField>>,
+    pub(super) focus: HashMap<String, FocusHandle>,
+    scroll: ScrollHandle,
     category: String,
     choices: Option<Entity<ChoiceMenu>>,
     options: Vec<MenuChoice>,
     initial: bool,
+}
+impl Surface {
+    pub fn focus_start(&self, w: &mut Window, cx: &mut App) {
+        if let Some(f) = self.focus.get("start") {
+            f.focus(w, cx);
+        }
+    }
+    pub fn escape(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        if let Some(pin) = &self.pin_menu {
+            pin.choices.update(cx, |m, cx| m.dismiss(w, cx));
+            return true;
+        }
+        if self.page == Page::Start {
+            if let Some(m) = &self.choices {
+                if m.read(cx).is_open() {
+                    m.update(cx, |m, cx| m.dismiss(w, cx));
+                    return true;
+                }
+            }
+        }
+        self.quick
+            .as_ref()
+            .is_some_and(|q| q.update(cx, |v, cx| v.escape(w, cx)))
+    }
 }
 pub fn open(
     display: DisplayId,
@@ -74,32 +102,45 @@ pub fn open(
         .find(|d| d.id() == display)
         .ok_or_else(|| anyhow::anyhow!("Output removed"))?
         .bounds();
+    let scale = cx.global::<Shell>().text_scale;
     let bar = page == Page::Bar;
     let preview = page == Page::Switcher;
     let right = matches!(page, Page::Tray(..) | Page::System | Page::Workspaces);
     let width = if bar {
         f32::from(bounds.size.width)
     } else {
-        (f32::from(bounds.size.width) - 16.).clamp(1., if preview { 360. } else { 410. })
+        (f32::from(bounds.size.width) - 16.).clamp(
+            1.,
+            scale
+                * if preview {
+                    360.
+                } else if page == Page::Start {
+                    520.
+                } else {
+                    410.
+                },
+        )
     };
     let left = anchor_x.map(|x| {
         let x = if right { x - width + 20. } else { x - 20. };
         x.clamp(8., (f32::from(bounds.size.width) - width - 8.).max(8.))
     });
     let height = if bar {
-        44.
+        44. * scale
     } else {
-        (f32::from(bounds.size.height) - 60.).clamp(
+        (f32::from(bounds.size.height) - 44. * scale - 16.).clamp(
             1.,
-            match page {
-                Page::System => (145. + 36. * cx.global::<Shell>().tray.len() as f32).min(340.),
-                Page::Switcher => 85. + (cx.global::<Shell>().switcher.len() as f32) * 27.,
-                Page::Group(_) | Page::Tray(..) => 232.,
-                Page::Workspaces => {
-                    (208. + 40. * cx.global::<Shell>().tasks.len() as f32).min(430.)
-                }
-                _ => 430.,
-            },
+            scale
+                * match page {
+                    Page::System => 405.,
+                    Page::Switcher => 85. + (cx.global::<Shell>().switcher.len() as f32) * 27.,
+                    Page::Group(_) | Page::Tray(..) => 232.,
+                    Page::Workspaces => {
+                        (208. + 40. * cx.global::<Shell>().tasks.len() as f32).min(430.)
+                    }
+                    Page::Start => 550.,
+                    _ => 430.,
+                },
         )
     };
     let title = page.title(cx.global::<Shell>());
@@ -114,7 +155,9 @@ pub fn open(
             kind: WindowKind::LayerShell(LayerShellOptions {
                 namespace: page.namespace().into(),
                 layer: if bar { Layer::Top } else { Layer::Overlay },
-                keyboard_interactivity: if bar || preview {
+                keyboard_interactivity: if bar {
+                    KeyboardInteractivity::OnDemand
+                } else if preview {
                     KeyboardInteractivity::None
                 } else {
                     KeyboardInteractivity::Exclusive
@@ -131,7 +174,7 @@ pub fn open(
                             Anchor::LEFT
                         }
                 },
-                exclusive_zone: Some(px(if bar { 44. } else { 0. })),
+                exclusive_zone: Some(px(if bar { height } else { 0. })),
                 margin: if bar || preview {
                     None
                 } else {
@@ -162,65 +205,63 @@ pub fn open(
                     cx.observe(f, |_, _, cx| cx.notify()).detach();
                 }
                 let s = cx.global::<Shell>();
-                let has_pins = s.pins.iter().any(|id| s.apps.iter().any(|a| a.id == *id));
+
                 let options = page.choices(s);
-                let choices = matches!(
-                    page,
-                    Page::Start | Page::Tray(..) | Page::Group(_) | Page::System
-                )
-                .then(|| {
-                    let menu = cx.new(|cx| {
-                        ChoiceMenu::new(
-                            if page == Page::Start {
-                                "Application categories"
-                            } else {
-                                &title
-                            },
-                            options.clone(),
-                            page == Page::Start,
-                            cx,
-                        )
-                    });
-                    cx.subscribe_in(&menu, w, |view: &mut Surface, _, evt, w, cx| {
-                        let shell = cx.global::<Shell>();
-                        match evt {
-                            MenuEvent::Closed if view.page != Page::Start => {
-                                let _ = shell.events.try_send(Event::Dismiss);
-                            }
-                            MenuEvent::Selected(k) if view.page == Page::Start => {
-                                view.category = k.to_string();
-                                if let Some(field) = &view.field {
-                                    field.read(cx).focus_handle(cx).focus(w, cx);
+                let choices =
+                    matches!(page, Page::Start | Page::Tray(..) | Page::Group(_)).then(|| {
+                        let menu = cx.new(|cx| {
+                            ChoiceMenu::new(
+                                if page == Page::Start {
+                                    "Application categories"
+                                } else {
+                                    &title
+                                },
+                                options.clone(),
+                                page == Page::Start,
+                                cx,
+                            )
+                        });
+                        cx.subscribe_in(&menu, w, |view: &mut Surface, _, evt, w, cx| {
+                            let shell = cx.global::<Shell>();
+                            match evt {
+                                MenuEvent::Closed if view.page != Page::Start => {
+                                    let _ = shell.events.try_send(Event::Dismiss);
                                 }
-                            }
-                            MenuEvent::Selected(k) => {
-                                if let Some(event) = view.page.selection(k, view.display, shell) {
-                                    let _ = shell.events.try_send(event);
+                                MenuEvent::Selected(k) if view.page == Page::Start => {
+                                    view.category = k.to_string();
+                                    if let Some(field) = &view.field {
+                                        field.read(cx).focus_handle(cx).focus(w, cx);
+                                    }
                                 }
+                                MenuEvent::Selected(k) => {
+                                    if let Some(event) = view.page.selection(k, view.display, shell)
+                                    {
+                                        let _ = shell.events.try_send(event);
+                                    }
+                                }
+                                _ => {}
                             }
-                            _ => {}
+                            cx.notify();
+                        })
+                        .detach();
+                        if page != Page::Start {
+                            menu.update(cx, |m, cx| m.show(w, cx));
                         }
-                        cx.notify();
-                    })
-                    .detach();
-                    if page != Page::Start {
-                        menu.update(cx, |m, cx| m.show(w, cx));
-                    }
-                    menu
-                });
+                        menu
+                    });
                 Surface {
+                    quick: (page == Page::System)
+                        .then(|| cx.new(|cx| crate::quick::Quick::new(display, cx))),
                     page,
                     display,
                     field,
-                    category: if has_pins {
-                        "Favourites"
-                    } else {
-                        "All applications"
-                    }
-                    .into(),
+                    category: "All applications".into(),
+                    pin_menu: None,
+                    hold: None,
                     choices,
                     options,
                     focus: HashMap::new(),
+                    scroll: ScrollHandle::new(),
                     initial: true,
                 }
             })
@@ -230,7 +271,34 @@ pub fn open(
 
 // GPUI's default accessible Click synthesizes pointer input at the bounds centre.
 // A scrolled-off launcher row still needs to activate its own action.
-fn shell_button(
+/// Keep keyboard focus inside its scrollport. Prepaint already has the
+/// child's translated bounds; refresh on the next frame to present the offset.
+pub(super) fn reveal_focus(
+    item: Bounds<Pixels>,
+    focus: &FocusHandle,
+    scroll: &ScrollHandle,
+    w: &mut Window,
+) {
+    if !focus.is_focused(w) || !w.last_input_was_keyboard() {
+        return;
+    }
+    let area = scroll.bounds();
+    let delta = if item.top() < area.top() {
+        area.top() - item.top()
+    } else if item.bottom() > area.bottom() {
+        area.bottom() - item.bottom()
+    } else {
+        return;
+    };
+    let old = scroll.offset();
+    let y = (old.y + delta).clamp(-scroll.max_offset().y, px(0.));
+    if y != old.y {
+        scroll.set_offset(point(old.x, y));
+        w.on_next_frame(|w, _| w.refresh());
+    }
+}
+
+pub(super) fn shell_button(
     label: String,
     focus: &FocusHandle,
     theme: Theme,
@@ -296,10 +364,21 @@ impl Controls<'_> {
             activate.clone(),
         )
         .on_a11y_action(AccessibleAction::Click, move |_, w, cx| activate(w, cx));
-        mundane_ui::with_tooltip(button, name.to_owned()).flex_shrink_0()
+        let button = mundane_ui::with_tooltip(button, name.to_owned());
+        if state.running {
+            button
+                .aria_description(if state.active {
+                    "Running, active window"
+                } else {
+                    "Running"
+                })
+                .flex_shrink_0()
+        } else {
+            button.flex_shrink_0()
+        }
     }
 }
-fn contents(icon: Option<PathBuf>, name: &str) -> AnyElement {
+pub(super) fn contents(icon: Option<PathBuf>, name: &str) -> AnyElement {
     if let Some(path) = icon {
         img(path).size(tokens::icon::LARGE).into_any_element()
     } else {
@@ -308,6 +387,7 @@ fn contents(icon: Option<PathBuf>, name: &str) -> AnyElement {
 }
 impl Render for Surface {
     fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        tokens::set_text_scale(w, cx.global::<Shell>().text_scale);
         if let Some(menu) = &self.choices {
             let rows = self.page.choices(cx.global::<Shell>());
             let changed =
@@ -372,7 +452,7 @@ impl Render for Surface {
                     .overflow_x_scroll()
                     .flex()
                     .items_center()
-                    .gap_1();
+                    .gap(tokens::space::SM);
                 for id in &s.pins {
                     let Some(a) = s.apps.iter().find(|a| a.id == *id) else {
                         continue;
@@ -390,11 +470,12 @@ impl Render for Surface {
                         event,
                         PanelState {
                             running: !windows.is_empty(),
+                            active: windows.iter().any(|t| t.active),
                             ..Default::default()
                         },
                         cx,
                     );
-                    tasks = tasks.child(b);
+                    tasks = tasks.child(b.px(tokens::space::MD));
                 }
                 for t in s.tasks.iter().filter(|t| {
                     t.workspace == s.desk
@@ -409,10 +490,17 @@ impl Render for Surface {
                             .panel(
                                 &t.id,
                                 name,
-                                name.clone(),
+                                contents(
+                                    s.apps
+                                        .iter()
+                                        .find(|a| a.owns(&t.app))
+                                        .and_then(|a| a.icon.clone()),
+                                    name,
+                                ),
                                 Event::Command(format!("activate {}", t.id)),
                                 PanelState {
                                     running: true,
+                                    active: t.active,
                                     ..Default::default()
                                 },
                                 cx,
@@ -504,12 +592,14 @@ impl Render for Surface {
                     .p_3()
                     .border_1()
                     .border_color(rgb(theme.border))
-                    .child(
-                        mundane_ui::text_label("title", title.clone())
-                            .text_size(tokens::text::TITLE)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(title),
-                    );
+                    .when(!matches!(page, Page::Start | Page::System), |el| {
+                        el.child(
+                            mundane_ui::text_label("title", title.clone())
+                                .text_size(tokens::text::TITLE)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(title),
+                        )
+                    });
                 if let Some(f) = &self.field {
                     root = root.child(f.clone());
                 }
@@ -520,6 +610,7 @@ impl Render for Surface {
                     .unwrap_or_default();
                 let mut list = div()
                     .id("choices")
+                    .track_scroll(&self.scroll)
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
@@ -530,100 +621,23 @@ impl Render for Surface {
                     Page::Start => {
                         let menu = self.choices.as_ref().unwrap();
                         let browsing = menu.read(cx).is_open();
-                        if query.is_empty() {
-                            root = root.child(
-                                mundane_ui::menu_trigger("Browse categories", menu, theme, cx)
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .child(mundane_ui::badge(
-                                        "current-category",
-                                        "Current category",
-                                        self.category.clone(),
-                                        theme,
-                                    ))
-                                    .aria_description(self.category.clone()),
-                            );
-                        }
                         if browsing {
-                            list = list.child(menu.clone());
+                            list = list
+                                .child(mundane_ui::menu_trigger("Categories", menu, theme, cx))
+                                .child(menu.clone());
                         } else {
-                            let mut apps: Vec<_> = s
-                                .apps
-                                .iter()
-                                .filter(|a| {
-                                    if !query.trim().is_empty() {
-                                        a.matches(&query)
-                                    } else if self.category == "Favourites" {
-                                        s.pins.contains(&a.id)
-                                    } else {
-                                        self.category == "All applications"
-                                            || a.categories.contains(&self.category)
-                                    }
-                                })
-                                .collect();
-                            if !query.trim().is_empty() {
-                                let prefix = query.trim().to_lowercase();
-                                apps.sort_by_key(|a| !a.name.to_lowercase().starts_with(&prefix));
-                            } else if self.category == "Favourites" {
-                                apps.sort_by_key(|a| s.pins.iter().position(|id| id == &a.id));
-                            }
-                            if apps.is_empty() {
-                                list = list.child("No matching applications");
-                            }
-                            for app in apps {
-                                let action = Event::Service(Service::Launch(app.id.clone()));
-                                first.get_or_insert(action.clone());
-                                let name = &app.name;
-                                let pinned = s.pins.contains(&app.id);
-                                let pin =
-                                    format!("{} {name}", if pinned { "Unpin" } else { "Pin" });
-                                let mut launch =
-                                    controls.button(&app.id, name, action, cx).flex_1();
-                                if let Some(icon) = &app.icon {
-                                    launch = launch.child(img(icon.clone()).size(px(22.)));
-                                }
-                                list = list.child(
-                                    div()
-                                        .flex()
-                                        .gap_1()
-                                        .child(launch.child(name.clone()))
-                                        .child({
-                                            let focus = controls
-                                                .focus
-                                                .entry(format!("pin:{}", app.id))
-                                                .or_insert_with(|| {
-                                                    cx.focus_handle().tab_stop(true)
-                                                });
-                                            let id = app.id.clone();
-                                            let tx = tx.clone();
-                                            let toggle =
-                                                move |_: bool, _: &mut Window, _: &mut App| {
-                                                    let _ = tx.try_send(Event::Service(
-                                                        Service::Pin(id.clone()),
-                                                    ));
-                                                };
-                                            mundane_ui::toggle(
-                                                "Pin",
-                                                focus,
-                                                pinned,
-                                                true,
-                                                theme,
-                                                toggle.clone(),
-                                            )
-                                            .flex()
-                                            .flex_row()
-                                            .gap(tokens::space::XS)
-                                            .items_center()
-                                            .whitespace_nowrap()
-                                            .aria_label(pin)
-                                            .on_a11y_action(
-                                                AccessibleAction::Click,
-                                                move |_, w, cx| toggle(!pinned, w, cx),
-                                            )
-                                        }),
-                                );
-                            }
+                            let (body, action) = crate::launcher::applications(
+                                s,
+                                &self.category,
+                                &query,
+                                menu,
+                                controls.focus,
+                                w,
+                                &self.scroll,
+                                cx,
+                            );
+                            list = list.child(body);
+                            first = action;
                         }
                     }
                     Page::Workspaces => {
@@ -708,7 +722,7 @@ impl Render for Surface {
                             list = list.child(row);
                         }
                     }
-                    Page::Tray(..) | Page::Group(_) | Page::System => {
+                    Page::Tray(..) | Page::Group(_) => {
                         list = list.child(self.choices.as_ref().unwrap().clone())
                     }
                     Page::Switcher => {
@@ -731,6 +745,9 @@ impl Render for Surface {
                         list = list.child(
                             mundane_ui::text_label("selection", caption.clone()).child(caption),
                         );
+                    }
+                    Page::System => {
+                        list = list.child(self.quick.as_ref().unwrap().clone());
                     }
                     Page::Bar => unreachable!(),
                 }
@@ -760,13 +777,20 @@ impl Render for Surface {
             }
             self.initial = self.field.is_none() && controls.focus.is_empty();
         }
+        if let Some(menu) = &self.pin_menu {
+            root = root.relative().child(menu.overlay(cx));
+        }
         let field = self.field.clone();
         let dismiss = tx.clone();
         let menu_page = self.page != Page::Bar && self.page != Page::Switcher;
         let root = root.on_key_down(move |ev, w, cx| {
             match ev.keystroke.key.as_str() {
                 "escape" => {
-                    let _ = tx.try_send(Event::Dismiss);
+                    let _ = tx.try_send(if menu_page {
+                        Event::Dismiss
+                    } else {
+                        Event::Command("leave-taskbar".into())
+                    });
                 }
                 "down" => w.focus_next(cx),
                 "up" => w.focus_prev(cx),
@@ -798,7 +822,11 @@ impl Render for Surface {
             .size_full()
             .into_any_element()
         } else {
-            root.into_any_element()
+            root.id("surface")
+                .when(self.page == Page::Bar, |e| {
+                    e.role(Role::Toolbar).aria_label("Taskbar")
+                })
+                .into_any_element()
         }
     }
 }

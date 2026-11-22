@@ -18,8 +18,21 @@ def walk(node, depth=0):
         return
 
 
-verb, *names = sys.argv[1:]
-for node in walk(Atspi.get_desktop(0)):
+args = sys.argv[1:]
+root = Atspi.get_desktop(0)
+if args[:1] == ["--frame"]:
+    frame = args[1]
+    root = next(
+        (
+            n
+            for n in walk(root)
+            if n.get_role_name() == "frame" and n.get_name() == frame
+        ),
+        None,
+    )
+    args = args[2:]
+verb, *names = args
+for node in walk(root):
     try:
         name = node.get_name()
         role = node.get_role_name()
@@ -42,12 +55,21 @@ for node in walk(Atspi.get_desktop(0)):
         frame = top.get_extents(Atspi.CoordType.WINDOW)
         print(rect.x + rect.width // 2, frame.height - rect.y - rect.height // 2)
         sys.exit(0)
+    elif (
+        name == " ".join(names)
+        and verb == "description"
+        and role in ("button", "toggle button")
+    ):
+        print(node.get_description())
+        sys.exit(0)
     elif name == " ".join(names) and verb == "bounds" and role == "button":
         rect = node.get_extents(Atspi.CoordType.WINDOW)
         print(rect.x, rect.y, rect.width, rect.height)
         sys.exit(0)
-    elif name == " ".join(names) and verb == "size" and role == "frame":
+    elif name == " ".join(names) and verb == "size" and role in ("frame", "panel"):
         rect = node.get_extents(Atspi.CoordType.WINDOW)
+        if rect.width <= 0 or rect.height <= 0:
+            continue  # GPUI layer frames lack platform extents. The named panel has its bounds.
         print(rect.width, rect.height)
         sys.exit(0)
     elif (

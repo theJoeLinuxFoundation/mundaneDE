@@ -44,6 +44,31 @@ def qualify(run, output, baseline, gpui=False):
             "python3 -W ignore /tmp/parity-widgets.py " + shlex.join([verb, name])
         )
 
+    def launcher(verb, name):
+        return joe(
+            "python3 -W ignore /tmp/parity-widgets.py "
+            + shlex.join(["--frame", "Start menu", verb, name])
+        )
+
+    def pin_control(name, pinned):
+        if gpui:
+            return "button " + name in launcher("list", "").splitlines() and launcher(
+                "description", name
+            ) == ("Pinned application" if pinned else "Application")
+        return has("button " + ("Unpin " if pinned else "Pin ") + name)
+
+    def change_pin(verb, name):
+        if gpui:
+            launcher("focus", name)
+            key("menu")
+            wait(
+                "application context menu",
+                lambda: has("menu item " + verb + " " + name),
+            )
+            key("ret")
+        else:
+            widget("click", verb + " " + name)
+
     def has(row):
         rows = widget("list").splitlines()
         if gpui and row.startswith(("button Pin ", "button Unpin ")):
@@ -157,6 +182,10 @@ def qualify(run, output, baseline, gpui=False):
     widget("click", "Calculator")
     wait("running pin focuses same calculator", lambda: active("Calculator"))
     assert widget("list").splitlines().count("frame Calculator") == 1
+    if gpui:
+        assert widget("description", "Calculator") == "Running, active window"
+        assert widget("description", "Text Editor") == "Running"
+        shot("running")
     joe("printf 'Tuesday\n' > /tmp/Travel.txt; ")
     launch_editor("Travel.txt")
     wait("second document", lambda: (name := editor("Travel")) and active(name))
@@ -190,6 +219,8 @@ def qualify(run, output, baseline, gpui=False):
     # A minimized calculator remains reachable. An empty desk has no candidates.
     widget("click", "Minimize")
     wait("calculator minimized", lambda: not active("Calculator"))
+    if gpui:
+        assert widget("description", "Calculator") == "Running"
     widget("click", "Calculator")
     wait("pin restores minimized calculator", lambda: active("Calculator"))
     key("meta_l", "2")
@@ -202,19 +233,22 @@ def qualify(run, output, baseline, gpui=False):
         held("alt", False)
     key("meta_l", "1")
     key("meta_l", "spc")
-    widget("click", "Unpin Calculator")
-    wait("removed from favourites", lambda: not has("button Unpin Calculator"))
+    change_pin("Unpin", "Calculator")
+    wait("removed from favourites", lambda: not pin_control("Calculator", True))
     key("esc")
     # Pin by a desktop-entry keyword that does not occur in the display name.
     key("meta_l", "spc")
     for letter in "arithmetic":
         key(letter)
-    wait("keyword finds Calculator", lambda: has("button Pin Calculator"))
-    widget("click", "Pin Calculator")
-    wait("pin saved", lambda: has("button Unpin Calculator"))
+    wait("keyword finds Calculator", lambda: pin_control("Calculator", False))
+    change_pin("Pin", "Calculator")
+    wait("pin saved", lambda: pin_control("Calculator", True))
     key("esc")
     key("meta_l", "spc")
-    key("tab")
+    if gpui:
+        launcher("focus", "Categories")
+    else:
+        key("tab")
     key("spc")
     if gpui:
         wait("shared searchable categories", lambda: has("entry Filter options"))
@@ -227,15 +261,15 @@ def qualify(run, output, baseline, gpui=False):
     wait(
         "Utilities category",
         lambda: (
-            has("button Unpin Calculator")
-            and has("button Pin Disks")
-            and not has("button Unpin Web Browser")
+            pin_control("Calculator", True)
+            and pin_control("Disks", False)
+            and not pin_control("Web Browser", True)
         ),
     )
     key("esc")
     key("meta_l", "spc")
-    widget("click", "Unpin Files")
-    wait("Files removed from favourites", lambda: not has("button Unpin Files"))
+    change_pin("Unpin", "Files")
+    wait("Files removed from favourites", lambda: not pin_control("Files", True))
     key("esc")
     wait("Files pin removed from the bar", lambda: not has("button Files"))
     panel_pid = (
@@ -282,16 +316,16 @@ def qualify(run, output, baseline, gpui=False):
         )
         key("esc")
     key("meta_l", "spc")
-    wait("persisted pin in favourites", lambda: has("button Unpin Calculator"))
-    assert not has("button Unpin Files")
+    wait("persisted pin in favourites", lambda: pin_control("Calculator", True))
+    assert not pin_control("Files", True)
     if gpui:
         # The removed pin must be appended, and the *presented* bar must
         # follow that order even though the inherited list puts Files second.
         for letter in "files":
             key(letter)
-        wait("Files search result", lambda: has("button Pin Files"))
-        widget("click", "Pin Files")
-        wait("Files pinned again", lambda: has("button Unpin Files"))
+        wait("Files search result", lambda: pin_control("Files", False))
+        change_pin("Pin", "Files")
+        wait("Files pinned again", lambda: pin_control("Files", True))
     key("esc")
     if gpui:
         expected = [

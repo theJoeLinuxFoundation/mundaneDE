@@ -157,7 +157,7 @@ def qualify(run, gpui_screenshots=None):
             ("Start", "frame Start menu"),
             (
                 "System menu",
-                "frame System menu" if gpui_screenshots else "frame Quick Settings",
+                "frame Quick Settings",
             ),
             ("Workspaces, current 1", "frame Workspaces"),
             ("Review tray", tray_action),
@@ -207,8 +207,22 @@ def qualify(run, gpui_screenshots=None):
         )
         if gpui_screenshots:
             key("meta_l", "s")
-            wait("keyboard route to tray", lambda: "menu item Review tray" in rows())
-            key("home")
+            wait("keyboard route to tray", lambda: "frame Quick Settings" in rows())
+            for _ in range(16):
+                if (
+                    "focused"
+                    in joe(
+                        "python3 -W ignore /tmp/menu-test/shell_widgets.py --frame 'Quick Settings' state 'Review tray'"
+                    ).split()
+                ):
+                    break
+                key("tab")
+            assert (
+                "focused"
+                in joe(
+                    "python3 -W ignore /tmp/menu-test/shell_widgets.py --frame 'Quick Settings' state 'Review tray'"
+                ).split()
+            )
             key("ret")
             wait("tray menu from keyboard", lambda: tray_action in rows())
             key("esc")

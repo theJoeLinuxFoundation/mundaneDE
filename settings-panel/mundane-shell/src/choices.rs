@@ -27,15 +27,6 @@ impl Page {
                     MenuChoice::new(t.id.clone(), format!("{} · Desk {}", t.title, t.workspace))
                 })
                 .collect(),
-            Page::System => shell
-                .tray
-                .iter()
-                .map(|item| MenuChoice::new(item.key.clone(), item.title.clone()))
-                .chain([
-                    MenuChoice::new("lock", "Lock"),
-                    MenuChoice::new("logout", "Log Out"),
-                ])
-                .collect(),
             Page::Tray(_, stack) => {
                 let back = (stack.len() > 1).then(|| MenuChoice::new("back", "Back"));
                 back.into_iter()
@@ -61,15 +52,6 @@ impl Page {
     pub(crate) fn selection(&self, key: &str, display: DisplayId, shell: &Shell) -> Option<Event> {
         match self {
             Page::Group(_) => Some(Event::Command(format!("activate {key}"))),
-            Page::System if matches!(key, "lock" | "logout") => Some(Event::Command(key.into())),
-            Page::System => {
-                let item = shell.tray.iter().find(|i| i.key == key)?;
-                Some(if item.menu.is_empty() {
-                    Event::Service(Service::TrayActivate(key.into()))
-                } else {
-                    Event::Open(display, Page::Tray(key.into(), vec![0]))
-                })
-            }
             Page::Tray(id, path) if key == "back" && path.len() > 1 => Some(Event::Open(
                 display,
                 Page::Tray(id.clone(), path[..path.len() - 1].to_vec()),

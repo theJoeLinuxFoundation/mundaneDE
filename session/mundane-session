@@ -231,7 +231,7 @@ def session():
                         "wait",
                         "--session",
                         "--timeout=15",
-                        "org.kde.StatusNotifierWatcher" if candidate else "org.freedesktop.impl.portal.desktop.mundane",
+                        "org.freedesktop.impl.portal.desktop.mundane",
                     ],
                     check=True,
                 )
