@@ -56,6 +56,13 @@ exercise this configuration.
 For direct rendering on a free seat, omit `--winit`. The repository includes
 an [automated two-output DRM/KMS test in QEMU](tests/qemu/README.md#automated-output-test).
 
+## GDM session
+
+The optional GDM entry runs the compositor on the logged-in user's logind seat.
+Super+Shift+Q returns to GDM. The session and its packaging dependencies are
+qualified on the beta1 x86 joe Linux image in a headless KVM guest.
+[Packaging handoff](docs/plan.md#4-enter-and-leave-a-real-session) · [GDM test](tests/qemu/session/README.md)
+
 ## Configuration
 
 The compositor reads `$XDG_CONFIG_HOME/mundane/config.toml`, falling back to

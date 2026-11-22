@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""GDM session leader. Keep the compositor and polkit agent in the PAM session."""
+
+import os
+from pathlib import Path
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+from gi.repository import Gio, GLib
+
+KEYS = (
+    "WAYLAND_DISPLAY",
+    "XDG_CURRENT_DESKTOP",
+    "XDG_SESSION_DESKTOP",
+    "XDG_SESSION_TYPE",
+    "XDG_SESSION_ID",
+    "MUNDANE_IBUS_PANEL",
+    "DISPLAY",
+    "XAUTHORITY",
+)
+
+
+def publish(env):
+    # A classic dbus-daemon can replace a value with an empty string but
+    # cannot remove it. Remove absent variables from systemd after updating both.
+    subprocess.run(
+        [
+            "dbus-update-activation-environment",
+            "--systemd",
+            *(f"{key}={env.get(key, '')}" for key in KEYS),
+        ],
+        check=True,
+    )
+    absent = [key for key in KEYS if key not in env]
+    if absent:
+        subprocess.run(["systemctl", "--user", "unset-environment", *absent], check=True)
+
+
+def stop(process):
+    if process and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+def run_until_logout(compositor, agent, channel):
+    loop = GLib.MainLoop()
+    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    manager = "org.freedesktop.login1.Manager"
+    path = "/org/freedesktop/login1"
+    service = "org.freedesktop.login1"
+
+    def inhibit():
+        reply, fds = bus.call_with_unix_fd_list_sync(
+            service,
+            path,
+            manager,
+            "Inhibit",
+            GLib.Variant("(ssss)", ("sleep", "mundaneDE", "Release display buffers", "delay")),
+            GLib.VariantType.new("(h)"),
+            Gio.DBusCallFlags.NONE,
+            5000,
+            None,
+            None,
+        )
+        return fds.get(reply.unpack()[0])
+
+    inhibitor = inhibit()
+
+    def sleep_changed(_bus, _sender, _path, _interface, _signal, args):
+        nonlocal inhibitor
+        if args.unpack()[0]:
+            channel.sendall(b"S")
+        else:
+            channel.sendall(b"W")
+            if inhibitor is None:
+                inhibitor = inhibit()
+
+    def reply(_fd, condition):
+        nonlocal inhibitor
+        if condition & GLib.IO_HUP or channel.recv(1) != b"S":
+            loop.quit()
+            return False
+        if inhibitor is not None:
+            os.close(inhibitor)
+            inhibitor = None
+        return True
+
+    subscription = bus.signal_subscribe(
+        service, manager, "PrepareForSleep", path, None, Gio.DBusSignalFlags.NONE, sleep_changed
+    )
+    children = [os.pidfd_open(child.pid) for child in (compositor, agent)]
+    sources = [
+        GLib.io_add_watch(channel.fileno(), GLib.PRIORITY_DEFAULT, GLib.IO_IN | GLib.IO_HUP, reply)
+    ]
+
+    def quit_loop(*_):
+        loop.quit()
+        return True
+
+    try:
+        for fd in children:
+            sources.append(GLib.io_add_watch(fd, GLib.PRIORITY_DEFAULT, GLib.IO_IN, quit_loop))
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            sources.append(GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, quit_loop))
+        loop.run()
+    finally:
+        bus.signal_unsubscribe(subscription)
+        for source in sources:
+            if loop.get_context().find_source_by_id(source):
+                GLib.source_remove(source)
+        for fd in children:
+            os.close(fd)
+        if inhibitor is not None:
+            os.close(inhibitor)
+    return compositor.poll() or 0
+
+
+def session():
+    env = dict(
+        os.environ,
+        XDG_CURRENT_DESKTOP="mundane",
+        XDG_SESSION_DESKTOP="mundane",
+        XDG_SESSION_TYPE="wayland",
+        LIBSEAT_BACKEND="logind",
+    )
+    for key in ("WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY", "XAUTHORITY"):
+        env.pop(key, None)
+    if "MUNDANE_IBUS_PANEL" not in env:
+        for path in ("/usr/libexec/ibus-ui-gtk3", "/usr/lib/ibus/ibus-ui-gtk3"):
+            if os.access(path, os.X_OK):
+                env["MUNDANE_IBUS_PANEL"] = path
+                break
+    bindir = Path(__file__).resolve().parent
+    agent_path = env.get("MUNDANE_POLKIT_AGENT") or bindir / "mundane-polkit-agent"
+    if not os.access(agent_path, os.X_OK):
+        raise RuntimeError("install the mundane-polkit-agent executable for this session")
+    compositor = agent = channel = None
+    published = False
+    with tempfile.TemporaryDirectory(dir=env["XDG_RUNTIME_DIR"], prefix="mundane-session-") as temp:
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(temp + "/ready")
+            listener.listen(1)
+            listener.settimeout(0.25)
+            try:
+                compositor = subprocess.Popen(
+                    [bindir / "mundane-de", "--session-notify", temp + "/ready"], env=env
+                )
+                while compositor.poll() is None:
+                    try:
+                        channel, _ = listener.accept()
+                        break
+                    except socket.timeout:
+                        continue
+                if channel is None:
+                    raise RuntimeError("compositor exited before session readiness")
+                channel.settimeout(15)
+                with channel.makefile("rb") as reader:
+                    name = reader.readline(128).decode().strip()
+                if not name.startswith("wayland-") or "/" in name:
+                    raise RuntimeError("invalid compositor socket name")
+                env["WAYLAND_DISPLAY"] = name
+                published = True
+                publish(env)
+                subprocess.run(
+                    ["systemctl", "--user", "start", "mundane-session.target"], check=True
+                )
+                channel.sendall(b"1")
+                # A cancelled D-Bus activation at logout can remain pending
+                # in the per-user bus. Start both owners on the new display.
+                subprocess.run(
+                    [
+                        "systemctl",
+                        "--user",
+                        "start",
+                        "--no-block",
+                        "xdg-desktop-portal-gtk.service",
+                        "xdg-desktop-portal.service",
+                    ],
+                    check=True,
+                )
+                agent = subprocess.Popen([agent_path], env=env)
+                return run_until_logout(compositor, agent, channel)
+            finally:
+                if published:
+                    # The portal's Requisite=graphical-session.target can keep
+                    # that target alive after its desktop target has stopped.
+                    subprocess.run(
+                        [
+                            "systemctl",
+                            "--user",
+                            "stop",
+                            "mundane-session.target",
+                            "graphical-session.target",
+                        ]
+                    )
+                if channel:
+                    channel.close()
+                stop(agent)
+                if compositor and compositor.poll() is None:
+                    try:
+                        compositor.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        stop(compositor)
+                if published:
+                    publish({})
+
+
+def terminate(signum, _frame):
+    raise SystemExit(128 + signum)
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, terminate)
+    signal.signal(signal.SIGHUP, terminate)
+    sys.exit(session())

@@ -62,6 +62,7 @@ struct DrmBackend {
     heads: HashMap<crtc::Handle, Scanout>,
     last_frame: Instant,
     active: bool,
+    sleeping: bool,
     trial: Option<Trial>,
 }
 
@@ -78,7 +79,7 @@ struct Trial {
     generation: u64,
 }
 
-pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
+pub fn run_drm(config: MundaneConfig, notify: Option<&std::path::Path>) -> anyhow::Result<()> {
     let mut event_loop: EventLoop<State> =
         EventLoop::try_new().map_err(|e| anyhow::anyhow!("event loop init failed: {e}"))?;
     let display: Display<State> = Display::new()?;
@@ -148,11 +149,19 @@ pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
         heads: HashMap::new(),
         last_frame: Instant::now(),
         active: true,
+        sleeping: false,
         trial: None,
     };
     let monitor = UdevBackend::new(&seat_name)?;
     backend.rescan(&mut state)?;
     let backend = Rc::new(RefCell::new(backend));
+
+    let vt = backend.clone();
+    state.switch_vt = Some(Box::new(move |number| {
+        if let Err(e) = vt.borrow_mut().session.change_vt(number) {
+            tracing::warn!(?e, number, "switch VT");
+        }
+    }));
 
     let control = backend.clone();
     let _control_socket = super::output_control::listen(&state, move |state, command| {
@@ -256,6 +265,7 @@ pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
             let mut b = seat_backend.borrow_mut();
             match event {
                 SessionEvent::PauseSession => {
+                    tracing::info!("seat paused");
                     b.active = false;
                     libinput_context.suspend();
                     b.drm.pause();
@@ -265,6 +275,7 @@ pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
                         tracing::error!(%e,"resume DRM");
                         return;
                     }
+                    tracing::info!("seat resumed");
                     b.active = true;
                     for head in b.heads.values_mut() {
                         head.pending = false;
@@ -289,17 +300,32 @@ pub fn run_drm(config: MundaneConfig) -> anyhow::Result<()> {
         }
     };
 
+    if let Some(endpoint) = notify {
+        let devices = backend.clone();
+        super::session::ready(&mut state, endpoint, move |state, sleeping| {
+            devices.borrow_mut().sleep_changed(state, sleeping);
+        })?;
+    }
+    state.launch_helpers()?;
     tracing::info!("mundaneDE DRM backend running on WAYLAND_DISPLAY={socket_name}");
 
     let mut wake = crate::outputs::FrameWake::default();
-    event_loop
-        .run(None, &mut state, move |state| {
+    let result = event_loop
+        .run(None, &mut state, |state| {
             backend.borrow_mut().render(state, &mut wake);
             state.popups.cleanup();
             state.space.refresh();
             let _ = state.display_handle.flush_clients();
         })
-        .map_err(|e| anyhow::anyhow!("event loop: {e}"))
+        .map_err(|e| anyhow::anyhow!("event loop: {e}"));
+    if notify.is_some() {
+        // GDM takes over from here. Release the scanouts while logind still
+        // grants us the seat, before dropping the event sources in the loop.
+        let mut devices = backend.borrow_mut();
+        devices.heads.clear();
+        devices.drm.pause();
+    }
+    result
 }
 
 impl Scanout {
@@ -566,11 +592,41 @@ impl DrmBackend {
         );
         Ok(())
     }
-    fn render(&mut self, state: &mut State, wake: &mut crate::outputs::FrameWake) {
-        state.import_buffers(&mut self.renderer);
+    fn sleep_changed(&mut self, state: &mut State, sleeping: bool) {
+        self.sleeping = sleeping;
         if !self.active {
             return;
         }
+        for head in self.heads.values_mut() {
+            // Stop scanning out before logind releases the sleep inhibitor. S3
+            // can invalidate the device-side resources behind the old GBM BOs.
+            let result = if sleeping {
+                head.compositor.clear()
+            } else {
+                head.compositor.reset_state()
+            };
+            if let Err(e) = result {
+                tracing::warn!(%e, sleeping, "reset scanout across sleep");
+            }
+            head.compositor.reset_buffers();
+            head.pending = false;
+            head.next_frame = Instant::now();
+        }
+        if !sleeping {
+            if let Err(e) = self.rescan(state) {
+                tracing::warn!(%e, "rescan after sleep");
+            }
+            self.last_frame = Instant::now();
+        }
+        state.generation += 1;
+        tracing::info!(sleeping, "sleep transition");
+    }
+
+    fn render(&mut self, state: &mut State, wake: &mut crate::outputs::FrameWake) {
+        if !self.active || self.sleeping {
+            return;
+        }
+        state.import_buffers(&mut self.renderer);
         if let Some(t) = &self.trial {
             if Instant::now() >= t.deadline {
                 if let Err(e) = self.control(state, super::output_control::Command::Revert) {

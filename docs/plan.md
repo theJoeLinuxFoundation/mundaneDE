@@ -159,29 +159,43 @@ record the reference run and reproduction commands.
 
 ## 4. Enter and leave a real session
 
-Supply a GDM entry under `/usr/share/wayland-sessions/` and a session launcher
-that keeps the compositor in the active logind seat. Use libseat's logind
-backend. Hand the distribution the libseat build requirement. Pause DRM/KMS
-and input on VT loss, then reacquire devices and refresh outputs on return.
-The compositor, shell and settings run as the logged-in user.
+GDM starts `mundane-session` in the authenticated user's logind seat scope.
+The launcher starts the compositor there and selects libseat’s logind backend.
+After the Wayland socket, DRM outputs and input sources are ready, a private
+socket connects the compositor and launcher. The launcher publishes the
+display and desktop to D-Bus activation and the systemd user manager, starts
+the session target, then starts the polkit agent in the seat scope. Settings
+and applications run with the logged-in UID. [systemd session targets](https://www.freedesktop.org/software/systemd/man/latest/systemd.special.html) · [joe security model](https://github.com/theJoeLinuxFoundation/joe-linux/blob/d3e355b888ebeb5d9fa2c46eace844aafdf9380b/README.md#L174-L215)
 
-Once the socket is listening, publish `WAYLAND_DISPLAY`,
-`XDG_CURRENT_DESKTOP=mundane` and the Wayland session type to D-Bus activation
-and the systemd user manager. Start a mundane session target bound to
-`graphical-session.target`. Order the shell, polkit agent, IBus frontend and
-portal activation after readiness. Start X11 clients with the session's
-Xwayland display. On exit, stop session-bound units, release the seat and
-clear stale session values. Keep nested tests on a private bus. Privileged
-operations go through existing system services and polkit. Supply the
-distribution with the operation list for any new privileged helper. [systemd session targets](https://www.freedesktop.org/software/systemd/man/latest/systemd.special.html) ·
-[joe security model](https://github.com/theJoeLinuxFoundation/joe-linux/blob/d3e355b888ebeb5d9fa2c46eace844aafdf9380b/README.md#L174-L215)
+**joe packaging handoff**
 
-**Acceptance.** In an opt-in GDM session, verify the active seat and user IDs,
-open a D-Bus-activated app on the correct socket, switch to another VT and
-back, suspend/resume, log out and log in twice. Verify input and scanout return,
-the old socket is gone, no duplicate units survive and GNOME still starts from
-GDM. Repeat a protected settings action with authorization granted and denied
-on the distribution's enforcing configuration.
+| Component | Files and contract |
+| --- | --- |
+| GDM and PAM | Install `mundane.desktop` under `/usr/share/wayland-sessions/`, alongside GNOME. Set `Exec` and `TryExec` to the installed launcher. GDM registers the session. Use joe’s existing `gdm-password` and `gdm-autologin` PAM stacks, pam_systemd, logind and the per-user D-Bus instance. Keep the GNOME entry and the distribution default. AccountsService’s per-user `Session=mundane` and `SessionType=wayland` opt into this session. |
+| Executables and libraries | Ship `mundane-de`, `mundane-session`, `mundane-settings`, a libseat built with logind, Python 3 with PyGObject/Gio/GLib, dbus-update-activation-environment and systemd user units. The [installer](../session/install.sh) accepts `DESTDIR` and `PREFIX` (use `/usr` for packages). Install Settings separately in the same bin directory. |
+| User units and activation | Install `mundane-session.target` and `mundane-ibus.service` under `lib/systemd/user/`. The launcher starts the target after exporting `WAYLAND_DISPLAY`, `XDG_CURRENT_DESKTOP=mundane`, `XDG_SESSION_DESKTOP=mundane`, `XDG_SESSION_TYPE=wayland` and `XDG_SESSION_ID`. Future shell units should use `PartOf=mundane-session.target`. GDM owns the seat process. A user service outside the session scope cannot take its place. Start X11 applications with the display returned by `mundane-de --x11-display`. |
+| Polkit and power | Install a standalone graphical polkit agent as `mundane-polkit-agent` next to the launcher (a package symlink suffices), or set `MUNDANE_POLKIT_AGENT`. The tested agent is polkit-gnome. Keep polkitd, its PAM helper, `polkit-1` PAM configuration and joe’s administrator policy. The existing Settings timezone action uses `pkexec timedatectl`. The compositor introduces no privileged executable or PAM stack. The launcher requests logind’s delay inhibitor for sleep (`org.freedesktop.login1.inhibit-delay-sleep`), drops it when scanout has stopped and rearms it on wake. |
+| Portals | Install `share/xdg-desktop-portal/mundane-portals.conf`, xdg-desktop-portal, its GTK backend and the GNOME Keyring Secret backend. After Wayland dispatch begins, explicitly start the GTK backend and portal frontend on each login. This resolves pending D-Bus activation after a previous session stops. D-Bus clients can then reach the chooser and settings provider on the new display. ScreenCast and Screenshot are milestone 6. During logout stop both session targets explicitly so a portal holding a dependency on `graphical-session.target` cannot keep an old display alive. |
+| IBus | Build the GTK Wayland input-method frontend described in milestone 2. Install it in the libexec or lib/ibus location or set `MUNDANE_IBUS_PANEL`. Its presence enables the session-bound daemon with `--panel=disable`. The compositor starts the candidate panel with its private Wayland connection after readiness. Beta1 supplies GNOME’s IBus build and skips this unit under mundaneDE. |
+
+Ctrl+Alt+Fn asks libseat to change VTs. On VT loss, suspend libinput and DRM.
+On return, reacquire devices and refresh outputs. Before system sleep, stop scanout
+and release its buffers. On wake, rebuild the scanout state and repaint. Logout
+releases the compositor’s sockets and clears the manager’s display variables.
+Classic D-Bus replaces stale activation values with empty strings.
+
+**Acceptance.** In a headless KVM guest booted from the read-only joe image,
+qualify fresh GDM logins, D-Bus activation, VT loss and return, S3 and wake,
+protected Settings operations, logout cleanup and a subsequent GNOME login.
+Use changed scanout pixels and delivered input to verify recovery. The final
+real-machine sign-off remains in milestone 8. [Session qualification](../tests/qemu/session/README.md)
+
+Two beta1 observations carry forward to image qualification. Under enforcement,
+joe logged two `CAP_SETUID` denials for `polkit-agent-helper-1` during a
+successful Settings authentication. Review the helper’s expected privileges
+against joe’s package policy. The guest kernel also logged virtio-gpu response
+`0x1203` across S3 in both mundaneDE and a GNOME control run. The mundaneDE
+client repainted and received keyboard and pointer input after wake.
 
 ## 5. Provide a shell, workspaces and a lock screen
 

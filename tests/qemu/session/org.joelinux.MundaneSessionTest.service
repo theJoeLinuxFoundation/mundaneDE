@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.joelinux.MundaneSessionTest
+Exec=/usr/local/libexec/mundane-login-probe

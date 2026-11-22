@@ -107,6 +107,8 @@ pub struct State {
 
     // Desktop layout + output.
     pub space: Space<Window>,
+    pub session_channel: Option<std::os::unix::net::UnixStream>,
+    pub switch_vt: Option<Box<dyn Fn(i32)>>,
     pub generation: u64,
     pub output_order: Vec<String>,
     pub layout: Vec<(smithay::output::Output,smithay::utils::Rectangle<i32,Logical>)>,
@@ -198,7 +200,7 @@ impl State {
             set_primary_focus(&state.display_handle, &state.seat, client.clone());
             set_data_device_focus(&state.display_handle, &state.seat, client);
         }).map_err(|e|anyhow::anyhow!("register client exit notification: {e}"))?;
-        let services = crate::shell::services::launch(dh, &client_exit)?;
+
         Ok(Self {
             display_handle: dh.clone(),
             client_exit,
@@ -210,6 +212,8 @@ impl State {
             data_device_state,
             seat,
             space: Space::default(),
+            session_channel: None,
+            switch_vt: None,
             generation: 1,
             output_order: Vec::new(),
             layout: Vec::new(),
@@ -227,7 +231,7 @@ impl State {
             recent_input: VecDeque::new(),
             primary,
             clipboard_control,
-            services,
+            services: Vec::new(),
             activation: XdgActivationState::new::<Self>(dh),
             animation,
             wm: WindowManager::new(),
@@ -246,6 +250,22 @@ impl State {
             spawn_command,
             spawn_settings_command,
         })
+    }
+
+    pub fn request_logout(&self) {
+        use std::io::Write;
+        if let Some(mut leader) = self.session_channel.as_ref() {
+            if leader.write_all(b"Q").is_ok() {
+                // Keep serving Wayland until the leader stops graphical units.
+                return;
+            }
+        }
+        self.loop_signal.stop();
+    }
+
+    pub fn launch_helpers(&mut self) -> anyhow::Result<()> {
+        self.services = crate::shell::services::launch(&self.display_handle, &self.client_exit)?;
+        Ok(())
     }
 
     /// Reload the configured wallpaper, crossfading from the current one (Super+W).

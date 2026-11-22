@@ -87,6 +87,7 @@ pub fn run_winit(config: MundaneConfig) -> anyhow::Result<()> {
     let mut damage_tracker =
         smithay::backend::renderer::damage::OutputDamageTracker::from_output(&output);
     let nested_output = output.clone();
+    state.launch_helpers()?;
     let _x11_listener = crate::x11::listen(&state)?;
 
     let handle = event_loop.handle();
@@ -268,6 +269,16 @@ impl State {
                     time,
                     |state, mods, handle| {
                         let sym = handle.modified_sym().raw();
+                        if let Some(switch_vt) = &state.switch_vt {
+                            if (keysyms::KEY_XF86Switch_VT_1..=keysyms::KEY_XF86Switch_VT_12)
+                                .contains(&sym)
+                            {
+                                if press {
+                                    switch_vt((sym - keysyms::KEY_XF86Switch_VT_1 + 1) as i32);
+                                }
+                                return FilterResult::Intercept(());
+                            }
+                        }
                         if state.window_menu.is_some() {
                             if press {
                                 state.menu_key(sym);
@@ -300,7 +311,7 @@ impl State {
                                         return FilterResult::Intercept(());
                                     }
                                     keysyms::KEY_Q => {
-                                        state.loop_signal.stop();
+                                        state.request_logout();
                                         return FilterResult::Intercept(());
                                     }
                                     _ => {}

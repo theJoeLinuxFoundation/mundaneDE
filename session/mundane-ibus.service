@@ -1,0 +1,10 @@
+[Unit]
+Description=IBus engines for mundaneDE
+PartOf=mundane-session.target
+After=graphical-session.target
+ConditionEnvironment=MUNDANE_IBUS_PANEL
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/ibus-daemon --panel=disable
+Slice=session.slice

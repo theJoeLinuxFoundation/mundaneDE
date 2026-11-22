@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=mundaneDE
+Comment=joe Linux Wayland desktop
+Exec=@bindir@/mundane-session
+TryExec=@bindir@/mundane-session
+Type=Application
+DesktopNames=mundane

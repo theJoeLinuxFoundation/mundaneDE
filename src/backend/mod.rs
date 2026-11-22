@@ -3,3 +3,4 @@
 pub mod drm;
 pub mod output_control;
 pub mod winit;
+mod session;

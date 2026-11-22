@@ -24,6 +24,9 @@ struct Cli {
     /// Use the Winit development backend instead of DRM/KMS
     #[arg(long)]
     winit: bool,
+    /// Private readiness socket of the GDM session launcher.
+    #[arg(long, hide = true, conflicts_with_all = ["winit", "x11_display"])]
+    session_notify: Option<std::path::PathBuf>,
     /// Ask a running mundaneDE session to start Xwayland and print its DISPLAY.
     #[arg(long, conflicts_with = "winit")]
     x11_display: bool,
@@ -62,6 +65,6 @@ fn main() -> anyhow::Result<()> {
         backend::winit::run_winit(config)
     } else {
         info!("using DRM/KMS backend");
-        backend::drm::run_drm(config)
+        backend::drm::run_drm(config, cli.session_notify.as_deref())
     }
 }
