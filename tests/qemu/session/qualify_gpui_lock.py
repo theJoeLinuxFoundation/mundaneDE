@@ -311,9 +311,10 @@ def qualify(run, output):
         ):
             s.pref("interface color-scheme", scheme)
             s.pref("a11y.interface high-contrast", contrast)
+            color = bytes.fromhex(backdrop)
             wait(
                 "live lock appearance " + appearance,
-                lambda backdrop=bytes.fromhex(backdrop): (
+                lambda backdrop=color: (
                     shot(0)[1][:3] == backdrop and shot(1)[1][:3] == backdrop
                 ),
             )

@@ -31,7 +31,7 @@ Port the existing shell services to Rust behind the GPUI views. Keep D-Bus handl
 
 ## Shared design system and ownership
 
-Settings and the GPUI shell resolve one workspace dependency on `mundane-ui` at `80eed70f87a44cd31743cef499b8d42df8f097d3` and one GPUI family at Zed `f4fe0be1f8c7974db07e01c5cd05bee0cf4eb8d9`. The step 5 locker will use `mundane-ui.workspace = true` in the same workspace. The suite now provides the controls in the table. Shell owners supply service data, actions and native surface placement. [Design language and controls](https://github.com/theJoeLinuxFoundation/mundane-apps/blob/80eed70f87a44cd31743cef499b8d42df8f097d3/docs/design-language.md) · [Workspace manifest](../settings-panel/Cargo.toml)
+Settings and the GPUI shell resolve one workspace dependency on `mundane-ui` at `80eed70f87a44cd31743cef499b8d42df8f097d3` and one GPUI family at Zed `f4fe0be1f8c7974db07e01c5cd05bee0cf4eb8d9`. The step 5 locker uses `mundane-ui.workspace = true` in the same workspace. The suite now provides the controls in the table. Shell owners supply service data, actions and native surface placement. [Design language and controls](https://github.com/theJoeLinuxFoundation/mundane-apps/blob/80eed70f87a44cd31743cef499b8d42df8f097d3/docs/design-language.md) · [Workspace manifest](../settings-panel/Cargo.toml)
 
 | Available in mundane-ui | Contract for shell, Settings and apps |
 | --- | --- |
@@ -83,13 +83,21 @@ Every 15 seconds the shell reads unprivileged `dave status --json` and checks it
 
 ScreenCast and Screenshot open a GPUI chooser with Cancel focused. A selection grants the helper a private Wayland connection for that display or window. Each taskbar names the active source and offers Stop. Losing the requester, source, frontend or shell, and locking the session, revoke capture. When the supervisor replaces a crashed shell, it also closes the old session at the surviving portal frontend so Firefox can end the track. The guest checks actual Firefox pixels and a restricted PipeWire client, changes the source after revocation, and observes the public appearance change signal after a frontend restart. [Headless procedure](../tests/qemu/session/README.md#gpui-shell-step-3) · [Screenshots](screenshots/gpui-step3/README.md)
 
-Start’s application list and search results use the suite’s flat launcher row. Pinned tiles and taskbar applications use its 32-logical-pixel icon slot. The session tests exercise search, AT-SPI activation of a result, all three pin gestures, focus restoration and the running taskbar group. Shell and Settings use the workspace pin above. The future locker inherits the same dependency at step 5.
+Start’s application list and search results use the suite’s flat launcher row. Pinned tiles and taskbar applications use its 32-logical-pixel icon slot. The session tests exercise search, AT-SPI activation of a result, all three pin gestures, focus restoration and the running taskbar group. Shell and Settings use the workspace pin above. The step 5 locker inherits the same dependency.
 
 ### Step 4 in the GPUI preview
 
 The shell registers its authentication agent for the active logind session and accepts requests only from polkitd’s unique system-bus owner. The dialog shows the authority’s localized message, action ID, details and eligible administrators. Choosing another identity starts a new helper conversation. Enter submits the current response. Cancel, requester exit, lock and loss of the authority withdraw the prompt. The enforcing joe guest changed its timezone through Settings after PAM accepted the test user. Wrong credentials left the previous timezone in place. [Guest qualification](../tests/qemu/session/README.md#gpui-shell-step-4) · [Authentication dialog](screenshots/gpui-step4/README.md)
 
 Super+Alt+S controls the session’s Orca preference. The shell supervises Orca and pins its process identity with a pidfd. Only a unique session-bus connection from that live process can subscribe to the compositor keyboard monitor. Delivery is directed to that connection. Lock and the authentication dialog suppress key delivery, and the compositor bounds its wait for the reader. The guest checks the same text insertion in GTK and GPUI, observes a spoken character only for virtual keyboard input, and hears a notification through Orca after shell restart. The protected entry exposes masking characters and keeps credentials out of typing echo.
+
+## Step 5 GPUI lock
+
+The preview starts `mundane-lock` as the session user on demand. Its Wayland connection belongs to a single compositor-issued generation. A private Unix sequenced-packet socket carries versioned output snapshots with 128-bit, one-use tickets. Each admitted XDG window must commit the configured logical size before it can appear above the compositor’s mask or receive seat input. Replacing a display or changing its geometry or scale creates a new ticket. Locker windows stay outside the normal window list and capture sources. [Admission and completion](../src/shell/gpui_lock.rs) · [Scanout](../src/render.rs)
+
+An unlock requires successful PAM authentication **and account validation** for the original session user. Only the current locker can report that result over its live private channel. Losing either connection, losing the seat or preparing for sleep retires the old conversation. The lock remains active while a replacement starts. The guest exercised three virtual displays, unplug/replug, locker and shell deaths, a missing locker executable, a wrong password, an account denied with the correct password, VT release and reacquisition, and S3/wake. Orca announced the prompt and denial with credentials withheld. A background GTK client received input again after successful unlock. The portal test separately verified that locking terminated a real Firefox stream. [Locker and PAM conversation](../settings-panel/mundane-lock/src/pam.rs) · [Headless procedure](../tests/qemu/session/README.md#gpui-shell-step-5)
+
+The authentication dialog now dims the desktop on every output and blocks background input. It shows the person’s initials, full name and login, and offers Change when the authority supplies several administrators. Details starts collapsed. Enter submits, Escape cancels, and a failed attempt shows an inline error beside the new password field. QMP observed the field move during a retry with animations enabled and remain still with reduced motion. [Three before/after comparisons and lock screens](screenshots/gpui-step5/README.md)
 
 ## Performance acceptance
 
@@ -163,6 +171,18 @@ The release shell and compositor at `3f63784` used the same enforcing eight-vCPU
 
 The secondary output was 1024×768. Each CPU sample followed 60 seconds of settling and covered the next 60 seconds. The two-output samples ran separately on the same guest after the first driver stopped. Orca itself used 69.7 MiB PSS. The one-output test recorded zero new shell buffer submissions and zero compositor redraws in each ten-second interval before and after a visible clock change, with animations enabled and with reduced motion.
 
+### Step 5 measurements
+
+The eight-vCPU, 6 GiB enforcing beta1 guest used headless virtio-vga and Mesa lavapipe. On a normal two-output lock the primary’s first observed protected frame arrived at 60 ms and its GPUI prompt at 246 ms, timed from the virtual seat shortcut. The additional locker process used 142.1 MiB PSS and 200.3 MiB RSS with Orca enabled. Earlier runs on a separate guest observed 38 ms and 310 ms respectively. The fault-injection run sampled 75 pairs of full primary and secondary scanouts across process loss. The third head was separately checked while the executable was held back and after admission, hotplug, VT return and resume.
+
+| Settled shell | PSS | RSS | CPU, one vCPU |
+| --- | ---: | ---: | ---: |
+| One 1920×1080 output | 138.0 MiB | 171.2 MiB | 0.017% |
+| Two outputs | 140.2 MiB | 174.3 MiB | 0.017% |
+| Two outputs with Orca | 140.0 MiB | 174.6 MiB | 0.017% |
+
+The secondary output was 1024×768. Orca itself used 69.6 MiB PSS. The one-output shell produced zero buffer submissions and zero DRM redraws in the ten-second windows before and after a clock change, with animations both enabled and disabled. On the final binary the cold-cache Start measurement was 0.440 s. The 20 warm logins had a median of 0.258 s and p95 of 0.275 s. A separate run concurrent with a full host Rust rebuild reached 0.619 s p95. Both idle-host runs passed the 0.5 s gate. [Measurement driver](../tests/qemu/session/qualify_gpui_budget.py)
+
 ## joe packaging handoff
 
 The step 1 archive from `0edad6f` built the compositor, GPUI shell and Settings with stable Rust 1.100.0 and `--release --locked --offline` in a fresh extraction, using an empty Cargo home and a network namespace with only a down loopback device. On Linux x86_64 the shell and Settings resolve one GPUI family at the shared Zed revision. The recursive Nix source hash was updated from the exported suite tree. Cargo and the GDM installation were exercised on this host and guest. The Nix derivation still needs a Nix build. [Source archive recipe](../tools/dist.sh) · [Dependency notices](../THIRD-PARTY-NOTICES.md)
@@ -172,6 +192,8 @@ The step 2 source at `9fb89d6` produced two byte-identical vendored archives (SH
 The step 3 source at `3a66c87` produced two byte-identical archives with SHA-256 `8b1f97612ade901320485c62cdafd38aefa7e268757220f5a89b2f776099157e`. A fresh extraction built the release compositor and entire Settings workspace with stable Rust, an empty Cargo home, `--locked --offline` and a private network namespace. The Nix source hash for mundane-ui was checked with `nix hash path` on its exported Git tree.
 
 The step 4 release source at `3f63784` produced two identical archives with SHA-256 `3937d26db4e6f28abc8af03e09473e8f1723f806be10669b268fc5ea3bc64f81`. The compositor, shell and Settings built from a fresh extraction with an empty Cargo home, stable Rust, `--locked --offline` and networking disabled. The shell ELF links the system’s `libpolkit-agent-1.so.0` and `libpolkit-gobject-1.so.0`.
+
+The step 5 source at `1be63b4` produced two identical archives (SHA-256 `70c565b6b220ed44de6ed948738d81c9af292c4c8572a9f3921efd2ace6035d7`). From a fresh extraction, stable Rust built all four release binaries with an empty Cargo home, networking disabled and `--locked --offline`. The preview adds an unprivileged `mundane-lock` binary and vendor service `/usr/lib/pam.d/mundane-lock`. It needs Linux-PAM at runtime and PAM headers and libclang at build time. The GTK reference still uses swaylock. [Installer](../session/install.sh) · [PAM service](../session/mundane-lock.pam)
 
 The [existing manifest](plan.md#joe-packaging-handoff) describes the reviewed GTK package. Apply these changes as the corresponding gates pass:
 

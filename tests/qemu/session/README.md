@@ -281,3 +281,15 @@ python3 "$driver/qualify_gpui_budget.py" "$budget_run"
 ```
 
 The first driver records Orca's own speech requests on the virtual seat. It checks typed and programmatic inserts, a delivered notification, a password entry, session restart and the active GDM login. A real Settings timezone change goes through joe's polkitd, helper and PAM. A second authority on a private bus drives the installed agent through a two-administrator conversation, cancellation, lock, authority disappearance and logout. QMP records the empty prompt in three appearances. Use a separate trace-enabled overlay for the budget and run its startup samples with the host otherwise idle. `--startup-only` repeats the cold and 20 warm logins independently.
+
+### GPUI shell step 5
+
+Build and install the workspace with the step 1 procedure. The installer takes the sibling `mundane-lock` executable and installs its PAM service. On a dedicated enforcing guest, run the step 4 accessibility driver and the step 3 portal driver in the GPUI session. The accessibility driver captures the authentication dialog in three appearances and compares the password field’s scanout position on a denied retry with animations enabled and disabled. The portal driver checks that Firefox stops receiving shared pixels on lock.
+
+Run the lock driver last on its own overlay. It temporarily moves the locker executable, terminates the session’s shell and locker, and adds a denying account rule to the guest’s PAM service. It restores the service, binary and display configuration on exit. The driver uses the guest’s serial shell and QMP, with three virtio outputs available. Reboot before mounting the 9p share again after the S3 test. On beta1 a new 9p mount after wake can hang in the kernel.
+
+```sh
+python3 "$driver/qualify_gpui_lock.py" "$run" "$run/locker-screenshots"
+```
+
+The driver checks whole scanouts, monitors delivery to a background client, examines the protected AT-SPI field and records Orca’s speech. It verifies both wrong-password and PAM account denial, fresh conversations after VT and S3, and actual focus restoration after success. The compositor’s Rust tests also exercise public, shell, legacy and replacement locker connections, replayed tickets, a queued completion from a closed peer and obsolete generations. [Protocol and measurements](../../../docs/shell-gpui.md#step-5-gpui-lock)
