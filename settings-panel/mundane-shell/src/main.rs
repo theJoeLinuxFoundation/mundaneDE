@@ -145,10 +145,35 @@ fn services(
     socket: Arc<UnixDatagram>,
     tx: Sender<Event>,
     rx: Receiver<Service>,
-    device_tx: Sender<devices::Request>,
+    ready: Receiver<Sender<devices::Request>>,
 ) -> anyhow::Result<()> {
     let context = glib::MainContext::new();
     context.with_thread_default(|| -> anyhow::Result<()> {
+        let pins = std::rc::Rc::new(Favourites::new());
+        let publish = {
+            let tx = tx.clone();
+            let pins = pins.clone();
+            move || {
+                let _ = tx.try_send(Event::Pins(pins.get()));
+            }
+        };
+        publish();
+        pins.watch(publish);
+        let reload = {
+            let tx = tx.clone();
+            move || {
+                let _ = tx.try_send(Event::Catalog(catalog::installed()));
+            }
+        };
+        let monitor = gio::AppInfoMonitor::get();
+        monitor.connect_changed({
+            let reload = reload.clone();
+            move |_| reload()
+        });
+        reload();
+        // Catalogue discovery overlaps GPUI platform startup. Start services that
+        // launch clients only after GPUI has consumed the private Wayland fd.
+        let device_tx = ready.recv_blocking()?;
         let notes = notifications::Server::new(tx.clone())?;
         let portal = portals::Portals::new(tx.clone(), socket)?;
         let recovery = portal.clone();
@@ -176,25 +201,6 @@ fn services(
         desktop.connect_changed(Some("text-scaling-factor"), move |settings, _| {
             text_scale(settings)
         });
-        let pins = std::rc::Rc::new(Favourites::new());
-        let publish = {
-            let tx = tx.clone();
-            let pins = pins.clone();
-            move || {
-                let _ = tx.try_send(Event::Pins(pins.get()));
-            }
-        };
-        publish();
-        pins.watch(publish);
-        let reload = {
-            let tx = tx.clone();
-            move || {
-                let _ = tx.try_send(Event::Catalog(catalog::installed()));
-            }
-        };
-        reload();
-        let monitor = gio::AppInfoMonitor::get();
-        monitor.connect_changed(move |_| reload());
         let main_loop = glib::MainLoop::new(Some(&context), false);
         let done = main_loop.clone();
         context.spawn_local(async move {
@@ -609,6 +615,15 @@ fn main() -> anyhow::Result<()> {
     anyhow::ensure!(unsafe { libc::dup2(2, 1) } == 1, "redirect shell stdout");
     let (tx, rx) = async_channel::unbounded();
     let (service, actions) = async_channel::unbounded();
+    let (ready, platform) = async_channel::bounded(1);
+    let service_socket = socket.clone();
+    let worker = tx.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = services(service_socket, worker.clone(), actions, platform) {
+            eprintln!("Shell services: {e:#}");
+            let _ = worker.try_send(Event::Quit);
+        }
+    });
     mundane_ui::run(move |cx| {
         let input = socket.clone();
         let messages = tx.clone();
@@ -652,16 +667,8 @@ fn main() -> anyhow::Result<()> {
         mundane_ui::bind_text_keys(cx);
         cx.set_quit_mode(QuitMode::Explicit);
         let device_tx = devices::start(tx.clone());
-        let watchers = device_tx.clone();
+        let _ = ready.try_send(device_tx.clone());
         upgrades::start(tx.clone(), service.clone());
-        let service_socket = socket.clone();
-        let worker = tx.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = services(service_socket, worker.clone(), actions, watchers) {
-                eprintln!("Shell services: {e:#}");
-                let _ = worker.try_send(Event::Quit);
-            }
-        });
         let _ = socket.send(b"watch-tasks");
         cx.set_global(Shell {
             locked: true,

@@ -92,7 +92,7 @@ Measure these release ceilings on each candidate shell. Use production binaries 
 | Measure | Method and target |
 | --- | --- |
 | Idle memory and CPU | After 60 s settled with menus closed, sum `smaps_rollup` PSS for the shell and any private service workers. Target **≤150 MiB PSS** and **≤0.5% of one vCPU** averaged over 60 s from process CPU time. Record RSS, renderer and system-service/Orca costs separately. Measure locker startup and incremental PSS while locked. |
-| Usable taskbar | From compositor launch of the shell to a presented bar whose Start button accepts virtual input and shows a focused search field. Across 20 fresh logins report median and p95, with **p95 ≤2 s**. Record first boot with cold shader/font caches separately. |
+| Usable taskbar | From compositor launch of the shell to a presented bar whose Start button accepts virtual input and shows a focused search field. Across 20 fresh logins report median and p95, with **p95 <0.5 s** at every migration gate. Record first boot with cold shader/font caches separately. |
 | Idle repaints | Require **zero new shell buffer submissions and zero compositor redraws** in a settled 10 s interval between clock changes. Advance the clock one minute and expect a visible update, then quiescence again. Count actual commits/presents, including with a stationary pointer and reduced motion. Drive time, task, device and service updates by deadlines and change signals. |
 
 ### Step 1 measurements
@@ -138,6 +138,12 @@ On the same headless eight-vCPU, 6 GiB joe beta1 guest, the release shell at `3a
 | Two outputs with Orca | 139.4 MiB | 174.4 MiB | 0.017% |
 
 The secondary scanout was 1024×768. Orca used an additional 68.2 MiB PSS. Both pairs of ten-second idle samples recorded **zero shell buffer submissions and zero DRM redraws**, with a visible clock change between samples, including with reduced motion. Capture helpers run only while serving requests. [Measurement driver](../tests/qemu/session/qualify_gpui_budget.py)
+
+### Start timing investigation
+
+The step 3 journal puts the first taskbar submission at 0.410 s in one of the slow logins, before Start constructed any rows. The original run overlapped other guest and build work. With the very same step 3 executable and one otherwise idle guest, the old procedure measured 0.472 s p95. Polling at 120 ms both delayed the virtual click and rounded up the observation of the menu. Sampling scanout directly with an 8 ms sleep between misses and moving journal reads outside the timed path measured 0.287 s p95 on that executable. These runs implicate host contention and observer latency. They do not isolate a regression in icon scaling or row layout.
+
+The shell now starts catalogue and icon discovery alongside GPUI initialization. The 32-pixel artwork and flat rows remain in the test. On the same guest the revised shell also passed the original polling procedure at 0.483 s p95. For subsequent steps, run the strict gate alone on the host, report cold startup separately, and require the launch-to-populated-menu p95 across 20 warm logins to stay below 0.5 s. A real seat click must show the pins and focus search. The driver records compositor timestamps for the first taskbar and Start commits separately from the observed elapsed time.
 
 ## joe packaging handoff
 

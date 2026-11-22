@@ -15,7 +15,7 @@ def pixel(frame, x, y):
     return frame[start : start + 3]
 
 
-def qualify(run):
+def qualify(run, startup_only=False):
     g = Guest(run)
     assert_preview(g)
 
@@ -46,6 +46,11 @@ def qualify(run):
             p
             and pixel(p, 19, 515) == pixel(p, 500, 1054)
             and pixel(p, 600, 515) != pixel(p, 19, 515)
+            # Count a populated pinned grid, even on the first login.
+            and len(
+                {pixel(p, x, y) for y in range(591, 610, 3) for x in range(18, 428, 2)}
+            )
+            > 20
         )
 
     # Reuse the untouched system font caches from the image. Give GPUI/Mesa a
@@ -55,23 +60,46 @@ def qualify(run):
     g.shell(
         f"sed -i -E 's! XDG_CACHE_HOME=[^ ]+!!;s!^Exec=/usr/bin/env !Exec=/usr/bin/env XDG_CACHE_HOME={cache} !' {entry}"
     )
+
+    def presented(label, matches):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if matches():
+                return
+            time.sleep(0.008)
+        raise AssertionError(label)
+
     samples = []
     for i in range(21):
         g.shell("systemctl stop gdm")
         after = clock()
         g.shell("systemctl reset-failed gdm; systemctl start gdm")
-        wait("new shell launch", lambda after=after: stamp("launch shell") > after)
-        start = stamp("launch shell")
-        wait(
-            "new bar submitted",
-            lambda start=start: stamp("layer commit.*mundane-taskbar") >= start,
-        )
-        wait("presented Start button", bar)
+        # Observe actual scanout. Journal scans and 120 ms sleeps in the timed
+        # path used to delay the seat click and quantize the result.
+        presented("presented Start button", bar)
         # QEMU suppresses unchanged tablet axes across GDM seat reopen.
         g.move(0.48, 0.42)
         g.click(32 / 1920, 1056 / 1080)
-        wait("Start presented after seat click", menu)
-        elapsed = clock() - start
+        presented("Start presented after seat click", menu)
+        end = clock()
+        start = stamp("launch shell")
+        assert after <= start < end, "stale login"
+        elapsed = end - start
+        records = g.shell(
+            f"journalctl -b --since=@{start:.6f} -o short-unix --no-pager -g 'layer commit.*mundane-(taskbar|start)'"
+        )
+
+        def first(role):
+            return next(
+                float(row.split()[0])
+                for row in records.splitlines()
+                if f"mundane-{role}" in row
+            )
+
+        print(
+            f"First bar submission {first('taskbar') - start:.3f} s, first Start submission {first('start') - start:.3f} s",
+            flush=True,
+        )
         joe(
             g,
             "busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true",
@@ -95,7 +123,9 @@ def qualify(run):
         f"Usable Start, median {statistics.median(samples):.3f} s, p95 {sorted(samples)[18]:.3f} s",
         flush=True,
     )
-    assert sorted(samples)[18] <= 2
+    assert sorted(samples)[18] < 0.5, "usable Start p95 must be below 0.5 seconds"
+    if startup_only:
+        return
     g.key("esc")
     g.move(0.48, 0.38)
 
@@ -199,4 +229,6 @@ def qualify(run):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", type=Path)
-    qualify(parser.parse_args().run)
+    parser.add_argument("--startup-only", action="store_true")
+    args = parser.parse_args()
+    qualify(args.run, args.startup_only)
