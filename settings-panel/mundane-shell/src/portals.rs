@@ -101,7 +101,7 @@ impl Portals {
                 ..Default::default()
             }),
         });
-        for name in ["ScreenCast", "Screenshot"] {
+        for name in ["ScreenCast", "Screenshot", "FileChooser", "AppChooser"] {
             p.register(ROOT, &info(name)?)?;
         }
         let manager = xml(
@@ -263,6 +263,22 @@ impl Portals {
             inv.return_value(None);
             return;
         }
+        if method == "UpdateChoices" {
+            let handle = args.child_get::<ObjectPath>(0);
+            if let Some((&id, _)) = self
+                .state
+                .borrow()
+                .requests
+                .iter()
+                .find(|(_, r)| r.path == handle.as_str())
+            {
+                let _ = self
+                    .tx
+                    .try_send(Event::UpdateChoices(id, args.child_get(1)));
+            }
+            inv.return_value(None);
+            return;
+        }
         if self.state.borrow().locked {
             reply(inv, 1, Props::new());
             return;
@@ -310,7 +326,8 @@ impl Portals {
                 };
                 reply(inv, code, Props::new());
             }
-            "Start" | "Screenshot" => {
+            "OpenFile" | "SaveFile" | "SaveFiles" | "ChooseApplication" | "Start"
+            | "Screenshot" => {
                 let share = method == "Start";
                 let path = obj(0);
                 let session = share.then(|| obj(1));
@@ -354,6 +371,22 @@ impl Portals {
                     },
                 );
                 st.picker = Some(serial);
+                if !matches!(method, "Start" | "Screenshot") {
+                    let app = method == "ChooseApplication";
+                    let request = crate::chooser::Request {
+                        id: serial,
+                        method: method.into(),
+                        title: if app {
+                            "Open with".into()
+                        } else {
+                            args.child_get(3)
+                        },
+                        apps: if app { args.child_get(3) } else { vec![] },
+                        options: args.child_get(4),
+                    };
+                    let _ = self.tx.try_send(Event::Choose(request));
+                    return;
+                }
                 let _ = self.tx.try_send(Event::Picker(Picker {
                     serial,
                     app: args.child_get(if share { 2 } else { 1 }),
@@ -362,6 +395,11 @@ impl Portals {
                 }));
             }
             _ => reply(inv, 2, Props::new()),
+        }
+    }
+    pub fn chosen(&self, id: u64, result: Props) {
+        if !self.state.borrow().locked && self.state.borrow().picker == Some(id) {
+            self.finish(id, 0, result);
         }
     }
     pub fn locked(&self, v: bool) {

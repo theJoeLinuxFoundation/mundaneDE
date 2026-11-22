@@ -46,6 +46,7 @@ pub struct WorkspaceTransition {
 struct AuthenticationSurface;
 
 pub struct Desktop {
+    pub(crate) caret: super::input_caret::Caret,
     layers: WlrLayerShellState,
     list: ForeignToplevelListState,
     idle: IdleNotifierState<State>,
@@ -78,6 +79,7 @@ impl Desktop {
         });
         IdleInhibitManagerState::new::<State>(dh);
         Self {
+            caret: Default::default(),
             pending_keys: Default::default(),
             monitor: Default::default(),
             reduce_motion: false,
@@ -138,7 +140,9 @@ impl State {
 
     pub(crate) fn auth_surface(&self) -> Option<&WlSurface> {
         self.desktop.menu_surface.as_ref().filter(|s| {
-            with_states(s, |state| state.data_map.get::<AuthenticationSurface>().is_some())
+            with_states(s, |state| {
+                state.data_map.get::<AuthenticationSurface>().is_some()
+            })
         })
     }
 
@@ -263,7 +267,7 @@ impl State {
             self.desktop.showing_desktop = true;
             self.arrange_workspace();
             self.layer_focus(&surface);
-            self.shell_message(&serde_json::json!({"desktop_icons":output.name()}));
+            self.shell_message(&serde_json::json!({"desktop_icons":output.name(),"pointer":[self.cursor_location.x,self.cursor_location.y]}));
         }
     }
     pub fn switch_workspace(&mut self, n: u8) {
@@ -530,6 +534,7 @@ impl State {
                     | "mundane-app-windows"
                     | "mundane-tray"
                     | "mundane-power"
+                    | "mundane-chooser"
                     | "mundane-capture"
                     | "mundane-history"
                     | "mundane-authentication"
@@ -538,7 +543,8 @@ impl State {
                     self.desktop.previous_menu_focus =
                         self.seat.get_keyboard().and_then(|k| k.current_focus());
                 }
-                let first_auth = l.namespace() == "mundane-authentication" && self.auth_surface().is_none();
+                let first_auth =
+                    l.namespace() == "mundane-authentication" && self.auth_surface().is_none();
                 self.desktop.menu_surface = Some(s.clone());
                 if first_auth {
                     self.move_state = None;

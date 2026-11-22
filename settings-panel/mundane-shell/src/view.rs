@@ -18,6 +18,7 @@ pub enum Page {
     Switcher,
     History,
     Auth(u64),
+    Choose(u64),
     Capture(u64),
 }
 impl Page {
@@ -31,6 +32,7 @@ impl Page {
             Self::Tray(..) => "mundane-tray",
             Self::History => "mundane-history",
             Self::Auth(_) => "mundane-authentication",
+            Self::Choose(_) => "mundane-chooser",
             Self::Capture(_) => "mundane-capture",
             Self::Switcher => "mundane-switcher",
         }
@@ -55,6 +57,7 @@ impl Page {
                 .unwrap_or("Tray menu"),
             Self::History => "Notifications",
             Self::Auth(_) => "Authentication required",
+            Self::Choose(_) => s.choice.as_ref().map_or("Choose", |r| r.title.as_str()),
             Self::Capture(_) => "Screen capture",
             Self::Switcher => "Switch windows",
         }
@@ -66,6 +69,7 @@ pub struct Surface {
     pub(super) hold: Option<Task<()>>,
     page: Page,
     quick: Option<Entity<crate::quick::Quick>>,
+    chooser: Option<Entity<crate::chooser::Dialog>>,
     auth: Option<Entity<crate::auth_dialog::Dialog>>,
     history: Option<mundane_ui::NotificationHistory>,
     display: DisplayId,
@@ -180,7 +184,7 @@ pub fn open(
                 },
                 anchor: if bar {
                     Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT
-                } else if preview || matches!(page, Page::Auth(_)) {
+                } else if preview || matches!(page, Page::Auth(_) | Page::Choose(_)) {
                     Anchor::empty()
                 } else {
                     Anchor::BOTTOM
@@ -191,7 +195,7 @@ pub fn open(
                         }
                 },
                 exclusive_zone: Some(px(if bar { height } else { 0. })),
-                margin: if bar || preview || matches!(page, Page::Auth(_)) {
+                margin: if bar || preview || matches!(page, Page::Auth(_) | Page::Choose(_)) {
                     None
                 } else {
                     Some((px(0.), px(8.), px(6.), px(left.unwrap_or(8.))))
@@ -271,7 +275,14 @@ pub fn open(
                 } else {
                     None
                 };
+                let chooser = if matches!(page, Page::Choose(_)) {
+                    let r = cx.global::<Shell>().choice.clone().unwrap();
+                    Some(cx.new(|cx| crate::chooser::Dialog::new(r, w, cx)))
+                } else {
+                    None
+                };
                 Surface {
+                    chooser,
                     auth,
                     history: (page == Page::History)
                         .then(|| mundane_ui::NotificationHistory::new(cx)),
@@ -804,6 +815,9 @@ impl Render for Surface {
                         list = list.child(
                             mundane_ui::text_label("selection", caption.clone()).child(caption),
                         );
+                    }
+                    Page::Choose(_) => {
+                        list = list.h_full().child(self.chooser.as_ref().unwrap().clone());
                     }
                     Page::Auth(_) => {
                         list = list.child(self.auth.as_ref().unwrap().clone());

@@ -15,6 +15,11 @@ parser.add_argument("run", type=Path)
 parser.add_argument(
     "--gpui-screenshots", type=Path, help="test the GPUI preview and save its scanouts"
 )
+parser.add_argument(
+    "--flatpak-client",
+    type=Path,
+    help="exercise a document grant from an isolated Flatpak using the compiled portals/grant.c client",
+)
 args = parser.parse_args()
 g = Guest(args.run)
 here = Path(__file__).resolve().parent
@@ -368,10 +373,21 @@ def captures():
         print("Firefox PipeWire pixels and " + action + " teardown passed", flush=True)
 
 
-def gtk_portals():
-    # GTK's chooser selects an exact file through its location entry.
+def choice_portals():
+    chooser = (
+        "frame Portal test file"
+        if args.gpui_screenshots
+        else "file chooser Portal test file"
+    )
+    # Select an exact file through the public portal and its location field.
     launch("client", "chooser", "choose")
-    wait("GTK chooser", lambda: "file chooser Portal test file" in widgets())
+    wait("file chooser", lambda: chooser in widgets())
+    if args.gpui_screenshots:
+        assert "button File type: Text files" in widgets()
+        assert (
+            "button example.txt" in widgets() and "button patterns.log" not in widgets()
+        )
+        shot("open-file")
     g.key("ctrl", "l")
     time.sleep(0.35)
     for ch in work + "/example.txt":
@@ -381,10 +397,49 @@ def gtk_portals():
     logged("chooser", "OpenFile (0,")
     assert work + "/example.txt" in content("chooser.log")
     launch("client", "chooser", "choose")
-    wait("GTK chooser", lambda: "file chooser Portal test file" in widgets())
+    wait("file chooser", lambda: chooser in widgets())
     click("Cancel")
     logged("chooser", "OpenFile (1,")
     assert "file://" not in content("chooser.log")
+    if args.gpui_screenshots:
+        launch("client", "save", "save")
+        wait("GPUI Save", lambda: "frame Portal save test" in widgets())
+        click("Save")
+        click("Replace")
+        logged("save", "SaveFile (0,")
+        assert work + "/example.txt" in content("save.log")
+        launch("client", "save-many", "save-many")
+        wait("GPUI destination folder", lambda: "frame Portal save test" in widgets())
+        click("Save")
+        logged("save-many", "SaveFiles (0,")
+        assert "second.txt" in content(
+            "save-many.log"
+        ) and "example%20(1).txt" in content("save-many.log").replace(
+            "%28", "("
+        ).replace("%29", ")")
+        launch("client", "ask", "ask")
+        wait("GPUI application choice", lambda: "frame Open with" in widgets())
+        shot("open-with")
+        click("Portal test handler")
+        logged("ask", "OpenURI (0,")
+        wait(
+            "chosen URI handler",
+            lambda: content("opened") == "mundane-portal-test://item/43",
+        )
+    if args.flatpak_client:
+        shutil.copyfile(args.flatpak_client, g.run / "share" / "file-grant")
+        g.shell(
+            f"mount -t 9p -o trans=virtio,version=9p2000.L,ro mundane /mnt && install -m755 /mnt/file-grant /mnt/grant.sh {fixtures}/ && umount /mnt"
+        )
+        joe(
+            f"sh {fixtures}/grant.sh {fixtures}/file-grant </dev/null >{work}/sandbox.log 2>&1 &"
+        )
+        wait("sandbox file chooser", lambda: "frame Sandbox file" in widgets(), 60)
+        click("example.txt")
+        click("Open")
+        logged("sandbox", "readable 1")
+        assert "Document URI file:///run/user/1000/doc/" in content("sandbox.log")
+        print("Flatpak read the selected file through its document grant.", flush=True)
     joe(f"rm -f {work}/opened")
     launch("client", "uri", "open")
     logged("uri", "OpenURI (0,")
@@ -397,7 +452,7 @@ def gtk_portals():
     logged("notification", "NOTIFICATION ACTION")
     assert "'review'" in content("notification.log")
     print(
-        "GTK file selection and cancellation, preferred URI handler and notification action passed",
+        "File selection and cancellation, preferred URI handler and notification action passed",
         flush=True,
     )
 
@@ -405,6 +460,6 @@ def gtk_portals():
 setup()
 sid = g.shell("loginctl show-seat seat0 -p ActiveSession --value")
 captures()
-gtk_portals()
+choice_portals()
 force_output(False)
 joe(f"kill -TERM $(cat {work}/patterns.pid)")

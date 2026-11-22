@@ -1,0 +1,90 @@
+<node>
+  <interface name="org.freedesktop.IBus.Panel">
+    <method name="UpdatePreeditText">
+      <arg direction="in" type="v" />
+      <arg direction="in" type="u" />
+      <arg direction="in" type="b" />
+    </method>
+    <method name="ShowPreeditText" />
+    <method name="HidePreeditText" />
+    <method name="UpdateAuxiliaryText">
+      <arg direction="in" type="v" />
+      <arg direction="in" type="b" />
+    </method>
+    <method name="ShowAuxiliaryText" />
+    <method name="HideAuxiliaryText" />
+    <method name="UpdateLookupTable">
+      <arg direction="in" type="v" />
+      <arg direction="in" type="b" />
+    </method>
+    <method name="ShowLookupTable" />
+    <method name="HideLookupTable" />
+    <method name="CursorUpLookupTable" />
+    <method name="CursorDownLookupTable" />
+    <method name="PageUpLookupTable" />
+    <method name="PageDownLookupTable" />
+    <method name="CandidateClickedLookupTable">
+      <arg direction="in" type="u" />
+      <arg direction="in" type="u" />
+      <arg direction="in" type="u" />
+    </method>
+    <method name="RegisterProperties">
+      <arg direction="in" type="v" />
+    </method>
+    <method name="UpdateProperty">
+      <arg direction="in" type="v" />
+    </method>
+    <method name="FocusIn">
+      <arg direction="in" type="o" />
+    </method>
+    <method name="FocusOut">
+      <arg direction="in" type="o" />
+    </method>
+    <method name="DestroyContext">
+      <arg direction="in" type="o" />
+    </method>
+    <method name="SetCursorLocation">
+      <arg direction="in" type="i" />
+      <arg direction="in" type="i" />
+      <arg direction="in" type="i" />
+      <arg direction="in" type="i" />
+    </method>
+    <method name="SetCursorLocationRelative">
+      <arg direction="in" type="i" />
+      <arg direction="in" type="i" />
+      <arg direction="in" type="i" />
+      <arg direction="in" type="i" />
+    </method>
+    <method name="Reset" />
+    <method name="StartSetup" />
+    <method name="StateChanged" />
+    <method name="HideLanguageBar" />
+    <method name="ShowLanguageBar" />
+    <method name="ContentType">
+      <arg direction="in" type="u" />
+      <arg direction="in" type="u" />
+    </method>
+    <method name="PanelExtensionReceived">
+      <arg direction="in" type="v" />
+    </method>
+    <method name="ProcessKeyEvent">
+      <arg direction="in" type="u" />
+      <arg direction="in" type="u" />
+      <arg direction="in" type="u" />
+      <arg direction="out" type="b" />
+    </method>
+    <method name="CommitTextReceived">
+      <arg direction="in" type="v" />
+    </method>
+    <method name="SendMessageReceived">
+      <arg direction="in" type="v" />
+      <annotation name="org.gtk.GDBus.Since" value="1.5.33" />
+      <annotation name="org.gtk.GDBus.DocString" value="Stability: Unstable" />
+    </method>
+    <signal name="CandidateClicked">
+      <arg type="u" />
+      <arg type="u" />
+      <arg type="u" />
+    </signal>
+  </interface>
+</node>

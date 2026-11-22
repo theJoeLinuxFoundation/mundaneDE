@@ -17,3 +17,4 @@ pam-client = { version = "0.5", default-features = false }
 nix = { version = "0.29", features = ["user"] }
 libc = "0.2"
 zeroize = "1"
+glib = "0.22"

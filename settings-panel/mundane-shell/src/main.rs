@@ -6,8 +6,11 @@ mod bluetooth;
 mod cast;
 mod catalog;
 mod choices;
+mod chooser;
+mod desktop;
 mod devices;
 mod feedback;
+mod input_method;
 mod launcher;
 mod notifications;
 mod portals;
@@ -42,6 +45,10 @@ struct Task {
 
 #[derive(Clone, Default, Deserialize)]
 struct Message {
+    caret: Option<[i32; 4]>,
+    #[serde(default)]
+    hide_candidates: bool,
+    desktop_icons: Option<String>,
     open: Option<String>,
     osd: Option<String>,
     screen_reader: Option<String>,
@@ -67,6 +74,7 @@ struct Message {
 }
 #[derive(Clone)]
 enum Service {
+    Candidate(u32),
     Identity(u64, u32),
     Answer(u64, u64, zeroize::Zeroizing<String>),
     CancelAuth(u64),
@@ -76,12 +84,14 @@ enum Service {
     NoteAction(u32, Option<String>),
     LocalNotice(String, String),
     Accept(u64, String, String, String),
+    Chosen(u64, cast::Props),
     Cancel(u64),
     Stop(String),
     Locked(bool),
     Pair(String, String),
     PairAnswer(u64, String),
     CancelPair,
+    OpenUri(String),
     Launch(String),
     Pin(String),
     TrayActivate(String),
@@ -90,6 +100,8 @@ enum Service {
 }
 #[derive(Clone)]
 enum Event {
+    Candidates(input_method::Candidates),
+    Icons(Vec<desktop::Icon>),
     Auth(auth::Prompt),
     AuthClosed(u64),
     Banner(notifications::Note, i32),
@@ -97,6 +109,8 @@ enum Event {
     HideBanner(Option<u32>),
     Level(&'static str, u8, bool),
     UpgradeDetails(Vec<String>),
+    Choose(chooser::Request),
+    UpdateChoices(u64, Vec<String>),
     Picker(portals::Picker),
     PickerClosed(u64),
     Shares(Vec<(String, String)>),
@@ -122,10 +136,19 @@ enum Event {
     Quit,
 }
 struct Shell {
+    candidates: input_method::Candidates,
+    caret: Option<[i32; 4]>,
+    candidate_window: Option<(
+        (DisplayId, i32, i32, i32, i32),
+        WindowHandle<input_method::CandidateView>,
+    )>,
+    icons: Vec<desktop::Icon>,
+    desktops: HashMap<DisplayId, WindowHandle<desktop::Desktop>>,
     auth: Option<auth::Prompt>,
     retired_auth: u64,
     locked: bool,
     outputs: Vec<String>,
+    choice: Option<chooser::Request>,
     picker: Option<portals::Picker>,
     shares: Vec<(String, String)>,
     notes: Vec<notifications::Note>,
@@ -188,6 +211,8 @@ fn services(
         // Catalogue discovery overlaps GPUI platform startup. Start services that
         // launch clients only after GPUI has consumed the private Wayland fd.
         let device_tx = ready.recv_blocking()?;
+        let panel = input_method::Panel::start(tx.clone(), &context);
+        let _icons = desktop::watch(tx.clone());
         let reader = reader::Reader::new(socket.clone())?;
         let auth = auth::Agent::new(reader.clone(), tx.clone())
             .map_err(|e| eprintln!("Polkit agent: {e:#}"))
@@ -224,9 +249,11 @@ fn services(
         context.spawn_local(async move {
             while let Ok(action) = rx.recv().await {
                 match action {
+                    Service::Candidate(index) => panel.click(index),
                     Service::LocalNotice(t, b) => notes.local(t, b),
                     Service::NoteAction(id, key) => notes.action(id, key),
                     Service::Accept(seq, kind, id, label) => portal.accept(seq, &kind, &id, label),
+                    Service::Chosen(id, result) => portal.chosen(id, result),
                     Service::Cancel(seq) => portal.cancel(seq),
                     Service::Stop(path) => portal.close(&path),
                     Service::Locked(v) => {
@@ -278,6 +305,14 @@ fn services(
                             a.answer(id, input);
                         }
                     }
+                    Service::OpenUri(uri) => {
+                        if let Err(e) = gio::AppInfo::launch_default_for_uri(
+                            &uri,
+                            None::<&gio::AppLaunchContext>,
+                        ) {
+                            notes.local("Could not open file".into(), e.to_string());
+                        }
+                    }
                     Service::Launch(id) => {
                         if let Some(app) = gio_unix::DesktopAppInfo::new(&id) {
                             if let Err(e) = app.launch(&[], None::<&gio::AppLaunchContext>) {
@@ -315,6 +350,12 @@ fn close_menu(cx: &mut App) {
             s.retired_auth = id;
             if s.auth.take().is_some() {
                 let _ = s.service.try_send(Service::CancelAuth(id));
+            }
+        }
+        if let Page::Choose(id) = page {
+            let s = cx.global_mut::<Shell>();
+            if s.choice.take().is_some() {
+                let _ = s.service.try_send(Service::Cancel(id));
             }
         }
         if let Page::Capture(id) = page {
@@ -383,6 +424,16 @@ fn display_bars(cx: &mut App) {
                 }
             }
         }
+        if !cx.global::<Shell>().icons.is_empty()
+            && !cx.global::<Shell>().desktops.contains_key(&display.id())
+        {
+            match desktop::open(display.id(), cx) {
+                Ok(w) => {
+                    cx.global_mut::<Shell>().desktops.insert(display.id(), w);
+                }
+                Err(e) => eprintln!("Desktop icons: {e:#}"),
+            }
+        }
     }
 }
 
@@ -411,6 +462,18 @@ fn target(m: &Message, cx: &App) -> Option<DisplayId> {
 }
 fn handle(event: Event, cx: &mut App) {
     match event {
+        Event::Candidates(names) => {
+            cx.global_mut::<Shell>().candidates = names;
+            input_method::redraw(cx);
+            return;
+        }
+        Event::Icons(icons) => {
+            if cx.global::<Shell>().icons == icons {
+                return;
+            }
+            cx.global_mut::<Shell>().icons = icons;
+            display_bars(cx);
+        }
         Event::Auth(p) => {
             let id = p.id;
             if id <= cx.global::<Shell>().retired_auth {
@@ -469,6 +532,48 @@ fn handle(event: Event, cx: &mut App) {
         }
         Event::UpgradeDetails(v) => cx.global_mut::<Shell>().upgrades = v,
         Event::Shares(v) => cx.global_mut::<Shell>().shares = v,
+        Event::Choose(req) => {
+            let id = req.id;
+            if let Some(d) = home_display(cx)
+                .filter(|_| !cx.global::<Shell>().locked && cx.global::<Shell>().auth.is_none())
+            {
+                close_menu(cx);
+                cx.global_mut::<Shell>().choice = Some(req);
+                open_menu(d.id(), Page::Choose(id), None, cx);
+                if cx.global::<Shell>().menu.is_some() {
+                    return;
+                }
+            }
+            cx.global_mut::<Shell>().choice = None;
+            let _ = cx.global::<Shell>().service.try_send(Service::Cancel(id));
+            return;
+        }
+        Event::UpdateChoices(id, apps) => {
+            if let Some(r) = cx
+                .global_mut::<Shell>()
+                .choice
+                .as_mut()
+                .filter(|r| r.id == id)
+            {
+                r.apps = apps;
+            }
+        }
+        Event::Service(Service::Chosen(id, result)) => {
+            if cx
+                .global::<Shell>()
+                .choice
+                .as_ref()
+                .is_some_and(|r| r.id == id)
+            {
+                cx.global_mut::<Shell>().choice = None;
+                close_menu(cx);
+                let _ = cx
+                    .global::<Shell>()
+                    .service
+                    .try_send(Service::Chosen(id, result));
+            }
+            return;
+        }
         Event::Picker(p) => {
             let id = p.serial;
             if let Some(d) = home_display(cx)
@@ -487,6 +592,15 @@ fn handle(event: Event, cx: &mut App) {
             return;
         }
         Event::PickerClosed(id) => {
+            if cx
+                .global::<Shell>()
+                .choice
+                .as_ref()
+                .is_some_and(|r| r.id == id)
+            {
+                cx.global_mut::<Shell>().choice = None;
+                close_menu(cx);
+            }
             if cx
                 .global::<Shell>()
                 .picker
@@ -523,6 +637,16 @@ fn handle(event: Event, cx: &mut App) {
         }
         Event::DeviceMessage(m) => cx.global_mut::<Shell>().device_message = m,
         Event::Message(mut m) => {
+            if m.hide_candidates || m.locked == Some(true) {
+                let s = cx.global_mut::<Shell>();
+                s.candidates = Default::default();
+                s.caret = None;
+                input_method::redraw(cx);
+            }
+            if let Some(caret) = m.caret {
+                cx.global_mut::<Shell>().caret = Some(caret);
+                input_method::redraw(cx);
+            }
             if m.logout {
                 let _ = cx.global::<Shell>().service.try_send(Service::Logout);
                 return;
@@ -562,6 +686,12 @@ fn handle(event: Event, cx: &mut App) {
                 close_menu(cx);
             }
             if let Some(d) = target(&m, cx) {
+                if m.desktop_icons.is_some() {
+                    close_menu(cx);
+                    if let Some(win) = cx.global::<Shell>().desktops.get(&d).copied() {
+                        let _ = win.update(cx, |v, w, cx| v.first(w, cx));
+                    }
+                }
                 match m.open.as_deref() {
                     Some("start") => open_menu(d, Page::Start, None, cx),
                     Some("taskbar") => {
@@ -783,10 +913,16 @@ fn main() -> anyhow::Result<()> {
         upgrades::start(tx.clone(), service.clone());
         let _ = socket.send(b"watch-tasks");
         cx.set_global(Shell {
+            candidates: Default::default(),
+            caret: None,
+            candidate_window: None,
+            desktops: HashMap::new(),
+            icons: Vec::new(),
             auth: None,
             retired_auth: 0,
             locked: true,
             outputs: vec![],
+            choice: None,
             picker: None,
             shares: vec![],
             notes: vec![],
@@ -822,6 +958,7 @@ fn main() -> anyhow::Result<()> {
                 feedback::hide_level(cx);
             }
             if let DisplayEvent::Removed(d) = ev {
+                input_method::redraw(cx);
                 if cx
                     .global::<Shell>()
                     .menu
@@ -829,6 +966,9 @@ fn main() -> anyhow::Result<()> {
                     .is_some_and(|(id, _, _)| *id == d)
                 {
                     close_menu(cx);
+                }
+                if let Some(w) = cx.global_mut::<Shell>().desktops.remove(&d) {
+                    let _ = w.update(cx, |_, w, _| w.remove_window());
                 }
                 if let Some(w) = cx.global_mut::<Shell>().bars.remove(&d) {
                     let _ = w.update(cx, |_, w, _| w.remove_window());

@@ -180,18 +180,26 @@ def session():
     )
     for key in ("WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY", "XAUTHORITY"):
         env.pop(key, None)
-    if "MUNDANE_IBUS_PANEL" not in env:
-        for path in ("/usr/libexec/ibus-ui-gtk3", "/usr/lib/ibus/ibus-ui-gtk3"):
-            if os.access(path, os.X_OK):
-                env["MUNDANE_IBUS_PANEL"] = path
-                break
     bindir = Path(__file__).resolve().parent
     candidate = sys.argv[1:] == ["--gpui"]
     if sys.argv[1:] and not candidate:
         raise SystemExit("usage: mundane-session [--gpui]")
     env["MUNDANE_PANEL"] = str(bindir / ("mundane-shell" if candidate else "mundane-panel"))
     if candidate:
+        env["XDG_CURRENT_DESKTOP"] = "mundane-gpui:mundane"
         env["MUNDANE_GPUI_LOCKER"] = str(bindir / "mundane-lock")
+    helpers = ["ibus-wayland", "ibus-ui-gtk3"] if candidate else ["ibus-ui-gtk3"]
+    if "MUNDANE_IBUS_PANEL" not in env:
+        for name in helpers:
+            paths = (Path("/usr/libexec") / name, Path("/usr/lib/ibus") / name)
+            frontend = next((path for path in paths if os.access(path, os.X_OK)), None)
+            if frontend:
+                env["MUNDANE_IBUS_PANEL"] = str(frontend)
+                break
+    if candidate and Path(env.get("MUNDANE_IBUS_PANEL", "")).name == "ibus-wayland":
+        env["MUNDANE_IBUS_GPUI"] = "1"
+    else:
+        env.pop("MUNDANE_IBUS_GPUI", None)
     compositor = channel = None
     published = False
     with tempfile.TemporaryDirectory(

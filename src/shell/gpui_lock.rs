@@ -52,6 +52,7 @@ pub(super) struct Attempt {
     channel: UnixDatagram,
     source: calloop::RegistrationToken,
     slots: HashMap<Output, Slot>,
+    presentation: Option<(Option<Output>, bool)>,
 }
 impl Attempt {
     fn owns(&self, active: bool, client: Option<&Client>) -> bool {
@@ -112,6 +113,7 @@ impl State {
                     .as_mut()
                     .is_some_and(|c| matches!(c.try_wait(), Ok(None)))
             {
+                self.sync_lock_presentation(false);
                 return;
             }
         }
@@ -184,6 +186,7 @@ impl State {
             channel: server,
             source,
             slots: HashMap::new(),
+            presentation: None,
         });
         self.sync_lock_outputs();
         Ok(())
@@ -244,10 +247,34 @@ impl State {
             );
             changed = true;
         }
-        if changed {
-            let outputs:Vec<_>=a.slots.iter().map(|(o,s)|serde_json::json!({"name":o.name(),"ticket":s.ticket,"width":s.size.w,"height":s.size.h})).collect();
+        self.sync_lock_presentation(changed);
+    }
+    pub(crate) fn sync_lock_presentation(&mut self, force: bool) {
+        let Some(a) = self.desktop.lock.gpui.as_mut() else {
+            return;
+        };
+        let active = self
+            .space
+            .output_under(self.cursor_location)
+            .next()
+            .or_else(|| self.space.outputs().next())
+            .cloned();
+        let awake = self.desktop.lock.last_input.elapsed().as_secs() < 30;
+        if force || a.presentation.as_ref() != Some(&(active.clone(), awake)) {
+            let outputs: Vec<_> = a
+                .slots
+                .iter()
+                .map(|(o, s)| {
+                    serde_json::json!({
+                        "ticket":s.ticket,"width":s.size.w,"height":s.size.h,"name":o.name(),
+                        "prompt":awake && Some(o)==active.as_ref()
+                    })
+                })
+                .collect();
+            a.presentation = Some((active, awake));
             let packet =
-                serde_json::json!({"version":1,"epoch":a.epoch,"outputs":outputs}).to_string();
+                serde_json::json!({"version":1,"epoch":a.epoch,"outputs":outputs,"awake":awake})
+                    .to_string();
             if a.channel.send(packet.as_bytes()).is_err() {
                 self.retire_locker();
             }
@@ -393,6 +420,7 @@ mod tests {
             channel: server.into(),
             source,
             slots: HashMap::new(),
+            presentation: None,
         };
         assert!(attempt.owns(true, Some(&locker)));
         assert!(!attempt.owns(false, Some(&locker)));

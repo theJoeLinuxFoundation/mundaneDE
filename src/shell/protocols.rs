@@ -77,7 +77,6 @@ impl XdgActivationHandler for State {
 smithay::delegate_xdg_activation!(State);
 smithay::delegate_xdg_decoration!(State);
 smithay::delegate_primary_selection!(State);
-smithay::delegate_text_input_manager!(State);
 
 impl smithay::wayland::tablet_manager::TabletSeatHandler for State {}
 smithay::delegate_cursor_shape!(State);

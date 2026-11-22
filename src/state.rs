@@ -270,7 +270,7 @@ impl State {
 
     pub fn launch_helpers(&mut self) -> anyhow::Result<()> {
         self.supervise_shell()?;
-        self.services = crate::shell::services::launch(&self.display_handle, &self.client_exit)?;
+        self.start_services()?;
         Ok(())
     }
 
@@ -327,6 +327,7 @@ impl SeatHandler for State {
     }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&Self::KeyboardFocus>) {
+        self.clear_caret();
         let client =
             focused.and_then(|surface| self.display_handle.get_client(surface.surface.id()).ok());
         set_data_device_focus(&self.display_handle, seat, client.clone());

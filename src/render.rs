@@ -142,7 +142,25 @@ fn collect_scene(
     let scale = output.current_scale().fractional_scale();
     if state.desktop.lock.active {
         if let Some(lock) = state.lock_surface(output) {
-            let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+            if draw_cursor
+                    && state.desktop.lock.gpui_active()
+                    && state.desktop.lock.last_input.elapsed().as_secs() < 30
+                    && bounds.to_f64().contains(state.cursor_location)
+                {
+                    let position = (state.cursor_location - bounds.loc.to_f64()).to_physical(scale);
+                    if let Ok(arrow) = MemoryRenderBufferRenderElement::from_buffer(
+                        renderer,
+                        position,
+                        &state.desktop.lock.arrow,
+                        None,
+                        None,
+                        None,
+                        Kind::Unspecified,
+                    ) {
+                        elements.push(MundaneRenderElement::from(arrow));
+                    }
+                }
+                let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
                 render_elements_from_surface_tree(
                     renderer,
                     &lock,
@@ -152,6 +170,33 @@ fn collect_scene(
                     Kind::Unspecified,
                 );
             elements.extend(surfaces.into_iter().map(MundaneRenderElement::from));
+            if state.desktop.lock.gpui_active() {
+                // Only the trusted wallpaper texture may appear between the opaque
+                // compositor mask and the admitted, transparent locker surface.
+                elements.push(
+                    SolidColorRenderElement::new(
+                        state.desktop.lock.shade.clone(),
+                        smithay::utils::Rectangle::from_size(bounds.size)
+                            .to_physical_precise_round(scale),
+                        CommitCounter::default(),
+                        Color32F::new(0., 0., 0., 0.54),
+                        Kind::Unspecified,
+                    )
+                    .into(),
+                );
+                elements.extend(
+                    state
+                        .wallpaper
+                        .elements(
+                            renderer,
+                            &state.animation,
+                            (bounds.size.w, bounds.size.h),
+                            scale,
+                        )
+                        .into_iter()
+                        .map(MundaneRenderElement::from),
+                );
+            }
         }
         let rect =
             smithay::utils::Rectangle::from_size(bounds.size).to_physical_precise_round(scale);

@@ -30,6 +30,8 @@ pub struct Lock {
     pub(crate) preparing_sleep: bool,
     pub active: bool,
     pub mask: Id,
+    pub shade: Id,
+    pub arrow: smithay::backend::renderer::element::memory::MemoryRenderBuffer,
     pub since: u64,
     pub covered: HashSet<Output>,
     confirmation: Option<SessionLocker>,
@@ -38,6 +40,9 @@ pub struct Lock {
     pub last_input: Instant,
 }
 impl Lock {
+    pub fn gpui_active(&self) -> bool {
+        self.gpui.is_some()
+    }
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
             manager: SessionLockManagerState::new::<State, _>(dh, |c| {
@@ -49,6 +54,8 @@ impl Lock {
             preparing_sleep: false,
             gpui: None,
             mask: Id::new(),
+            shade: Id::new(),
+            arrow: crate::cursor::build_cursor(),
             since: 0,
             covered: HashSet::new(),
             confirmation: None,
@@ -78,6 +85,7 @@ impl State {
         self.generation += 1;
         let l = &mut self.desktop.lock;
         l.active = true;
+        l.last_input = Instant::now();
         l.reported = false;
         l.since = self.generation;
         l.mask = Id::new();

@@ -8,7 +8,7 @@ use smithay::{
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{IsAlive, Serial, SERIAL_COUNTER},
-    wayland::seat::WaylandFocus,
+    wayland::{seat::WaylandFocus, text_input::TextInputSeat},
     xwayland::X11Surface,
 };
 use std::borrow::Cow;
@@ -54,7 +54,13 @@ impl KeyboardTarget<State> for KeyboardFocus {
         if let Some(x) = &self.x11 {
             KeyboardTarget::enter(x, seat, state, keys, serial)
         } else {
-            KeyboardTarget::enter(&self.surface, seat, state, keys, serial)
+            KeyboardTarget::enter(&self.surface, seat, state, keys, serial);
+            // Smithay has deactivated the old input method on keyboard enter.
+            // Protected fields receive the seat keyboard directly.
+            if state.desktop.lock.active || state.auth_surface() == Some(&self.surface) {
+                seat.text_input().leave();
+                seat.text_input().set_focus(None);
+            }
         }
     }
     fn leave(&self, seat: &Seat<State>, state: &mut State, serial: Serial) {

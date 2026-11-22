@@ -174,13 +174,37 @@ elif mode == "cast":
         5000,
         None,
     )
+elif mode in ("save", "save-many"):
+    options = {"current_folder": GLib.Variant("ay", os.fsencode(base) + b"\0")}
+    if mode == "save":
+        options["current_name"] = GLib.Variant("s", "example.txt")
+    else:
+        options["files"] = GLib.Variant("aay", [b"example.txt\0", b"second.txt\0"])
+    request(
+        "FileChooser",
+        "SaveFile" if mode == "save" else "SaveFiles",
+        "ss",
+        ("", "Portal save test"),
+        options,
+    )
 elif mode == "choose":
     request(
         "FileChooser",
         "OpenFile",
         "ss",
         ("", "Portal test file"),
-        {"current_folder": GLib.Variant("ay", os.fsencode(base) + b"\0")},
+        {
+            "current_folder": GLib.Variant("ay", os.fsencode(base) + b"\0"),
+            "filters": GLib.Variant("a(sa(us))", [("Text files", [(0, "*.txt")])]),
+        },
+    )
+elif mode == "ask":
+    request(
+        "OpenURI",
+        "OpenURI",
+        "ss",
+        ("", "mundane-portal-test://item/43"),
+        {"ask": GLib.Variant("b", True)},
     )
 elif mode == "open":
     request("OpenURI", "OpenURI", "ss", ("", "mundane-portal-test://item/42"), {})

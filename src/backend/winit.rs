@@ -255,13 +255,21 @@ impl State {
     /// relative pointer) backends share one handler.
     pub fn handle_input<B: InputBackend>(&mut self, event: InputEvent<B>) {
         self.generation += 1;
+        let wake = self.desktop.lock.gpui_active() && self.desktop.lock.last_input.elapsed().as_secs() >= 30;
         self.input_activity();
+        if wake {
+            self.sync_lock_presentation(false);
+        }
         match event {
             InputEvent::Keyboard { event } => {
                 let keyboard = self.seat.get_keyboard().unwrap();
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = event.time_msec();
                 let press = event.state() == KeyState::Pressed;
+                if wake && press {
+                    self.desktop.switcher_keys.insert(event.key_code().raw());
+                    return;
+                }
                 if self.desktop.lock.active || self.auth_surface().is_some() {
                     let surface = if self.desktop.lock.active {
                         self.lock_focus()
@@ -442,6 +450,7 @@ impl State {
                     )
                 };
                 self.cursor_location = pos;
+                self.sync_lock_presentation(false);
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = event.time_msec();
                 self.pointer_moved(pos, serial, time);
@@ -453,6 +462,7 @@ impl State {
             InputEvent::PointerMotion { event } => {
                 let pos = self.clamp_pointer(self.cursor_location + event.delta());
                 self.cursor_location = pos;
+                self.sync_lock_presentation(false);
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = event.time_msec();
                 self.pointer_moved(pos, serial, time);
@@ -463,6 +473,10 @@ impl State {
                 let time = event.time_msec();
                 let button = event.button_code();
                 let button_state = event.state();
+                if wake && button_state == ButtonState::Pressed {
+                    self.desktop.dismissed_buttons.insert(button);
+                    return;
+                }
                 let pointer = self.seat.get_pointer().unwrap();
                 let mods = self.seat.get_keyboard().unwrap().modifier_state();
                 if self.desktop.lock.active {

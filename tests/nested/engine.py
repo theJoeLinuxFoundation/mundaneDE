@@ -27,6 +27,11 @@ class TestEngine(IBus.Engine):
             return True
         return False
 
+    def do_candidate_clicked(self, index, button, state):
+        if self.composing and index in (0, 1):
+            self.commit_text(IBus.Text.new_from_string(("日本", "二")[index]))
+            self.do_reset()
+
     def do_reset(self):
         self.composing = False
         self.hide_preedit_text()

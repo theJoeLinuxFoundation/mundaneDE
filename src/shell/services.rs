@@ -45,42 +45,56 @@ pub fn globals(dh: &DisplayHandle, primary: &PrimarySelectionState) -> DataContr
     VirtualKeyboardManagerState::new::<State, _>(dh, |c| role(c) == Role::InputMethod);
     DataControlState::new::<State, _>(dh, Some(primary), |c| role(c) == Role::ClipboardManager)
 }
-pub struct Helper(Child);
+pub struct Helper {
+    child: Child,
+    role: Role,
+    program: std::ffi::OsString,
+}
 impl Drop for Helper {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
-pub fn launch(dh: &DisplayHandle, on_exit: &calloop::ping::Ping) -> anyhow::Result<Vec<Helper>> {
-    let mut children = Vec::new();
-    for (key, role) in [
-        ("MUNDANE_IBUS_PANEL", Role::InputMethod),
-        ("MUNDANE_CLIPBOARD_MANAGER", Role::ClipboardManager),
-    ] {
-        let Some(program) = std::env::var_os(key) else {
-            continue;
-        };
-        let (server, child) = UnixStream::pair()?;
-        dh.clone().insert_client(
-            server,
-            Arc::new(ClientState {
-                context: None,
-                role,
-                compositor_state: Default::default(),
-                on_exit: on_exit.clone(),
-            }),
-        )?;
+impl State {
+    fn launch_service(&self, program: &std::ffi::OsStr, role: Role) -> anyhow::Result<Child> {
         let mut cmd = Command::new(program);
-        if role == Role::InputMethod {
+        if role == Role::InputMethod && std::env::var_os("MUNDANE_IBUS_GPUI").is_none() {
             cmd.arg("--enable-wayland-im");
         }
-        cmd.stdin(Stdio::from(OwnedFd::from(child)))
-            .env("WAYLAND_SOCKET", "0")
-            .env("GDK_BACKEND", "wayland");
-        children.push(Helper(cmd.spawn()?));
+        cmd.env("GDK_BACKEND", "wayland");
+        self.trusted_child(role, cmd)
     }
-    Ok(children)
+    pub(crate) fn start_services(&mut self) -> anyhow::Result<()> {
+        for (key, role) in [
+            ("MUNDANE_IBUS_PANEL", Role::InputMethod),
+            ("MUNDANE_CLIPBOARD_MANAGER", Role::ClipboardManager),
+        ] {
+            if let Some(program) = std::env::var_os(key) {
+                let child = self.launch_service(&program, role)?;
+                self.services.push(Helper {
+                    program,
+                    role,
+                    child,
+                });
+            }
+        }
+        Ok(())
+    }
+    fn supervise_input_method(&mut self) {
+        // The standalone frontend exits if the per-user IBus daemon is still
+        // starting, or if it disappears. Reconnect with a new private client.
+        let Some((idx, program)) = self.services.iter_mut().enumerate().find_map(|(i, h)| {
+            (h.role == Role::InputMethod && matches!(h.child.try_wait(), Ok(Some(_))))
+                .then(|| (i, h.program.clone()))
+        }) else {
+            return;
+        };
+        match self.launch_service(&program, Role::InputMethod) {
+            Ok(child) => self.services[idx].child = child,
+            Err(e) => tracing::warn!(%e,"restart input method"),
+        }
+    }
 }
 
 impl DataControlHandler for State {
@@ -233,6 +247,7 @@ impl State {
                     if let Some(c) = &mut state.desktop.lock.child {
                         let _ = c.try_wait();
                     }
+                    state.supervise_input_method();
                     state.update_inhibitors();
                     if state.desktop.lock.active {
                         state.ensure_locker();

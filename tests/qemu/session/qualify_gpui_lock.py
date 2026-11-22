@@ -1,7 +1,9 @@
 """Exercise the GPUI lock on the virtual seat of a dedicated enforcing joe guest."""
 
 import argparse
+import functools
 import json
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -27,6 +29,7 @@ def qualify(run, output):
     )
     settings = {
         "org.gnome.desktop.interface color-scheme": "prefer-dark",
+        "org.gnome.desktop.interface enable-animations": "true",
         "org.gnome.desktop.a11y.interface high-contrast": "false",
         "org.gnome.desktop.a11y.applications screen-reader-enabled": "true",
     }
@@ -59,24 +62,72 @@ def qualify(run, output):
 
     mask = bytes.fromhex("0a121a")
     desktop = bytes.fromhex("2088df")
-    bg = bytes.fromhex("17201e")
+
+    @functools.cache
+    def wallpaper(width, height):
+        # Independent reference from the installed default artwork, outside the
+        # compositor. Bilinear texture sampling and JPEG decoders can round differently.
+        return subprocess.check_output(
+            [
+                "magick",
+                str(Path(__file__).resolve().parents[3] / "assets/afterlight.jpg"),
+                "-filter",
+                "triangle",
+                "-resize",
+                f"{width}x{height}^",
+                "-gravity",
+                "center",
+                "-extent",
+                f"{width}x{height}",
+                "-evaluate",
+                "multiply",
+                "0.46",
+                "-depth",
+                "8",
+                "rgb:-",
+            ]
+        )
+
+    def looks_locked(frame):
+        (w, h), p = frame
+        return (
+            p[:3] == mask
+            or max(abs(a - b) for a, b in zip(p[:3], wallpaper(w, h)[:3])) <= 3
+        )
 
     def protected(n, mask_only=False, frame=None):
         (width, height), p = frame if frame is not None else shot(n)
         if p[:3] == mask:
             assert p == mask * (width * height), "non-mask pixels on blanked head"
             return "mask"
-        assert p[:3] == bg and not mask_only, ("unexpected scanout", n, p[:3].hex())
-        # The complete GPUI view is a solid backdrop and one centered form.
-        assert desktop not in p
-        margin = max(0, (width - 480) // 2) * 3
-        row = width * 3
-        assert all(
-            p[y * row : y * row + margin] == bg * (margin // 3)
-            and p[(y + 1) * row - margin : (y + 1) * row] == bg * (margin // 3)
-            for y in range(height)
-        )
-        assert p.count(bytes.fromhex("222e2a")) > 12000
+        assert not mask_only and desktop * 8 not in p, ("unprotected output", n)
+        ref = wallpaper(width, height)
+        # Check the sides, top and bottom against the wallpaper, including the
+        # former taskbar and desktop icons. The central clock and form are the
+        # only admitted UI. A background app's solid colour is forbidden anywhere.
+        arrow_samples = 0
+        for y in range(9, height, 23):
+            for x in range(7, width, 23):
+                if abs(x - width / 2) < 195 and height * 0.18 < y < height * 0.92:
+                    continue
+                off = 3 * (y * width + x)
+                if (
+                    p[off : off + 3] in (bytes(3), bytes([255]) * 3)
+                    and max(
+                        abs(a - b) for a, b in zip(p[off : off + 3], ref[off : off + 3])
+                    )
+                    >= 12
+                ):
+                    arrow_samples += 1
+                    continue
+                assert (
+                    max(
+                        abs(a - b) for a, b in zip(p[off : off + 3], ref[off : off + 3])
+                    )
+                    < 12
+                ), ("unexpected pixels", n, x, y, p[off : off + 3], ref[off : off + 3])
+        # Our built-in 14×21 black-and-white arrow fits between adjacent probes.
+        assert arrow_samples <= 1, ("unexpected cursor pixels", n, arrow_samples)
         return "prompt"
 
     def password(keys):
@@ -148,6 +199,56 @@ def qualify(run, output):
             lambda: any("Password" in t for t in speech()[offset:]),
         )
         s.shot("locked")
+        assert s.tree().count("password text Password") == 1 and any(
+            "Keyboard ·" in row for row in s.tree()
+        )
+        g.move(0.96, 0.35)
+        wait(
+            "prompt follows pointer to second head",
+            lambda: (
+                bytes.fromhex("17201e") * 120 in shot(1)[1]
+                and bytes.fromhex("17201e") * 120 not in shot(0)[1]
+            ),
+        )
+        g.move(0.2, 0.35)
+        wait("prompt returns", lambda: bytes.fromhex("17201e") * 120 in shot(0)[1])
+        # Observe actual opacity on scanout, with and without the motion preference.
+        for reduced in (False, True):
+            s.pref("interface enable-animations", "false" if reduced else "true")
+            g.key("shift")
+            time.sleep(0.5)
+            x, y, w, h = map(int, s.widget("bounds", "Unlock").split())
+            pixel = 3 * ((y + h // 2) * 1920 + x + 12)
+
+            def ink(pixel=pixel):
+                return shot(0)[1][pixel : pixel + 3]
+
+            full = ink()
+            time.sleep(28)
+            colors = {full}
+            until = time.monotonic() + 4
+            while time.monotonic() < until:
+                colors.add(ink())
+            empty = ink()
+            assert full != empty, (x, y, w, h, full)
+            intermediate = [
+                c
+                for c in colors
+                if min(sum(abs(a - b) for a, b in zip(c, end)) for end in (full, empty))
+                > 12
+            ]
+            assert bool(intermediate) != reduced, (reduced, colors)
+            assert "password text Password" not in s.tree()
+            s.shot("clock")
+            if reduced:
+                g.move(0.25, 0.41)
+            else:
+                g.key("x")
+            wait(
+                "wake restores the protected field",
+                lambda: "password text Password" in s.tree(),
+            )
+        s.pref("interface enable-animations", "true")
         first = pid()
         print(
             "Locker memory:",
@@ -206,7 +307,7 @@ def qualify(run, output):
         plug(3, True)
         wait(
             "reconnected output admitted",
-            lambda: shot(2)[1][:3] == bg and protected(2) == "prompt",
+            lambda: looks_locked(shot(2)) and protected(2) == "prompt",
         )
         stop.set()
         sampler.join()
@@ -234,7 +335,7 @@ def qualify(run, output):
         def reacquired(n):
             frame = shot(n)
             pixels = frame[1]
-            if pixels[:3] in (bg, mask):
+            if looks_locked(frame):
                 return protected(n, frame=frame)
             if (
                 pixels in away_frames[n]
@@ -255,7 +356,7 @@ def qualify(run, output):
         wait("guest S3", lambda: g.qmp("query-status")["status"] == "suspended")
         g.qmp("system_wakeup")
         g.sync_console()
-        wait("resume", lambda: g.shell(hint) == "yes" and shot(0)[1][:3] in (bg, mask))
+        wait("resume", lambda: g.shell(hint) == "yes" and looks_locked(shot(0)))
         for n in range(3):
             wait("protected resume on head " + str(n), lambda n=n: reacquired(n))
         wait(
@@ -288,7 +389,7 @@ def qualify(run, output):
         timings = {}
         while len(timings) < 2 and time.monotonic() - start < 8:
             frame = shot(0)
-            if frame[1][:3] in (mask, bg):
+            if looks_locked(frame):
                 kind = protected(0, frame=frame)
                 timings.setdefault("covered", time.monotonic() - start)
                 if kind == "prompt":
@@ -305,19 +406,19 @@ def qualify(run, output):
             g.shell(f"grep -E '^(Pss|Rss):' /proc/{int(pid())}/smaps_rollup"),
             flush=True,
         )
+        g.move(0.1, 0.2)
         for appearance, scheme, contrast, backdrop in (
             ("light", "prefer-light", "false", "f8faf8"),
             ("contrast", "prefer-dark", "true", "000000"),
         ):
             s.pref("interface color-scheme", scheme)
             s.pref("a11y.interface high-contrast", contrast)
-            color = bytes.fromhex(backdrop)
             wait(
-                "live lock appearance " + appearance,
-                lambda backdrop=color: (
-                    shot(0)[1][:3] == backdrop and shot(1)[1][:3] == backdrop
-                ),
+                "active prompt appearance",
+                lambda backdrop=backdrop: bytes.fromhex(backdrop) * 80 in shot(0)[1],
             )
+            protected(0)
+            protected(1)
             s.shot("locked-" + appearance)
         password(("j", "o", "e", "ret"))
         wait(

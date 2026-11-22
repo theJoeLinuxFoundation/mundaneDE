@@ -14,6 +14,7 @@ mod layout;
 mod switcher;
 pub(crate) mod lock;
 mod gpui_lock;
+mod input_caret;
 pub(crate) mod menu;
 mod protocols;
 pub(crate) mod services;
