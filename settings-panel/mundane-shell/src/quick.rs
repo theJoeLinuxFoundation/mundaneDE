@@ -374,6 +374,26 @@ impl Render for Quick {
                 ));
             }
         }
+        let open = events.clone();
+        let history = format!("Notifications ({})", shell.notes.len());
+        let f = self.focus("history", cx);
+        body = body.child(reveal(
+            crate::view::shell_button(history.clone(), &f, theme, move |_, _| {
+                let _ = open.try_send(Event::Open(display, Page::History));
+            })
+            .px(tokens::space::MD)
+            .py(tokens::space::XS)
+            .child(history),
+            f,
+            &self.scroll,
+        ));
+        for (n, detail) in shell.upgrades.iter().enumerate() {
+            body = body.child(
+                mundane_ui::text_label(("deployment", n), detail.clone())
+                    .text_size(tokens::text::CAPTION)
+                    .child(detail.clone()),
+            );
+        }
         if let Some(err) = d.error {
             body = body.child(
                 mundane_ui::text_label("device-error", err.clone())

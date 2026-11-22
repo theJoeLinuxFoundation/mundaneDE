@@ -3151,14 +3151,16 @@ dependencies = [
  "gpui",
  "libc",
  "mundane-ui",
+ "nix",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
 name = "mundane-ui"
 version = "0.1.0"
-source = "git+https://github.com/theJoeLinuxFoundation/mundane-apps?rev=4c254b465f0f5955c4db9a151cc409c8bf0a56eb#4c254b465f0f5955c4db9a151cc409c8bf0a56eb"
+source = "git+https://github.com/theJoeLinuxFoundation/mundane-apps?rev=80eed70f87a44cd31743cef499b8d42df8f097d3#80eed70f87a44cd31743cef499b8d42df8f097d3"
 dependencies = [
  "accesskit",
  "gpui",

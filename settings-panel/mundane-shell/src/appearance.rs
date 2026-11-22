@@ -65,7 +65,7 @@ fn values(desktop: &gio::Settings, a11y: &gio::Settings) -> Groups {
         ),
     ])
 }
-pub fn register() -> anyhow::Result<(gio::Settings, gio::Settings)> {
+pub fn register(acquired: impl Fn() + 'static) -> anyhow::Result<(gio::Settings, gio::Settings)> {
     let bus = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)?;
     let desktop = gio::Settings::new(DESKTOP);
     let a11y = gio::Settings::new("org.gnome.desktop.a11y.interface");
@@ -131,8 +131,8 @@ pub fn register() -> anyhow::Result<(gio::Settings, gio::Settings)> {
         &bus,
         "org.freedesktop.impl.portal.desktop.mundane",
         gio::BusNameOwnerFlags::NONE,
-        |_, _| {},
-        |_, _| eprintln!("Settings portal bus name unavailable"),
+        move |_, _| acquired(),
+        |_, _| eprintln!("Desktop portal bus name unavailable"),
     );
     Ok((desktop, a11y))
 }

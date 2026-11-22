@@ -1,12 +1,17 @@
 //! Candidate GPUI shell. The compositor supplies both the Wayland connection and control socket.
 mod appearance;
 mod bluetooth;
+mod cast;
 mod catalog;
 mod choices;
 mod devices;
+mod feedback;
 mod launcher;
+mod notifications;
+mod portals;
 mod quick;
 mod tray;
+mod upgrades;
 mod view;
 
 use async_channel::{Receiver, Sender};
@@ -35,6 +40,8 @@ struct Task {
 #[derive(Clone, Default, Deserialize)]
 struct Message {
     open: Option<String>,
+    osd: Option<String>,
+    outputs: Option<Vec<String>>,
     #[serde(default)]
     dismiss_menu: bool,
     #[serde(default)]
@@ -56,6 +63,12 @@ struct Message {
 }
 #[derive(Clone)]
 enum Service {
+    NoteAction(u32, Option<String>),
+    LocalNotice(String, String),
+    Accept(u64, String, String, String),
+    Cancel(u64),
+    Stop(String),
+    Locked(bool),
     Pair(String, String),
     PairAnswer(u64, String),
     CancelPair,
@@ -67,6 +80,14 @@ enum Service {
 }
 #[derive(Clone)]
 enum Event {
+    Banner(notifications::Note, i32),
+    History(Vec<notifications::Note>),
+    HideBanner(Option<u32>),
+    Level(&'static str, u8, bool),
+    UpgradeDetails(Vec<String>),
+    Picker(portals::Picker),
+    PickerClosed(u64),
+    Shares(Vec<(String, String)>),
     Devices(devices::Devices),
     PairPrompt(Option<bluetooth::Prompt>),
     DeviceMessage(String),
@@ -89,6 +110,13 @@ enum Event {
     Quit,
 }
 struct Shell {
+    locked: bool,
+    outputs: Vec<String>,
+    picker: Option<portals::Picker>,
+    shares: Vec<(String, String)>,
+    notes: Vec<notifications::Note>,
+    upgrades: Vec<String>,
+    overlays: feedback::Overlays,
     devices: devices::Devices,
     device_tx: Sender<devices::Request>,
     pairing: Option<bluetooth::Prompt>,
@@ -114,13 +142,17 @@ struct Shell {
 impl Global for Shell {}
 
 fn services(
+    socket: Arc<UnixDatagram>,
     tx: Sender<Event>,
     rx: Receiver<Service>,
     device_tx: Sender<devices::Request>,
 ) -> anyhow::Result<()> {
     let context = glib::MainContext::new();
     context.with_thread_default(|| -> anyhow::Result<()> {
-        let _appearance = appearance::register()?;
+        let notes = notifications::Server::new(tx.clone())?;
+        let portal = portals::Portals::new(tx.clone(), socket)?;
+        let recovery = portal.clone();
+        let _appearance = appearance::register(move || recovery.recover_closed())?;
         let _devices = devices::watch(device_tx);
         let agent = bluetooth::Agent::new(tx.clone()).ok();
         let tray = tray::Tray::new(tx.clone())?;
@@ -168,6 +200,12 @@ fn services(
         context.spawn_local(async move {
             while let Ok(action) = rx.recv().await {
                 match action {
+                    Service::LocalNotice(t, b) => notes.local(t, b),
+                    Service::NoteAction(id, key) => notes.action(id, key),
+                    Service::Accept(seq, kind, id, label) => portal.accept(seq, &kind, &id, label),
+                    Service::Cancel(seq) => portal.cancel(seq),
+                    Service::Stop(path) => portal.close(&path),
+                    Service::Locked(v) => portal.locked(v),
                     Service::Pair(path, name) => {
                         let result = agent
                             .as_ref()
@@ -219,6 +257,13 @@ fn services(
 
 fn close_menu(cx: &mut App) {
     if let Some((_, page, window)) = cx.global_mut::<Shell>().menu.take() {
+        if let Page::Capture(id) = page {
+            let s = cx.global_mut::<Shell>();
+            if s.picker.as_ref().is_some_and(|p| p.serial == id) {
+                s.picker = None;
+                let _ = s.service.try_send(Service::Cancel(id));
+            }
+        }
         if page == Page::System {
             let s = cx.global_mut::<Shell>();
             let _ = s.device_tx.try_send(devices::Request::Visible(false));
@@ -278,6 +323,19 @@ fn display_bars(cx: &mut App) {
     }
 }
 
+// Wayland has no standard primary-output designation. The compositor positions
+// its primary at the desktop origin; fall back to the first live display.
+fn home_display(cx: &App) -> Option<std::rc::Rc<dyn gpui::PlatformDisplay>> {
+    let displays = cx.displays();
+    displays
+        .iter()
+        .find(|d| {
+            d.bounds()
+                .contains(&gpui::point(gpui::px(0.), gpui::px(0.)))
+        })
+        .cloned()
+        .or_else(|| displays.into_iter().next())
+}
 fn target(m: &Message, cx: &App) -> Option<DisplayId> {
     m.pointer
         .and_then(|[x, y]| {
@@ -286,10 +344,68 @@ fn target(m: &Message, cx: &App) -> Option<DisplayId> {
                 .find(|d| d.bounds().contains(&gpui::point(gpui::px(x), gpui::px(y))))
                 .map(|d| d.id())
         })
-        .or_else(|| cx.primary_display().map(|d| d.id()))
+        .or_else(|| home_display(cx).map(|d| d.id()))
 }
 fn handle(event: Event, cx: &mut App) {
     match event {
+        Event::History(v) => cx.global_mut::<Shell>().notes = v,
+        Event::Banner(n, ms) => {
+            feedback::show(feedback::Feedback::Banner(n), ms, cx);
+            return;
+        }
+        Event::HideBanner(id) => {
+            feedback::hide_banner(id, cx);
+            return;
+        }
+        Event::Level(label, level, muted) => {
+            feedback::show(feedback::Feedback::Level(label, level, muted), 1500, cx);
+            return;
+        }
+        Event::UpgradeDetails(v) => cx.global_mut::<Shell>().upgrades = v,
+        Event::Shares(v) => cx.global_mut::<Shell>().shares = v,
+        Event::Picker(p) => {
+            let id = p.serial;
+            if let Some(d) = home_display(cx).filter(|_| !cx.global::<Shell>().locked) {
+                close_menu(cx);
+                cx.global_mut::<Shell>().picker = Some(p);
+                let _ = cx.global::<Shell>().socket.send(b"list");
+                open_menu(d.id(), Page::Capture(id), None, cx);
+                if cx.global::<Shell>().menu.is_some() {
+                    return;
+                }
+            }
+            cx.global_mut::<Shell>().picker = None;
+            let _ = cx.global::<Shell>().service.try_send(Service::Cancel(id));
+            return;
+        }
+        Event::PickerClosed(id) => {
+            if cx
+                .global::<Shell>()
+                .picker
+                .as_ref()
+                .is_some_and(|p| p.serial == id)
+            {
+                cx.global_mut::<Shell>().picker = None;
+                close_menu(cx);
+            }
+            return;
+        }
+        Event::Service(Service::Accept(id, kind, source, label)) => {
+            if cx
+                .global::<Shell>()
+                .picker
+                .as_ref()
+                .is_some_and(|p| p.serial == id)
+            {
+                cx.global_mut::<Shell>().picker = None;
+                close_menu(cx);
+                let _ = cx
+                    .global::<Shell>()
+                    .service
+                    .try_send(Service::Accept(id, kind, source, label));
+            }
+            return;
+        }
         Event::Devices(d) => cx.global_mut::<Shell>().devices = d,
         Event::PairPrompt(p) => {
             if !matches!(cx.global::<Shell>().menu, Some((_, Page::System, _))) {
@@ -302,6 +418,23 @@ fn handle(event: Event, cx: &mut App) {
             if m.logout {
                 cx.quit();
                 return;
+            }
+            if let Some(locked) = m.locked {
+                cx.global_mut::<Shell>().locked = locked;
+                let _ = cx
+                    .global::<Shell>()
+                    .service
+                    .try_send(Service::Locked(locked));
+                if locked {
+                    feedback::hide_banner(None, cx);
+                    feedback::hide_level(cx);
+                }
+            }
+            if let Some(delta) = m.osd.take() {
+                let _ = cx
+                    .global::<Shell>()
+                    .device_tx
+                    .try_send(devices::Request::MediaKey(delta));
             }
             if m.escape_menu {
                 let window = cx.global::<Shell>().menu.as_ref().map(|(_, _, w)| *w);
@@ -336,9 +469,11 @@ fn handle(event: Event, cx: &mut App) {
                     (&a.workspace, &a.title, &a.id).cmp(&(&b.workspace, &b.title, &b.id))
                 });
                 let s = cx.global_mut::<Shell>();
-                if s.desk == desk && s.tasks == m.tasks {
+                let outputs = m.outputs.take().unwrap_or_default();
+                if s.desk == desk && s.tasks == m.tasks && s.outputs == outputs {
                     return;
                 }
+                s.outputs = outputs;
                 s.desk = desk;
                 s.tasks = m.tasks;
             } else {
@@ -457,6 +592,12 @@ fn handle(event: Event, cx: &mut App) {
 }
 
 fn main() -> anyhow::Result<()> {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    if let [flag, kind, id, cursor] = args.as_slice() {
+        if flag == "--cast-worker" {
+            return cast::worker(kind, id, cursor);
+        }
+    }
     anyhow::ensure!(
         std::env::var("WAYLAND_SOCKET").as_deref() == Ok("0"),
         "Start mundane-shell through mundane-session --gpui"
@@ -512,15 +653,24 @@ fn main() -> anyhow::Result<()> {
         cx.set_quit_mode(QuitMode::Explicit);
         let device_tx = devices::start(tx.clone());
         let watchers = device_tx.clone();
+        upgrades::start(tx.clone(), service.clone());
+        let service_socket = socket.clone();
         let worker = tx.clone();
         std::thread::spawn(move || {
-            if let Err(e) = services(worker.clone(), actions, watchers) {
+            if let Err(e) = services(service_socket, worker.clone(), actions, watchers) {
                 eprintln!("Shell services: {e:#}");
                 let _ = worker.try_send(Event::Quit);
             }
         });
         let _ = socket.send(b"watch-tasks");
         cx.set_global(Shell {
+            locked: true,
+            outputs: vec![],
+            picker: None,
+            shares: vec![],
+            notes: vec![],
+            upgrades: vec![],
+            overlays: Default::default(),
             devices: Default::default(),
             device_tx,
             pairing: None,
@@ -545,6 +695,11 @@ fn main() -> anyhow::Result<()> {
         });
         display_bars(cx);
         cx.observe_displays(|ev, cx| {
+            let _ = cx.global::<Shell>().socket.send(b"list");
+            if matches!(ev, DisplayEvent::Removed(_)) {
+                feedback::hide_banner(None, cx);
+                feedback::hide_level(cx);
+            }
             if let DisplayEvent::Removed(d) = ev {
                 if cx
                     .global::<Shell>()

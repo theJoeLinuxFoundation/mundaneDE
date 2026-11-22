@@ -311,6 +311,7 @@ impl State {
         // A replacement panel may subscribe during lock. Publish its snapshot on unlock.
         if op == "watch-tasks" {
             self.desktop.watch_tasks = true;
+            self.shell_message(&serde_json::json!({"locked": self.desktop.lock.active}));
         }
         if self.desktop.lock.active {
             return;
@@ -340,8 +341,9 @@ impl State {
                         task
                     })
                     .collect();
+                let outputs:Vec<_>=self.space.outputs().map(|output| output.name()).collect();
                 self.shell_message(
-                    &serde_json::json!({"workspace":self.desktop.workspace,"tasks":tasks}),
+                    &serde_json::json!({"workspace":self.desktop.workspace,"tasks":tasks,"outputs":outputs}),
                 );
             }
             "focus-taskbar" | "leave-taskbar"
@@ -507,7 +509,7 @@ impl State {
                     | "mundane-overview"
                     | "mundane-app-windows"
                     | "mundane-tray"
-                    | "mundane-power"
+                    | "mundane-power" | "mundane-capture" | "mundane-history"
             ) {
                 if self.desktop.menu_surface.is_none() {
                     self.desktop.previous_menu_focus =
@@ -543,6 +545,7 @@ impl State {
             [Layer::Bottom, Layer::Background]
         } {
             for l in map.layers_on(layer).rev() {
+                if l.namespace() == "mundane-osd" {continue;}
                 let loc = origin + map.layer_geometry(l)?.loc;
                 if let Some((s, off)) = l.surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)
                 {

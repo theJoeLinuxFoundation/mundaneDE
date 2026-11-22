@@ -97,7 +97,12 @@ fn app_control(
     let theme = Theme::current(cx);
     let icon = crate::view::contents(
         app.icon.clone(),
-        &app.name.chars().next().unwrap_or('?').to_string(),
+        &app.name,
+        if tile {
+            tokens::icon::EXTRA_LARGE
+        } else {
+            tokens::icon::LARGE
+        },
     );
     let screen_position = Rc::new(Cell::new(Point::default()));
     let bounds_pos = screen_position.clone();
@@ -160,67 +165,79 @@ fn app_control(
     let key = menu.clone();
     let a11y = menu.clone();
     let view = cx.weak_entity();
-    mundane_ui::panel_button(
-        app.name.clone(),
-        content,
-        focus,
-        PanelState {
-            active: focus.is_focused(window),
-            ..Default::default()
-        },
-        theme,
-        activate.clone(),
-    )
-    .when(tile, |el| {
-        el.w(rems(5.85)).px(tokens::space::XS).py(tokens::space::SM)
-    })
-    .when(!tile, |el| el.w_full())
-    .aria_description(if pinned {
-        "Pinned application"
+    let button = if tile {
+        mundane_ui::panel_button(
+            app.name.clone(),
+            content,
+            focus,
+            PanelState {
+                active: focus.is_focused(window),
+                ..Default::default()
+            },
+            theme,
+            activate.clone(),
+        )
+        .w(rems(5.85))
+        .px(tokens::space::XS)
+        .py(tokens::space::SM)
+        .on_a11y_action(AccessibleAction::Click, move |_, w, cx| activate(w, cx))
     } else {
-        "Application"
-    })
-    .on_a11y_action(AccessibleAction::Click, move |_, w, cx| activate(w, cx))
-    .on_a11y_action(AccessibleAction::ShowContextMenu, move |_, w, cx| {
-        let _ = view.update(cx, |v, cx| a11y(v, true, w, cx));
-    })
-    .on_mouse_down(
-        MouseButton::Right,
-        cx.listener(move |v, _, w, cx| right(v, false, w, cx)),
-    )
-    .on_key_down(cx.listener(move |v, e: &KeyDownEvent, w, cx| {
-        if ["menu", "xf86menukb", "xf86contextmenu"]
-            .iter()
-            .any(|key| e.keystroke.key.eq_ignore_ascii_case(key))
-            || (e.keystroke.key == "f10" && e.keystroke.modifiers.shift)
-        {
-            key(v, true, w, cx);
-            cx.stop_propagation();
-        }
-    }))
-    .on_mouse_down(
-        MouseButton::Left,
-        cx.listener(move |v, _, w, cx| {
-            let menu = menu.clone();
-            v.hold = Some(cx.spawn_in(w, async move |view, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(550))
-                    .await;
-                let _ = view.update_in(cx, |v, w, cx| menu(v, false, w, cx));
-            }));
-        }),
-    )
-    .on_mouse_up(
-        MouseButton::Left,
-        cx.listener(|v, _, _, _| {
-            v.hold.take();
-        }),
-    )
-    .on_hover(cx.listener(|v, over: &bool, _, _| {
-        if !over {
-            v.hold.take();
-        }
-    }))
+        mundane_ui::launcher_row(
+            app.name.clone(),
+            focus,
+            focus.is_focused(window),
+            true,
+            theme,
+            activate,
+        )
+        .child(content)
+    };
+    button
+        .aria_description(if pinned {
+            "Pinned application"
+        } else {
+            "Application"
+        })
+        .on_a11y_action(AccessibleAction::ShowContextMenu, move |_, w, cx| {
+            let _ = view.update(cx, |v, cx| a11y(v, true, w, cx));
+        })
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |v, _, w, cx| right(v, false, w, cx)),
+        )
+        .on_key_down(cx.listener(move |v, e: &KeyDownEvent, w, cx| {
+            if ["menu", "xf86menukb", "xf86contextmenu"]
+                .iter()
+                .any(|key| e.keystroke.key.eq_ignore_ascii_case(key))
+                || (e.keystroke.key == "f10" && e.keystroke.modifiers.shift)
+            {
+                key(v, true, w, cx);
+                cx.stop_propagation();
+            }
+        }))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |v, _, w, cx| {
+                let menu = menu.clone();
+                v.hold = Some(cx.spawn_in(w, async move |view, cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(550))
+                        .await;
+                    let _ = view.update_in(cx, |v, w, cx| menu(v, false, w, cx));
+                }));
+            }),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|v, _, _, _| {
+                v.hold.take();
+            }),
+        )
+        .on_hover(cx.listener(|v, over: &bool, _, _| {
+            if !over {
+                v.hold.take();
+            }
+        }))
 }
 
 pub(super) fn applications(

@@ -26,7 +26,7 @@ toml_edit = "0.22"
 gpui = { git = "https://github.com/zed-industries/zed", rev = "f4fe0be1f8c7974db07e01c5cd05bee0cf4eb8d9" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "f4fe0be1f8c7974db07e01c5cd05bee0cf4eb8d9", features = ["font-kit", "wayland", "x11"] }
 
-mundane-ui = { git = "https://github.com/theJoeLinuxFoundation/mundane-apps", rev = "4c254b465f0f5955c4db9a151cc409c8bf0a56eb" }
+mundane-ui = { git = "https://github.com/theJoeLinuxFoundation/mundane-apps", rev = "80eed70f87a44cd31743cef499b8d42df8f097d3" }
 
 mundane-settings-core = { path = "mundane-settings-core" }
 

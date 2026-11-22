@@ -54,6 +54,7 @@ pub enum Action {
 }
 #[derive(Clone)]
 pub enum Request {
+    MediaKey(String),
     Visible(bool),
     Changed,
     Apply(Action),
@@ -271,6 +272,60 @@ fn apply(
     }
     Ok(())
 }
+fn media_key(
+    key: &str,
+    bus: Option<&gio::DBusConnection>,
+    prefs: &gio::Settings,
+) -> Result<(&'static str, u8, bool)> {
+    let root = Path::new("/sys/class/backlight");
+    if matches!(key, "brightness-up" | "brightness-down") {
+        let b = read_backlight(root).ok_or_else(|| anyhow!("No backlight"))?;
+        let value = if key == "brightness-up" {
+            (b.percent + 5).min(100)
+        } else {
+            b.percent.saturating_sub(5)
+        };
+        apply(
+            Action::Brightness(value),
+            &Devices {
+                brightness: Some(b),
+                ..Default::default()
+            },
+            bus,
+            prefs,
+        )?;
+        return Ok((
+            "Brightness",
+            read_backlight(root)
+                .ok_or_else(|| anyhow!("Backlight disconnected"))?
+                .percent as u8,
+            false,
+        ));
+    }
+    match key {
+        "mute" => {
+            run("wpctl", &["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])?;
+        }
+        "5%+" | "5%-" => {
+            run(
+                "wpctl",
+                &["set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@", key],
+            )?;
+        }
+        _ => anyhow::bail!("Unknown media key"),
+    }
+    let v = run("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"])?;
+    let level = v
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| anyhow!("Missing sink level"))?
+        .parse::<f64>()?;
+    Ok((
+        "Volume",
+        (level * 100.).round().clamp(0., 100.) as u8,
+        v.contains("[MUTED]"),
+    ))
+}
 fn audio_monitor(tx: Sender<Request>) -> Option<Child> {
     use std::os::unix::process::CommandExt;
     let mut cmd = Command::new("pactl");
@@ -350,6 +405,15 @@ fn worker(rx: Receiver<Request>, tx: Sender<Request>, events: Sender<Event>) {
                             let _ = c.wait();
                         }
                     }
+                }
+                Request::MediaKey(key) => {
+                    match media_key(&key, bus.as_ref(), &prefs) {
+                        Ok((label, level, muted)) => {
+                            let _ = events.try_send(Event::Level(label, level, muted));
+                        }
+                        Err(e) => eprintln!("Media key: {e:#}"),
+                    }
+                    dirty = true;
                 }
                 Request::Changed => dirty = true,
                 Request::Apply(a) => {

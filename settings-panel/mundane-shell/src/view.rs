@@ -16,6 +16,8 @@ pub enum Page {
     Group(String),
     Tray(String, Vec<i32>),
     Switcher,
+    History,
+    Capture(u64),
 }
 impl Page {
     fn namespace(&self) -> &'static str {
@@ -26,6 +28,8 @@ impl Page {
             Self::System => "mundane-system",
             Self::Group(_) => "mundane-app-windows",
             Self::Tray(..) => "mundane-tray",
+            Self::History => "mundane-history",
+            Self::Capture(_) => "mundane-capture",
             Self::Switcher => "mundane-switcher",
         }
     }
@@ -47,6 +51,8 @@ impl Page {
                 .find(|i| i.key == *k)
                 .map(|i| i.title.as_str())
                 .unwrap_or("Tray menu"),
+            Self::History => "Notifications",
+            Self::Capture(_) => "Screen capture",
             Self::Switcher => "Switch windows",
         }
         .to_string()
@@ -57,6 +63,7 @@ pub struct Surface {
     pub(super) hold: Option<Task<()>>,
     page: Page,
     quick: Option<Entity<crate::quick::Quick>>,
+    history: Option<mundane_ui::NotificationHistory>,
     display: DisplayId,
     pub(super) field: Option<Entity<TextField>>,
     pub(super) focus: HashMap<String, FocusHandle>,
@@ -105,7 +112,10 @@ pub fn open(
     let scale = cx.global::<Shell>().text_scale;
     let bar = page == Page::Bar;
     let preview = page == Page::Switcher;
-    let right = matches!(page, Page::Tray(..) | Page::System | Page::Workspaces);
+    let right = matches!(
+        page,
+        Page::Tray(..) | Page::System | Page::Workspaces | Page::History
+    );
     let width = if bar {
         f32::from(bounds.size.width)
     } else {
@@ -132,7 +142,9 @@ pub fn open(
             1.,
             scale
                 * match page {
-                    Page::System => 405.,
+                    Page::System => 435.,
+                    Page::History => 495.,
+                    Page::Capture(_) => 390.,
                     Page::Switcher => 85. + (cx.global::<Shell>().switcher.len() as f32) * 27.,
                     Page::Group(_) | Page::Tray(..) => 232.,
                     Page::Workspaces => {
@@ -250,6 +262,8 @@ pub fn open(
                         menu
                     });
                 Surface {
+                    history: (page == Page::History)
+                        .then(|| mundane_ui::NotificationHistory::new(cx)),
                     quick: (page == Page::System)
                         .then(|| cx.new(|cx| crate::quick::Quick::new(display, cx))),
                     page,
@@ -378,12 +392,14 @@ impl Controls<'_> {
         }
     }
 }
-pub(super) fn contents(icon: Option<PathBuf>, name: &str) -> AnyElement {
-    if let Some(path) = icon {
-        img(path).size(tokens::icon::LARGE).into_any_element()
-    } else {
-        div().child(name.to_owned()).into_any_element()
-    }
+pub(super) fn contents(icon: Option<PathBuf>, name: &str, size: Rems) -> AnyElement {
+    let artwork = match icon {
+        Some(path) => img(path).size(size).into_any_element(),
+        None => div()
+            .child(name.chars().next().unwrap_or('?').to_string())
+            .into_any_element(),
+    };
+    mundane_ui::icon_slot(size, artwork).into_any_element()
 }
 impl Render for Surface {
     fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -410,6 +426,7 @@ impl Render for Surface {
         let theme = Theme::current(cx);
         let tx = s.events.clone();
         let display = self.display;
+        let surface_title = self.page.title(s);
         let mut controls = Controls {
             first: None,
             focus: &mut self.focus,
@@ -466,7 +483,7 @@ impl Render for Surface {
                     let b = controls.panel(
                         id,
                         &a.name,
-                        contents(a.icon.clone(), &a.name),
+                        contents(a.icon.clone(), &a.name, tokens::icon::EXTRA_LARGE),
                         event,
                         PanelState {
                             running: !windows.is_empty(),
@@ -496,6 +513,7 @@ impl Render for Surface {
                                         .find(|a| a.owns(&t.app))
                                         .and_then(|a| a.icon.clone()),
                                     name,
+                                    tokens::icon::EXTRA_LARGE,
                                 ),
                                 Event::Command(format!("activate {}", t.id)),
                                 PanelState {
@@ -546,6 +564,25 @@ impl Render for Surface {
                         let _ = scroll.try_send(Event::Command(format!("workspace {n}")));
                     }
                 }));
+                for (path, source) in &s.shares {
+                    let label = format!("Stop sharing {source}");
+                    root = root.child(
+                        controls
+                            .panel(
+                                path,
+                                &label,
+                                label.clone(),
+                                Event::Service(Service::Stop(path.clone())),
+                                PanelState {
+                                    active: true,
+                                    ..Default::default()
+                                },
+                                cx,
+                            )
+                            .max_w(rems(18.))
+                            .overflow_hidden(),
+                    );
+                }
                 for i in &s.tray {
                     let menu = Event::Open(display, Page::Tray(i.key.clone(), vec![0]));
                     let action = if i.is_menu && !i.menu.is_empty() {
@@ -560,7 +597,7 @@ impl Render for Surface {
                             .panel(
                                 &i.key,
                                 &i.title,
-                                contents(i.icon.clone(), &i.title),
+                                contents(i.icon.clone(), &i.title, tokens::icon::LARGE),
                                 action,
                                 PanelState::default(),
                                 cx,
@@ -608,6 +645,7 @@ impl Render for Surface {
                     .as_ref()
                     .map(|f| f.read(cx).text().to_owned())
                     .unwrap_or_default();
+                let mut footer = None;
                 let mut list = div()
                     .id("choices")
                     .track_scroll(&self.scroll)
@@ -746,12 +784,100 @@ impl Render for Surface {
                             mundane_ui::text_label("selection", caption.clone()).child(caption),
                         );
                     }
+                    Page::History => {
+                        let history = self.history.as_mut().unwrap();
+                        let notices = s.notes.iter().map(|n| n.card()).collect();
+                        history.replace(notices, w, cx);
+                        if self.initial {
+                            history.focus_handle().focus(w, cx);
+                            self.initial = false;
+                        }
+                        list = list.child(
+                            history
+                                .render("Notification history", theme, crate::feedback::action)
+                                .flex_1(),
+                        );
+                    }
+                    Page::Capture(serial) => {
+                        let cancel = controls
+                            .button("cancel", "Cancel", Event::Dismiss, cx)
+                            .child("Cancel");
+                        if let Some(p) = s.picker.as_ref().filter(|p| p.serial == *serial) {
+                            let app = if p.app.is_empty() {
+                                "An application"
+                            } else {
+                                &p.app
+                            };
+                            let title = format!(
+                                "{app} wants {}.",
+                                if p.share {
+                                    "to share your screen"
+                                } else {
+                                    "a screenshot"
+                                }
+                            );
+                            list = list.child(
+                                mundane_ui::text_label("request", title.clone()).child(title),
+                            );
+                            let verb = if p.share {
+                                "Share"
+                            } else {
+                                "Take screenshot of"
+                            };
+                            let outputs = s
+                                .outputs
+                                .iter()
+                                .filter(|_| p.types & 1 != 0)
+                                .map(|o| ("output", o, o));
+                            let windows = s.tasks.iter().filter(|_| p.types & 2 != 0).map(|t| {
+                                (
+                                    "window",
+                                    &t.id,
+                                    if t.title.is_empty() { &t.app } else { &t.title },
+                                )
+                            });
+                            let mut group = "";
+                            for (kind, id, label) in outputs.chain(windows) {
+                                if kind != group {
+                                    group = kind;
+                                    let caption = if kind == "output" {
+                                        "Displays"
+                                    } else {
+                                        "Windows"
+                                    };
+                                    list = list.child(
+                                        mundane_ui::text_label(kind, caption)
+                                            .mt(tokens::space::SM)
+                                            .text_size(tokens::text::CAPTION)
+                                            .child(caption),
+                                    );
+                                }
+                                let name = format!("{verb} {label}");
+                                list = list.child(
+                                    controls
+                                        .button(
+                                            &format!("{kind}:{id}"),
+                                            &name,
+                                            Event::Service(Service::Accept(
+                                                *serial,
+                                                kind.into(),
+                                                id.clone(),
+                                                label.clone(),
+                                            )),
+                                            cx,
+                                        )
+                                        .child(name),
+                                );
+                            }
+                        }
+                        footer = Some(cancel);
+                    }
                     Page::System => {
                         list = list.child(self.quick.as_ref().unwrap().clone());
                     }
                     Page::Bar => unreachable!(),
                 }
-                root = root.child(list);
+                root = root.child(list).children(footer);
                 if *page == Page::Start {
                     root = root.child(
                         controls
@@ -766,7 +892,7 @@ impl Render for Surface {
                 }
             }
         }
-        let surface_title = self.page.title(s);
+
         if self.initial {
             if let Some(f) = &self.field {
                 w.focus(&f.read(cx).focus_handle(cx), cx);

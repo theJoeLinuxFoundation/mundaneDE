@@ -334,6 +334,9 @@ impl State {
                             let delta = match sym {
                                 keysyms::KEY_XF86AudioRaiseVolume => Some("5%+"),
                                 keysyms::KEY_XF86AudioLowerVolume => Some("5%-"),
+                                keysyms::KEY_XF86AudioMute if state.desktop.watch_tasks => Some("mute"),
+                                keysyms::KEY_XF86MonBrightnessUp if state.desktop.watch_tasks => Some("brightness-up"),
+                                keysyms::KEY_XF86MonBrightnessDown if state.desktop.watch_tasks => Some("brightness-down"),
                                 _ => None,
                             };
                             if let Some(d) = delta {
