@@ -109,13 +109,16 @@ nix-build -E 'with import <nixpkgs> {}; callPackage ./settings-panel {}'
 
 ## Bumping the GPUI pin
 
-GPUI is currently pinned to **Zed `v1.2.7`** (commit `deb48ceb47125223df73902d1c3b72f2f442222b`, tagged 2026-05-19). When bumping:
+Settings pins Zed `f4fe0be1f8c7974db07e01c5cd05bee0cf4eb8d9`, the upstream
+AccessKit revision selected with mundane-apps and gpui-shades. The existing
+`gpui_platform::application()` constructor uses the Linux bridge. Settings
+control semantics and screen-reader acceptance belong to [milestone 7](../docs/plan.md#7-share-settings-appearance-and-accessibility).
 
-1. Edit `settings-panel/Cargo.toml` — change `rev = "..."` on the `gpui` workspace dep.
-2. `cargo update -p gpui` to refresh `Cargo.lock`.
-3. Set `cargoLock.outputHashes` entry to `lib.fakeHash`.
-4. Repeat the Nix build above — copy the new hash from the error message.
-5. Expect API breakage in `mundane-settings/src/{app,sidebar,pages}.rs`.
+1. Set both `gpui` and `gpui_platform` in the workspace manifest to the agreed full revision. Preserve their platform features.
+2. From `settings-panel/`, refresh and review `Cargo.lock`. The AccessKit bump needed a workspace `cargo update` to resolve the futures and WebAssembly dependencies together.
+3. Run `cargo metadata --locked --format-version 1`. Check that each GPUI package name resolves to one package ID and that every GPUI Git source ends in the selected commit.
+4. Run `cargo build --locked --workspace --all-targets` and `cargo test --locked --workspace` with private test state.
+5. Update one `cargoLock.outputHashes` entry per distinct locked Git revision in `default.nix`. For a changed source set its hash to `lib.fakeHash`, run the Nix build above and replace the placeholder with the reported recursive hash. Repeat until the build passes and commit the manifest, lockfile and hashes together.
 
 ## How to add a new settings page
 

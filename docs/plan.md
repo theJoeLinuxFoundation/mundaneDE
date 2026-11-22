@@ -295,7 +295,8 @@ spacing, fonts, keyboard actions and a sample settings row with a labelled
 control. Probe AT-SPI on that control immediately. Once the suite publishes
 the crate and the sample, pin `mundane-ui` by full git revision in the panel
 workspace and commit the lockfile. Keep GPUI and gpui_platform on Zed
-`deb48ceb47125223df73902d1c3b72f2f442222b` in both repositories. Check
+`f4fe0be1f8c7974db07e01c5cd05bee0cf4eb8d9`, the AccessKit revision
+selected with mundane-apps and gpui-shades. Check
 Cargo's resolved graph for a single GPUI source and run the shared sample on
 Wayland on each pin update. The suite owns widgets and `mundane-services`
 client adapters. Settings owns its data model and operations. At the Files
@@ -315,9 +316,13 @@ frame. [Portal appearance settings](https://flatpak.github.io/xdg-desktop-portal
 
 Build in keyboard traversal, visible focus, labelled controls, roles, values
 and accessible actions for the launcher, notifications, menus, Settings and
-locker. Expose the shell and GPUI accessibility tree on AT-SPI and check GTK's
-existing tree alongside it. If the pinned GPUI Linux platform lacks the bridge
-for a field or dialog, deliver it with the suite and repeat the Orca test.
+locker. Use the pinned Linux AccessKit bridge and the suite’s shared
+`mundane-ui` control contract. Give controls stable identities independent
+of their labels. Expose toggle states and range values/actions, scope dialog
+focus and restore it on dismissal. Route accessible and keyboard activation
+through the same command. Test editable text, caret and selection through
+AT-SPI, including IME and masked values. Inspect the live GTK and GPUI trees
+on private buses and check Orca’s speech for a Settings toggle. [Shared control contract and release tests](https://github.com/theJoeLinuxFoundation/gpui-shades/blob/52a66ecacb0ed42285565ebc70e7e0e038ce20ae/docs/linux-accessibility.md#shared-control-contract-for-mundane-ui)
 Provide a keyboard path to enable accessibility at login and retain it after
 lock and logout.
 
