@@ -1,12 +1,15 @@
 """Two monitors with distinct upper and lower colours distinguish source and orientation."""
 
+import signal
+
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk, Gdk, GLib
+from gi.repository import Gdk, GLib, Gtk
 
 Gtk.init()
 windows = []
+alternate = False
 for m in Gdk.Display.get_default().get_monitors():
     first = m.get_connector() == "Virtual-1"
     w = Gtk.Window(title="Pattern " + m.get_connector())
@@ -16,6 +19,8 @@ for m in Gdk.Display.get_default().get_monitors():
         for n, c in enumerate(
             ((0.8, 0.1, 0.1), (0.55, 0.1, 0.1))
             if first
+            else ((0.9, 0.8, 0.1), (0.7, 0.4, 0.2))
+            if alternate
             else ((0.1, 0.7, 0.2), (0.1, 0.3, 0.8))
         ):
             cr.set_source_rgb(*c)
@@ -27,4 +32,15 @@ for m in Gdk.Display.get_default().get_monitors():
     w.present()
     w.fullscreen_on_monitor(m)
     windows.append(w)
+
+
+def flip():
+    global alternate
+    alternate = not alternate
+    for window in windows:
+        window.get_child().queue_draw()
+    return GLib.SOURCE_CONTINUE
+
+
+GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, flip)
 GLib.MainLoop().run()

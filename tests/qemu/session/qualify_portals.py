@@ -1,16 +1,20 @@
 """Qualify the desktop portals on a dedicated, headless try-mundane guest."""
 
 import argparse
-from pathlib import Path
 import re
 import shlex
 import shutil
+import subprocess
 import time
+from pathlib import Path
 
 from guest import Guest
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("run", type=Path)
+parser.add_argument(
+    "--gpui-screenshots", type=Path, help="test the GPUI preview and save its scanouts"
+)
 args = parser.parse_args()
 g = Guest(args.run)
 here = Path(__file__).resolve().parent
@@ -66,6 +70,15 @@ def force_output(on):
     )
 
 
+def shot(name):
+    if args.gpui_screenshots:
+        args.gpui_screenshots.mkdir(exist_ok=True, parents=True)
+        image = g.screen(name)
+        assert image.startswith(b"P6\n1920 1080\n255\n")
+        with (args.gpui_screenshots / (name + ".png")).open("wb") as output:
+            subprocess.run(["pnmtopng"], input=image, stdout=output, check=True)
+
+
 def colors(name, head):
     path = g.run / (name + ".ppm")
     g.qmp("screendump", device="gpu", head=head, filename=str(path))
@@ -89,6 +102,7 @@ def near(actual, expected):
 
 green = ["19b333", "194ccc"]
 red = ["cc1919", "8c1919"]
+yellow = ["e6cc19", "b36633"]
 
 
 def has_video_node():
@@ -119,19 +133,23 @@ def firefox():
     wait("desktop picker", lambda: button("Share Virtual-2"))
 
 
-def shared(source="Virtual-2", expected=green):
-    click("Share " + source)
+def received_pixels(expected, after=0):
 
     def received():
         for top, bottom in re.findall(
-            r"FIREFOX pixels ([0-9,]+) ([0-9,]+)", content("web.log")
+            r"FIREFOX pixels ([0-9,]+) ([0-9,]+)", content("web.log")[after:]
         ):
             if near(
                 [bytes(map(int, c.split(","))).hex() for c in (top, bottom)], expected
             ):
                 return True
 
-    wait("Firefox received selected monitor's pixels", received)
+    wait("Firefox received selected pixels", received)
+
+
+def shared(source="Virtual-2", expected=green):
+    click("Share " + source)
+    received_pixels(expected)
     assert has_video_node()
     wait("visible sharing control", lambda: button("Stop sharing " + source))
 
@@ -152,13 +170,21 @@ def setup():
     cmd = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
     assert cmd[cmd.index(b"-display") + 1] == b"none"
     assert g.shell("cat /sys/kernel/security/joe/enforce") == "1"
+    if args.gpui_screenshots:
+        wait("GPUI login", lambda: g.shell("pgrep -u joe -x mundane-shell || :"))
+        joe(
+            "busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true"
+        )
     for name in (
         "org.freedesktop.portal.Desktop",
         "org.freedesktop.impl.portal.desktop.gtk",
         "org.freedesktop.impl.portal.desktop.mundane",
     ):
         wait(
-            name, lambda: name in joe("busctl --user --acquired --no-pager --full list")
+            name,
+            lambda name=name: (
+                name in joe("busctl --user --acquired --no-pager --full list")
+            ),
         )
     assert "org.freedesktop.impl.portal.desktop.gtk" in g.shell(
         "journalctl -b --no-pager -g org.freedesktop.impl.portal.desktop.gtk"
@@ -180,8 +206,39 @@ def setup():
     )
 
 
+def appearance_after_restart():
+    read = "gdbus call --session --dest org.freedesktop.portal.Desktop --object-path /org/freedesktop/portal/desktop --method org.freedesktop.portal.Settings.Read org.freedesktop.appearance color-scheme"
+    wait("appearance service after restart", lambda: "uint32" in joe(read + " || :"))
+    setting = "org.gnome.desktop.interface color-scheme"
+    original = joe("gsettings get " + setting)
+    value = "prefer-light" if "prefer-dark" in original else "prefer-dark"
+    monitor = int(
+        joe(
+            f"gdbus monitor --session --dest org.freedesktop.portal.Desktop --object-path /org/freedesktop/portal/desktop >{work}/appearance.log 2>&1 </dev/null & echo $!"
+        )
+    )
+    try:
+        wait(
+            "appearance signal listener",
+            lambda: "owned by" in content("appearance.log"),
+        )
+        joe(f"gsettings set {setting} {value}")
+        wait(
+            "updated appearance signal",
+            lambda: (
+                "SettingChanged ('org.freedesktop.appearance', 'color-scheme'"
+                in content("appearance.log")
+            ),
+        )
+        assert "uint32 " + ("2" if value == "prefer-light" else "1") in joe(read)
+    finally:
+        joe(f"gsettings set {setting} {original}; kill {monitor} || :")
+
+
 def captures():
     launch("client", "shot", "screenshot")
+    wait("screenshot picker", lambda: button("Take screenshot of Virtual-2"))
+    shot("screenshot-consent")
     click("Take screenshot of Virtual-2")
     logged("shot", "IMAGE")
     assert content("shot.log").split()[-2:] == colors("portal-output", 1)
@@ -223,22 +280,52 @@ def captures():
         "Firefox cancellation, occluded window capture and window-close teardown passed",
         flush=True,
     )
-    for action in ("stop", "browser-exit", "lock", "unplug"):
+    cases = ["stop", "browser-exit", "lock", "unplug"]
+    if args.gpui_screenshots:
+        cases[1:1] = ["shell-exit", "frontend-exit"]
+    for action in cases:
         firefox()
+        if action == "stop":
+            shot("share-consent")
         shared()
+        if args.gpui_screenshots:
+            wait(
+                "Stop on both taskbars",
+                lambda: widgets().count("button Stop sharing Virtual-2") == 2,
+            )
+        if action == "stop":
+            shot("active-share")
+        if action in ("shell-exit", "frontend-exit"):
+            # Prove the browser follows fresh monitor damage before revocation.
+            flip = f"kill -USR1 $(cat {work}/patterns.pid)"
+            start = len(content("web.log"))
+            joe(flip)
+            received_pixels(yellow, start)
+            start = len(content("web.log"))
+            joe(flip)
+            received_pixels(green, start)
         if action == "browser-exit":
             quit_browser()
         elif action == "stop":
             click("Stop sharing Virtual-2")
+        elif action == "shell-exit":
+            pid = int(g.shell("pgrep -u joe -f '^/usr/local/bin/mundane-shell$'"))
+            g.shell(f"kill -KILL {pid}")
+        elif action == "frontend-exit":
+            joe("systemctl --user restart xdg-desktop-portal.service")
         elif action == "unplug":
             force_output(False)
         else:
             g.key("meta_l", "l")
-        if action != "browser-exit":
+        if action not in ("browser-exit", "frontend-exit"):
             logged("web", "FIREFOX ended")
         if action == "lock":
-            assert (
-                g.shell(f"loginctl show-session {sid} -p LockedHint --value") == "yes"
+            wait(
+                "locker has covered the seat",
+                lambda: (
+                    g.shell(f"loginctl show-session {sid} -p LockedHint --value")
+                    == "yes"
+                ),
             )
             for line in content("web.log").splitlines():
                 if line.startswith("FIREFOX pixels "):
@@ -257,6 +344,20 @@ def captures():
                 ),
             )
         clean_stream()
+        if action in ("frontend-exit", "shell-exit"):
+            start = len(content("web.log"))
+            joe(flip)
+            wait(
+                "changed source after revocation",
+                lambda: near(colors("revoked-output", 1), yellow),
+            )
+            appearance_after_restart()
+            assert "FIREFOX pixels" not in content("web.log")[start:]
+            joe(flip)
+            wait(
+                "original source restored",
+                lambda: near(colors("restored-output", 1), green),
+            )
         if action != "browser-exit":
             quit_browser()
         print("Firefox PipeWire pixels and " + action + " teardown passed", flush=True)
@@ -300,4 +401,5 @@ setup()
 sid = g.shell("loginctl show-seat seat0 -p ActiveSession --value")
 captures()
 gtk_portals()
+force_output(False)
 joe(f"kill -TERM $(cat {work}/patterns.pid)")

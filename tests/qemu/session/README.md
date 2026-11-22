@@ -237,8 +237,7 @@ and records 20 warm logins, idle CPU, PSS, clock updates and redraws.
 
 Use the headless GPUI preview guest prepared above. Build the real Terminal
 and motion probe from the same mundane-apps revision as the desktop. In this
-example `suite` points to a checkout of
-`4c254b465f0f5955c4db9a151cc409c8bf0a56eb`. Its build output stays in
+example `suite` points to the mundane-apps revision in `settings-panel/Cargo.toml`. Its build output stays in
 the test run directory.
 
 ```sh
@@ -257,3 +256,17 @@ backlight mount. It restores the shell and logs in again. Use a dedicated
 test overlay. The remaining checks drive native Settings forms, observe live
 appearance in GTK, Terminal and the taskbar, and record Orca’s speech. Follow
 with the parity, menu, multi-output and budget drivers above.
+
+
+### GPUI shell step 3
+
+Prepare the headless GPUI preview as in step 1 and install the wlr and grim versions from the portal test above. Use a dedicated overlay for each driver or start each with a fresh GDM login. The feedback driver temporarily interposes a dave status fixture for the supervised shell and restores the executable when finished.
+
+```sh
+python3 "$driver/qualify_gpui_feedback.py" "$run" "$run/screenshots"
+python3 "$driver/qualify_portals.py" "$portal_run" --gpui-screenshots "$portal_run/screenshots"
+```
+
+The feedback driver checks notification ownership, actions, expiration, bounded history, Do Not Disturb, typing through a volume OSD and persistent dave notice IDs. The step 2 laptop and Orca cases also check a brightness key on a virtual keyboard and speech for a notification in history. Use mundane-apps at the desktop’s pin for the live Terminal test.
+
+The portal driver compares an occluded window and a second monitor against the pixels delivered through the public portal. It checks cancellation, Stop on both taskbars, window close, browser exit, hot-unplug, lock and loss of either service. It changes the monitor pattern on a live stream and again after revocation, checks the PipeWire graph and worker exit, and observes an appearance change through the recovered frontend. It also opens and cancels a GTK file chooser, follows an associated URI and invokes a notification action. The budget driver measures the idle session with all three backends registered.

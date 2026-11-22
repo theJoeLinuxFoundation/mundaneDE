@@ -29,6 +29,7 @@ class Session:
         output.mkdir(parents=True, exist_ok=True)
         for path in [
             HERE / "device_fixture.py",
+            HERE / "brightness_key.py",
             HERE / "shell_widgets.py",
             *(HERE / "accessibility").glob("*.py"),
         ]:
@@ -136,6 +137,21 @@ def launcher(s):
         lambda: s.widget("description", "Files", "Start menu") == "Application",
     )
     s.key("esc")
+    s.key("meta_l", "spc")
+    for letter in "arithmetic":
+        s.key(letter)
+    wait(
+        "flat search result",
+        lambda: (
+            "button Calculator" in s.widget("list", frame="Start menu").splitlines()
+        ),
+    )
+    s.widget("click", "Calculator", "Start menu")
+    wait(
+        "flat row activated through AT-SPI",
+        lambda: "frame Calculator" in s.tree() and "frame Start menu" not in s.tree(),
+    )
+    s.key("meta_l", "q")
     s.joe("gsettings reset org.joelinux.mundane.shell favorite-apps")
     print(
         "Pinned grid, full list, right click, long press, Menu key and focus restoration passed.",
@@ -301,6 +317,15 @@ def laptop(s):
             "logind native backlight units",
             lambda: "brightness 104" in g.shell(f"cat {FIX}/bus/events || :"),
         )
+        # A laptop media key changes the virtual backlight through logind.
+        g.shell("modprobe uinput")
+        # Pass this guest device only to the unprivileged key fixture.
+        g.shell(
+            f"su joe -s /bin/sh -c 'python3 {FIX}/brightness_key.py up' 3<>/dev/uinput"
+        )
+        wait("brightness key feedback", lambda: "frame Brightness" in s.tree())
+        assert "brightness 124" in g.shell(f"cat {FIX}/bus/events")
+        wait("brightness OSD expired", lambda: "frame Brightness" not in s.tree())
         s.click("Devices and connections")
         for action, event in [("Cancel pairing", "cancelled"), ("Confirm", "paired")]:
             wait(
@@ -457,6 +482,27 @@ def appearance_and_speech(s, suite):
         offset = len(spoken())
         s.key("meta_l", "s")
         hear(offset, "Do Not Disturb")
+        s.joe(
+            "gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications --method org.freedesktop.Notifications.Notify Files 0 '' 'Archive extracted' 'Three documents' '[]' '{}' 1"
+        )
+        wait(
+            "history control",
+            lambda: any(
+                row.startswith("button Notifications (")
+                and row != "button Notifications (0)"
+                for row in s.tree()
+            ),
+        )
+        history = next(
+            row.removeprefix("button ")
+            for row in s.tree()
+            if row.startswith("button Notifications (")
+        )
+        s.click(history)
+        wait("notification history", lambda: "article Archive extracted" in s.tree())
+        offset = len(spoken())
+        s.key("down")
+        hear(offset, "Archive extracted")
         s.key("esc")
         settings = s.launch("mundane-settings --page appearance", "settings")
         wait("appearance controls", lambda: "toggle button Dark appearance" in s.tree())
@@ -519,7 +565,7 @@ def appearance_and_speech(s, suite):
             s.key("esc")
     s.pref("interface enable-animations", "true")
     print(
-        "Orca read Taskbar, Start, the launcher search, Quick Settings and a Settings switch.",
+        "Orca read Taskbar, Start, the launcher search, Quick Settings, the selected notification and a Settings switch.",
         flush=True,
     )
 

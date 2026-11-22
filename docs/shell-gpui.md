@@ -31,7 +31,7 @@ Port the existing shell services to Rust behind the GPUI views. Keep D-Bus handl
 
 ## Shared design system and ownership
 
-Settings and the GPUI shell resolve one workspace dependency on `mundane-ui` at `4c254b465f0f5955c4db9a151cc409c8bf0a56eb` and one GPUI family at Zed `f4fe0be1f8c7974db07e01c5cd05bee0cf4eb8d9`. The step 5 locker will use `mundane-ui.workspace = true` in the same workspace. The suite now provides the controls in the table. Shell owners supply service data, actions and native surface placement. [Design language and controls](https://github.com/theJoeLinuxFoundation/mundane-apps/blob/4c254b465f0f5955c4db9a151cc409c8bf0a56eb/docs/design-language.md) · [Workspace manifest](../settings-panel/Cargo.toml)
+Settings and the GPUI shell resolve one workspace dependency on `mundane-ui` at `80eed70f87a44cd31743cef499b8d42df8f097d3` and one GPUI family at Zed `f4fe0be1f8c7974db07e01c5cd05bee0cf4eb8d9`. The step 5 locker will use `mundane-ui.workspace = true` in the same workspace. The suite now provides the controls in the table. Shell owners supply service data, actions and native surface placement. [Design language and controls](https://github.com/theJoeLinuxFoundation/mundane-apps/blob/80eed70f87a44cd31743cef499b8d42df8f097d3/docs/design-language.md) · [Workspace manifest](../settings-panel/Cargo.toml)
 
 | Available in mundane-ui | Contract for shell, Settings and apps |
 | --- | --- |
@@ -67,13 +67,23 @@ The preview uses the suite’s panel buttons, running and occupied states, badge
 
 Start opens with search focused, a row-wrapping grid of pinned apps and the full application list below it. Typing searches the catalogue. A small star marks a pin in the list. Right-click, hold the primary button or press Menu (Shift+F10 also works) on an application to pin or unpin it. Escape dismisses the action menu and returns focus to that application. The taskbar uses app icons for running windows, wider targets, a running indicator and a distinct selected state for the active app. Ctrl+Alt+Tab focuses the taskbar on the pointer’s display. Tab moves between its controls, Enter activates one and Escape returns to the app.
 
-The shell uses mundane-ui’s existing panel buttons, menu choices and 24-pixel icon slot throughout. Two requests for the suite maintainer are a **32-logical-pixel icon slot** for taskbar and pinned-grid apps, and a **flat launcher item** with shared hover, focus and selection treatments. These would give icons more presence and make the long application list quieter across the suite. [Shared design language](https://github.com/theJoeLinuxFoundation/mundane-apps/blob/4c254b465f0f5955c4db9a151cc409c8bf0a56eb/docs/design-language.md) · [Before and after screenshots](screenshots/gpui-step2/README.md)
+Step 2 used the suite’s 24-pixel icon and panel button for each application. Step 3 adopts the larger icon slot and flat launcher row requested in the design review. [Step 2 comparison](screenshots/gpui-step2/README.md) · [Step 3 screenshots](screenshots/gpui-step3/README.md)
 
 The clock and Super+S open Quick Settings on the invoking output. The panel uses shared radio tiles, ranged sliders and Cancel-first power confirmations. NetworkManager supplies Wi-Fi state, WirePlumber and Pulse-compatible PipeWire supply volume and outputs, and UPower and logind supply optional battery and brightness. Bluetooth pairing registers an agent for the selected device with BlueZ. The shell answers PIN, passkey and confirmation requests through the panel, and cancels outstanding requests on dismissal. The Do Not Disturb tile changes the persistent notification preference. Notification delivery and history have their own gate in step 3.
 
 The virtual-laptop test also covers a shared-control issue for the suite maintainer. On the pinned bridge, the default AT-SPI click on a scrolled-out button can land on a different control at its reported coordinates. The shell binds activation directly to the device action. The test invokes a clipped pairing row and checks that keyboard traversal then reveals the entire row above the power buttons. Applying the same direct activation in mundane-ui’s button would give other apps the same protection.
 
 The preview publishes the appearance Settings portal from the shell. The shell, Settings, GTK and the suite follow live changes, including contrast and reduced motion. Settings uses shared switches, buttons, sliders, and native GPUI text and password dialogs. In the guest, Orca spoke the taskbar, Start, its search entry, the Do Not Disturb control and the High contrast switch in Settings. The device test changes a virtual radio, audio sink and backlight and cancels and confirms a Bluetooth passkey. [Headless reproduction](../tests/qemu/session/README.md#gpui-shell-step-2) · [Manual checks](manual-test.md#optional-gpui-preview)
+
+### Step 3 in the GPUI preview
+
+The notification service uses mundane-ui cards for banners and keyboard-navigable history. Quick Settings shows the count and opens the 64 most recent notifications. Replacement keeps the sender’s ID, and action and close signals return to that sender. Expiring a banner leaves its card in history. Do Not Disturb hides banners while continuing to collect notifications. Volume, mute and brightness use the suite’s passive level display. In the guest, an editor received the next keystroke while the volume meter was visible, and Orca read the selected notification in history.
+
+Every 15 seconds the shell reads unprivileged `dave status --json` and checks its revision. It shares the reference session’s on-disk notice record. “Upgrade ready, restart to apply” appears once per prepared ID. An automatic fallback names both the attempted and restored deployments once per event. Quick Settings keeps the details available after dismissal. The guest tests repeat both events across a shell restart and exercise a manual rollback.
+
+ScreenCast and Screenshot open a GPUI chooser with Cancel focused. A selection grants the helper a private Wayland connection for that display or window. Each taskbar names the active source and offers Stop. Losing the requester, source, frontend or shell, and locking the session, revoke capture. When the supervisor replaces a crashed shell, it also closes the old session at the surviving portal frontend so Firefox can end the track. The guest checks actual Firefox pixels and a restricted PipeWire client, changes the source after revocation, and observes the public appearance change signal after a frontend restart. [Headless procedure](../tests/qemu/session/README.md#gpui-shell-step-3) · [Screenshots](screenshots/gpui-step3/README.md)
+
+Start’s application list and search results use the suite’s flat launcher row. Pinned tiles and taskbar applications use its 32-logical-pixel icon slot. The session tests exercise search, AT-SPI activation of a result, all three pin gestures, focus restoration and the running taskbar group. Shell and Settings use the workspace pin above. The future locker inherits the same dependency at step 5.
 
 ## Performance acceptance
 
@@ -117,11 +127,25 @@ The first usable Start took **0.555 s** with cold user caches. Across the next 2
 
 Each CPU sample covers 60 seconds after 60 seconds to settle. Orca used another 68.5 MiB PSS and 91.2 MiB RSS on two outputs. [Repeat the measurement](../tests/qemu/session/qualify_gpui_budget.py)
 
+### Step 3 measurements
+
+On the same headless eight-vCPU, 6 GiB joe beta1 guest, the release shell at `3a66c87` opened Start in **1.178 s** with a cold user cache. Across 20 further GDM logins the median was **0.456 s** and p95 was **0.752 s**. The timer ended when the clicked launcher appeared on scanout, and AT-SPI confirmed focus in search. GPUI used lavapipe. The shell build ID was `b1668d6d2fefac24ccadc8e5cd812d1a4ca98e40` and the compositor’s was `497a780dd917815d25ebe1b6724e55a24c65404f`.
+
+| Configuration | Shell PSS | Shell RSS | CPU, one vCPU |
+| --- | ---: | ---: | ---: |
+| One 1920×1080 output | 137.3 MiB | 171.2 MiB | 0.000% |
+| Two outputs | 139.6 MiB | 174.2 MiB | 0.033% |
+| Two outputs with Orca | 139.4 MiB | 174.4 MiB | 0.017% |
+
+The secondary scanout was 1024×768. Orca used an additional 68.2 MiB PSS. Both pairs of ten-second idle samples recorded **zero shell buffer submissions and zero DRM redraws**, with a visible clock change between samples, including with reduced motion. Capture helpers run only while serving requests. [Measurement driver](../tests/qemu/session/qualify_gpui_budget.py)
+
 ## joe packaging handoff
 
 The step 1 archive from `0edad6f` built the compositor, GPUI shell and Settings with stable Rust 1.100.0 and `--release --locked --offline` in a fresh extraction, using an empty Cargo home and a network namespace with only a down loopback device. On Linux x86_64 the shell and Settings resolve one GPUI family at the shared Zed revision. The recursive Nix source hash was updated from the exported suite tree. Cargo and the GDM installation were exercised on this host and guest. The Nix derivation still needs a Nix build. [Source archive recipe](../tools/dist.sh) · [Dependency notices](../THIRD-PARTY-NOTICES.md)
 
 The step 2 source at `9fb89d6` produced two byte-identical vendored archives (SHA-256 `c0907af3c6ffc4db4455c146b759da31bac1e2cef4c2eedb6f4dede45b08f24b`). From a fresh extraction, stable Rust 1.100.0 built the release compositor, shell and Settings with `--locked --offline`, an empty Cargo home and a private network namespace. The workspace resolves one mundane-ui at `4c254b4` and one GPUI family at `f4fe0be1`.
+
+The step 3 source at `3a66c87` produced two byte-identical archives with SHA-256 `8b1f97612ade901320485c62cdafd38aefa7e268757220f5a89b2f776099157e`. A fresh extraction built the release compositor and entire Settings workspace with stable Rust, an empty Cargo home, `--locked --offline` and a private network namespace. The Nix source hash for mundane-ui was checked with `nix hash path` on its exported Git tree.
 
 The [existing manifest](plan.md#joe-packaging-handoff) describes the reviewed GTK package. Apply these changes as the corresponding gates pass:
 

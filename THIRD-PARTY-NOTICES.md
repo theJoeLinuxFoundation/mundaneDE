@@ -26,7 +26,8 @@ Cargo fetches dependencies under their respective upstream licences. These
 include Smithay (MIT) and GPUI (Apache-2.0). The new `mundane-shell` crate
 uses the repository’s BSD-3-Clause licence. It shares the Settings lockfile and
 the suite’s `mundane-ui` (BSD-3-Clause AND Apache-2.0). Its GIO Rust bindings
-and freedesktop-icons are MIT-licensed. For self_cell use its Apache-2.0 option.
+and freedesktop-icons are MIT-licensed. The capture backend uses nix (MIT)
+and tempfile (MIT OR Apache-2.0). For self_cell use its Apache-2.0 option.
 The compositor has its own lockfile.
 
 To list the packages, versions and declared licences in both locked dependency

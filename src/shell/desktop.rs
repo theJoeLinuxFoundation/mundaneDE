@@ -341,7 +341,7 @@ impl State {
                         task
                     })
                     .collect();
-                let outputs:Vec<_>=self.space.outputs().map(|output| output.name()).collect();
+                let outputs: Vec<_> = self.space.outputs().map(|output| output.name()).collect();
                 self.shell_message(
                     &serde_json::json!({"workspace":self.desktop.workspace,"tasks":tasks,"outputs":outputs}),
                 );
@@ -509,7 +509,9 @@ impl State {
                     | "mundane-overview"
                     | "mundane-app-windows"
                     | "mundane-tray"
-                    | "mundane-power" | "mundane-capture" | "mundane-history"
+                    | "mundane-power"
+                    | "mundane-capture"
+                    | "mundane-history"
             ) {
                 if self.desktop.menu_surface.is_none() {
                     self.desktop.previous_menu_focus =
@@ -545,7 +547,9 @@ impl State {
             [Layer::Bottom, Layer::Background]
         } {
             for l in map.layers_on(layer).rev() {
-                if l.namespace() == "mundane-osd" {continue;}
+                if l.namespace() == "mundane-osd" {
+                    continue;
+                }
                 let loc = origin + map.layer_geometry(l)?.loc;
                 if let Some((s, off)) = l.surface_under(pos - loc.to_f64(), WindowSurfaceType::ALL)
                 {

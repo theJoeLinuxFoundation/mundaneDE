@@ -1,10 +1,11 @@
 """An ordinary guest application using the public desktop portal."""
 
 import os
-from pathlib import Path
-import sys
 import subprocess
+import sys
 import uuid
+from pathlib import Path
+
 from gi.repository import Gio, GLib
 
 bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
@@ -130,6 +131,9 @@ elif mode == "cast":
             "gst-launch-1.0",
             "-q",
             "pipewiresrc",
+            # Keep the preroll buffer independent of the first playing frame.
+            "min-buffers=3",
+            "do-timestamp=true",
             "fd=" + str(fd),
             "path=" + str(node),
             "!",
@@ -140,6 +144,8 @@ elif mode == "cast":
             "video/x-raw,format=RGB,width=32,height=24",
             "!",
             "fdsink",
+            "sync=false",
+            "async=false",
             "fd=1",
         ],
         pass_fds=(fd,),

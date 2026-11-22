@@ -173,6 +173,8 @@ logged-in user. [systemd session targets](https://www.freedesktop.org/software/s
 
 The [GPUI shell migration](shell-gpui.md) has a separate preview entry. To package the preview for testing, pass the release `mundane-shell` binary as the second argument to `session/install.sh`. Build it from the archive with `cargo build --release --locked --offline --manifest-path settings-panel/Cargo.toml -p mundane-shell`. It installs `$prefix/bin/mundane-shell` and `/usr/share/wayland-sessions/mundane-gpui.desktop`. The existing mundaneDE entry selects the Python reference. The preview uses GIO, the desktop and favourite schemas, dconf, the icon theme, fonts and the same Mesa Vulkan loader/ICD as Settings. Quick Settings uses the device services and clients listed below, including the Pulse-compatible PipeWire service, and publishes the appearance Settings backend on the session bus. Native Settings dialogs use the shared GPUI text and password fields. Both Rust GUIs share the Settings workspace lockfile. [Build the preview](../tests/qemu/session/README.md#gpui-shell-step-1) · [Qualify Quick Settings](../tests/qemu/session/README.md#gpui-shell-step-2)
 
+In the step 3 preview, the same shell binary owns notifications, the ScreenCast and Screenshot backends and their GPUI consent UI. For an approved stream it starts `dbus-run-session -- mundane-shell --cast-worker …` with a source-limited Wayland fd and invokes xdg-desktop-portal-wlr on that private bus. For a still it invokes grim. Install the portal implementation XML, routing files, PipeWire/WirePlumber and helpers in the table below. The preview reads the same published dave status and notice state as the reference. [Preview portal and notification tests](../tests/qemu/session/README.md#gpui-shell-step-3)
+
 
 **Vendored source archive.** Run `tools/dist.sh` in a Git checkout. It exports
 the committed HEAD, reads the compositor version and writes
@@ -547,7 +549,7 @@ in `org.gnome.desktop.interface` and `high-contrast` in
 snapshot and change signals. Settings and suite apps use the same mundane-ui
 portal subscription, semantic colours and GPUI motion preference. Settings also
 reads font, text scale and the accent name from the desktop interface namespace.
-[Shared implementation at the pinned suite revision](https://github.com/theJoeLinuxFoundation/mundane-apps/blob/4c254b465f0f5955c4db9a151cc409c8bf0a56eb/crates/mundane-ui/src/appearance.rs)
+[Shared implementation at the pinned suite revision](https://github.com/theJoeLinuxFoundation/mundane-apps/blob/80eed70f87a44cd31743cef499b8d42df8f097d3/crates/mundane-ui/src/appearance.rs)
 
 The headless joe beta1 gate changes the preferences in Settings while libadwaita
 and the suite’s Terminal stay open. It observes native style properties, Terminal
