@@ -232,3 +232,28 @@ scanout checks assume an otherwise empty first workspace. The output test
 reads both physical QMP scanouts at independent scales. The budget test
 starts GDM repeatedly in this overlay, measures a cold user cache separately
 and records 20 warm logins, idle CPU, PSS, clock updates and redraws.
+
+### GPUI shell step 2
+
+Use the headless GPUI preview guest prepared above. Build the real Terminal
+and motion probe from the same mundane-apps revision as the desktop. In this
+example `suite` points to a checkout of
+`4c254b465f0f5955c4db9a151cc409c8bf0a56eb`. Its build output stays in
+the test run directory.
+
+```sh
+export CARGO_TARGET_DIR="$run/suite-target"
+cargo build --manifest-path "$suite/Cargo.toml" --locked --release -p mundane-terminal
+cargo build --manifest-path "$suite/Cargo.toml" --locked --release -p mundane-ui --example motion
+python3 "$driver/qualify_gpui_settings.py" "$run" "$run/screenshots" \
+  --suite-target "$CARGO_TARGET_DIR/release"
+```
+
+The driver uses QMP to exercise all three pin gestures and sample the power
+icons and scaled output. It changes a virtual NetworkManager radio and a real
+PipeWire sink. The laptop case temporarily starts the supervised guest shell
+on a private system bus with BlueZ, UPower and logind fixtures and a private
+backlight mount. It restores the shell and logs in again. Use a dedicated
+test overlay. The remaining checks drive native Settings forms, observe live
+appearance in GTK, Terminal and the taskbar, and record Orca’s speech. Follow
+with the parity, menu, multi-output and budget drivers above.

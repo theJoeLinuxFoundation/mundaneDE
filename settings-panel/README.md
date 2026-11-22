@@ -117,10 +117,9 @@ AccessKit revision selected with mundane-apps and gpui-shades. Settings starts t
 3. Create `src/pages/foo.rs` mirroring an existing page (start from `users.rs` — it's the simplest). Implement `Render`, own a `PageState<T>`, and call `spawn_refresh` on `new`.
 4. Wire it into `PagesView` in `src/pages/mod.rs` (constructor + match arm in `render`).
 
-## Known stubs / TODOs
+## Dialogs and Bluetooth
 
-- **Inline GPUI text input** — text capture is currently routed through `widgets::prompt` (a `zenity` modal subprocess). When GPUI gains a stable inline text-input primitive, `widgets::text_input` becomes the in-pane drop-in replacement.
-- **Bluetooth page** — deferred. No upstream tray applet on mundaneDE yet.
+Settings opens native GPUI dialogs for text, passwords and two-field forms. Quick Settings in the GPUI shell handles Bluetooth discovery, pairing and connection. A dedicated Bluetooth page in Settings is still deferred.
 
 ## Tests
 

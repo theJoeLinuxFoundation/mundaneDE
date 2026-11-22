@@ -58,12 +58,17 @@ automated qualification results. For each row, record **pass**, **fail** or
 
 ## Optional GPUI preview
 
-When the packager has installed **mundaneDE (GPUI preview)**, select that GDM entry to try migration step 1. Record the tested revision with the result.
+When the packager has installed **mundaneDE (GPUI preview)**, select that GDM entry to try the GPUI taskbar, launcher and Quick Settings. Record the tested revision with the result.
 
 | Try | What to look for | Maintainer result |
 | --- | --- | --- |
 | Open Start, type a desktop-entry keyword, browse a category, then pin and unpin an app. Open two documents in one pinned app. | Results follow typing. The pin order survives login. The running pin offers both documents by name. Alt+Tab previews the windows and releasing Alt activates the selected one. | |
 | Open a tray item with the mouse and from Super+S using the keyboard. Try the workspace finder on a second display, then disconnect and reconnect it. | Tray actions reach their owner. Escape, the invoking button and an outside click dismiss a menu. Typing resumes in the previous app. Each connected display has one bottom bar, and a maximized window leaves it visible. | |
+| Open Start at 1920×1080. Find an app in the pinned grid, then in the full list and via search. Right-click, press Menu on a focused app and hold the primary button. Try Escape and pin/unpin, then log in again. | The grid shows icons with labels. A small star indicates a pin in the list. Each gesture opens one action menu. Dismissal restores focus without launching the app. Pins survive login. Running apps have a dot and the active app is distinguishable. | |
+| With Orca on, press Ctrl+Alt+Tab, navigate to Start and activate it. Open Quick Settings with Super+S. Visit Do Not Disturb and both power confirmations. In Settings, change contrast with a GTK app and a suite app open. | Orca names each control and its state. Cancel has initial focus for Restart and Shut Down. Contrast changes on the open windows and taskbar. | |
+| Adjust volume and laptop brightness. Cancel and then confirm a Bluetooth pairing. Open and cancel the password and Add remote dialogs in Settings. Repeat on a small display. | Device readings follow the hardware. The power row stays reachable. Password text is masked. Escape closes a dialog and leaves the setting alone. | |
+
+[Automated Start redesign comparison and Quick Settings screenshots](screenshots/gpui-step2/README.md)
 
 ## Retest the first hand-test findings
 
