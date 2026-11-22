@@ -65,7 +65,7 @@ The preview uses the suite’s panel buttons, running and occupied states, badge
 
 ## Performance acceptance
 
-These are proposed release ceilings, to measure on the first vertical slice. Use production binaries with symbols recorded, one 1920×1080 output, the established eight-vCPU/6 GiB headless joe guest and its recorded Mesa Vulkan ICD. Repeat with two outputs and Orca, and report deltas. Keep hardware results from the isolated render-node harness separate from software-renderer figures. Retain the existing compositor frame and idle budgets. [Measurement setup](../tests/nested/README.md#frame-and-idle-budgets)
+Measure these release ceilings on each candidate shell. Use production binaries with symbols recorded, one 1920×1080 output, the established eight-vCPU/6 GiB headless joe guest and its recorded Mesa Vulkan ICD. Repeat with two outputs and Orca, and report deltas. Keep hardware results from the isolated render-node harness separate from software-renderer figures. Retain the existing compositor frame and idle budgets. [Measurement setup](../tests/nested/README.md#frame-and-idle-budgets)
 
 | Measure | Method and target |
 | --- | --- |
@@ -73,7 +73,27 @@ These are proposed release ceilings, to measure on the first vertical slice. Use
 | Usable taskbar | From compositor launch of the shell to a presented bar whose Start button accepts virtual input and shows a focused search field. Across 20 fresh logins report median and p95, with **p95 ≤2 s**. Record first boot with cold shader/font caches separately. |
 | Idle repaints | Require **zero new shell buffer submissions and zero compositor redraws** in a settled 10 s interval between clock changes. Advance the clock one minute and expect a visible update, then quiescence again. Count actual commits/presents, including with a stationary pointer and reduced motion. Drive time, task, device and service updates by deadlines and change signals. |
 
+### Step 1 measurements
+
+The release build at `0edad6f` ran in an eight-vCPU, 6 GiB KVM guest on an Intel Core Ultra 7 265KF. QEMU used virtio-vga with a 1920×1080 primary scanout and no display window. The enforcing joe beta1 guest used Mesa lavapipe for GPUI Vulkan and llvmpipe for the compositor. The shell ELF build ID was `8d72455cfde517eb438f2652adb572657370c720` and the compositor’s was `fcbefa70d3d309656fbb5d6dd099504aabf0edd1`.
+
+A real seat click on the presented Start button opened a focused search field in **0.562 s** with a fresh user cache. Across 20 subsequent GDM logins, the median was **0.423 s** and p95 was **0.457 s**. The timer starts at the compositor’s shell launch and ends at the first QMP observation of the open menu. The test also checks the field’s focus over AT-SPI. The system font caches shipped in the image were available throughout.
+
+Each configuration settled for 60 seconds before a 60-second CPU sample. PSS and RSS are from the shell’s `smaps_rollup`. The secondary scanout was 1024×768. CPU time has 10 ms resolution, so the single-output sample accumulated less than one tick.
+
+| Configuration | Shell PSS | Change from one output | Shell RSS | CPU, one vCPU |
+| --- | ---: | ---: | ---: | ---: |
+| One output | 134.2 MiB | +0.0 MiB | 168.1 MiB | 0.000% |
+| Two outputs | 137.2 MiB | +3.0 MiB | 171.9 MiB | 0.017% |
+| Two outputs with Orca | 137.0 MiB | +2.8 MiB | 172.1 MiB | 0.017% |
+
+Orca itself used 68.3 MiB PSS and 91.3 MiB RSS. On one output, separate PSS measurements were 96.3 MiB for the compositor, 4.0 MiB for PipeWire, 8.7 MiB for WirePlumber, 4.8 MiB for the portal frontend and 19.5 MiB for the GTK portal backend.
+
+With menus closed and a stationary pointer, the compositor logged **zero layer commits and zero DRM redraws** in each 10-second observation either side of a visible clock update. The test repeated this with reduced motion enabled. With transitions enabled, a workspace switch produced intermediate scanout frames. With reduced motion it went directly to the destination. [Measurement driver](../tests/qemu/session/qualify_gpui_budget.py) · [Menu and motion tests](../tests/qemu/session/qualify_menus.py)
+
 ## joe packaging handoff
+
+The step 1 archive from `0edad6f` built the compositor, GPUI shell and Settings with stable Rust 1.100.0 and `--release --locked --offline` in a fresh extraction, using an empty Cargo home and a network namespace with only a down loopback device. On Linux x86_64 the shell and Settings resolve one GPUI family at the shared Zed revision. The recursive Nix source hash was updated from the exported suite tree. Cargo and the GDM installation were exercised on this host and guest. The Nix derivation still needs a Nix build. [Source archive recipe](../tools/dist.sh) · [Dependency notices](../THIRD-PARTY-NOTICES.md)
 
 The [existing manifest](plan.md#joe-packaging-handoff) describes the reviewed GTK package. Apply these changes as the corresponding gates pass:
 
