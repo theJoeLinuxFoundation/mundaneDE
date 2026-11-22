@@ -20,7 +20,7 @@ dave upgrade and recovery status itself. [Public announcement](https://joelinux.
 | 5. Desktop shell and lock | Use the bottom taskbar, Start menu, tray and desktop icons. Minimize, restore and maximize a window using its buttons. Verify the shell reports a prepared dave upgrade awaiting restart and an automatic return to the previous system after a failed upgrade. Lock both displays and disconnect the locker. Every display stays covered until authenticated recovery. |
 | 6. Desktop portals | In Firefox, choose a display, share it over PipeWire and stop sharing. Cancelled requests return no stream. A screenshot of a known scene matches that scene. |
 | 7. Settings and accessibility | Change appearance in Settings and see it update in GTK and GPUI. Use the launcher and a settings dialog by keyboard and with Orca. Reduced motion takes effect on the next frame. |
-| 8. Default-session qualification | On a clean x86 image, complete first login, daily app workflows, lock/resume and logout. Run joe’s existing desktop tests with security logging and enforcement. Boot a successful and a failed upgrade, verify the shell’s messages, and select GNOME in GDM as a session fallback. |
+| 8. Default-session qualification | Qualify clean and upgraded x86 images, including app workflows, lock/resume, upgrade recovery, the GNOME fallback and joe’s tests under security logging and enforcement. After automation passes, the maintainer tests the candidate on a real machine using the [manual checklist](docs/manual-test.md). Changing the default requires their sign-off. |
 
 The [implementation plan](docs/plan.md) gives the protocol dependencies, test
 fixtures and handoff for each milestone. The GPUI suite delivers Terminal and

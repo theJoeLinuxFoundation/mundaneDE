@@ -1,8 +1,8 @@
 # Replacing GNOME 51 on x86 joe Linux
 
 The first distribution deliverable is a second session in GDM. A default
-change comes after a fresh installation and an upgraded installation both pass
-the final milestone. Application replacement has a separate schedule. A working
+change requires automated qualification on fresh and upgraded installations
+followed by the maintainer’s sign-off after a real-machine test. Application replacement has a separate schedule. A working
 desktop must be able to run today's Nautilus, Text Editor and Firefox while the
 GPUI suite matures. [Public roadmap](../ROADMAP.md) · [joe desktop package](https://github.com/theJoeLinuxFoundation/joe-linux/blob/d3e355b888ebeb5d9fa2c46eace844aafdf9380b/packages/joe-desktop/package.zon)
 
@@ -353,8 +353,15 @@ system without opening Packages. Check an explicit rollback separately.
 Test one multi-output hardware configuration
 and a VM. Confirm selecting GNOME at the greeter restores a working session
 with the same files and preferences. Publish pass/fail results and unresolved
-limitations before recommending a default change. Retire individual GNOME apps
-only after the suite's corresponding workflow passes on the image.
+limitations. Retire individual GNOME apps only after the suite's corresponding
+workflow passes on the image.
+
+**Final gate.** Once automated qualification passes, the maintainer logs in to
+the candidate session on a real x86 machine and completes the [manual test](manual-test.md).
+Record the image and revisions, hardware, automated results, observations and
+any blocking issues. Fix failures and retest the candidate before recording the
+maintainer’s dated sign-off. Only then may joe Linux change the default session.
+Extend the checklist as each milestone lands.
 
 ## How to collect test evidence
 
