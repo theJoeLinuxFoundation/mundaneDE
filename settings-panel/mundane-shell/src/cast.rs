@@ -30,7 +30,7 @@ pub fn worker(kind: &str, id: &str, cursor: &str) -> Result<()> {
             .find(|p| p.is_file())
         })
         .context("xdg-desktop-portal-wlr is unavailable")?;
-    let launch = gio::SubprocessLauncher::new(gio::SubprocessFlags::NONE);
+    let launch = crate::renderer::launcher(gio::SubprocessFlags::NONE);
     launch.take_stdin_fd(Some(std::io::stdin().as_fd().try_clone_to_owned()?));
     launch.take_stdout_fd(Some(std::io::stderr().as_fd().try_clone_to_owned()?));
     launch.take_fd(config.as_fd().try_clone_to_owned()?, &config);

@@ -157,6 +157,44 @@ def launcher(s):
         "Pinned grid, full list, right click, long press, Menu key and focus restoration passed.",
         flush=True,
     )
+    check_launch_environment(s)
+
+
+def check_launch_environment(s):
+    # Use a directly executed .desktop entry. A D-Bus activated calculator
+    # would inherit the bus environment and conceal a launcher regression.
+    entry = "~/.local/share/applications/mundane-renderer-check.desktop"
+    script = RT + "/mundane-renderer-check"
+    result = script + ".result"
+    body = (
+        f"#!/bin/sh\nenv | sed -n '/^GALLIVM_PERF=/p' >{result}.tmp\n"
+        f"mv {result}.tmp {result}\n"
+    )
+    desktop = f"[Desktop Entry]\nType=Application\nName=Renderer Check\nExec=/bin/sh {script}\n"
+    try:
+        s.joe(
+            f"mkdir -p ~/.local/share/applications && rm -f {result} && "
+            f"printf %s {shlex.quote(body)} >{script} && "
+            f"printf %s {shlex.quote(desktop)} >{entry}"
+        )
+        s.key("meta_l", "spc")
+        wait("search opened for fixture", lambda: "frame Start menu" in s.tree())
+        for letter in "renderer":
+            s.key(letter)
+        wait("renderer fixture discovered", lambda: "button Renderer Check" in s.tree())
+        s.widget("click", "Renderer Check", "Start menu")
+        wait("fixture ran", lambda: s.joe(f"test -f {result} && echo yes || :"))
+        # /proc exposes the environment supplied to exec, before shell defaults.
+        expected = s.g.shell(
+            "tr '\\0' '\\n' </proc/$(pgrep -x mundane-shell)/environ | "
+            "sed -n '/^GALLIVM_PERF=/p'"
+        )
+        assert s.joe(f"cat {result}") == expected, (
+            "shell shader policy reached a launched app"
+        )
+    finally:
+        s.joe(f"rm -f {entry} {script} {result} {result}.tmp")
+    print("Directly launched app received the session's shader setting.", flush=True)
 
 
 def controls(s):

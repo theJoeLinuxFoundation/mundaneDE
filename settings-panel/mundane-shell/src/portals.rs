@@ -521,7 +521,7 @@ impl Portals {
             _ => "capture-window",
         };
         let fd = self.grant(op, id)?;
-        let launch = gio::SubprocessLauncher::new(gio::SubprocessFlags::STDOUT_PIPE);
+        let launch = crate::renderer::launcher(gio::SubprocessFlags::STDOUT_PIPE);
         launch.set_child_setup(|| unsafe {
             libc::setpgid(0, 0);
         });

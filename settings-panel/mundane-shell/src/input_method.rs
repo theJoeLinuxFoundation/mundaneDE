@@ -91,7 +91,7 @@ fn connect(tx: Sender<Event>) -> anyhow::Result<gio::DBusConnection> {
     let address = if let Ok(a) = std::env::var("IBUS_ADDRESS") {
         a
     } else {
-        let output = std::process::Command::new("ibus").arg("address").output()?;
+        let output = crate::renderer::command("ibus").arg("address").output()?;
         anyhow::ensure!(output.status.success(), "IBus address unavailable");
         String::from_utf8(output.stdout)?.trim().to_owned()
     };

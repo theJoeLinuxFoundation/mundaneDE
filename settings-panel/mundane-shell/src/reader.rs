@@ -9,7 +9,7 @@ use std::{
         fd::{AsRawFd, FromRawFd, OwnedFd},
         unix::{net::UnixDatagram, process::CommandExt},
     },
-    process::{Command, Stdio},
+    process::Stdio,
     rc::Rc,
     sync::Arc,
     time::Duration,
@@ -200,7 +200,7 @@ impl Reader {
     }
     fn start(self: &Rc<Self>) -> Result<()> {
         let parent = std::process::id();
-        let mut cmd = Command::new("/usr/bin/orca");
+        let mut cmd = crate::renderer::command("/usr/bin/orca");
         cmd.arg("--replace")
             .env_remove("WAYLAND_SOCKET")
             .stdin(Stdio::null());

@@ -16,6 +16,7 @@ mod notifications;
 mod portals;
 mod quick;
 mod reader;
+mod renderer;
 mod tray;
 mod upgrades;
 mod view;
@@ -170,6 +171,8 @@ struct Shell {
     text_scale: f32,
     bars: HashMap<DisplayId, WindowHandle<Surface>>,
     menu: Option<(DisplayId, Page, WindowHandle<Surface>)>,
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    trim: Option<gpui::Task<()>>,
     rows: Vec<tray::Entry>,
     switcher: Vec<String>,
     selected: usize,
@@ -308,14 +311,15 @@ fn services(
                     Service::OpenUri(uri) => {
                         if let Err(e) = gio::AppInfo::launch_default_for_uri(
                             &uri,
-                            None::<&gio::AppLaunchContext>,
+                            Some(&renderer::application_context()),
                         ) {
                             notes.local("Could not open file".into(), e.to_string());
                         }
                     }
                     Service::Launch(id) => {
                         if let Some(app) = gio_unix::DesktopAppInfo::new(&id) {
-                            if let Err(e) = app.launch(&[], None::<&gio::AppLaunchContext>) {
+                            if let Err(e) = app.launch(&[], Some(&renderer::application_context()))
+                            {
                                 eprintln!("Launch {id}: {e}")
                             }
                         }
@@ -373,6 +377,18 @@ fn close_menu(cx: &mut App) {
             s.device_message.clear();
         }
         let _ = window.update(cx, |_, w, _| w.remove_window());
+        // The GPU retires window resources after their last submission. Coalesce
+        // menu closures and return the released heap pages off the UI thread.
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        {
+            let executor = cx.background_executor();
+            let idle = executor.timer(std::time::Duration::from_secs(1));
+            let trim = executor.spawn(async move {
+                idle.await;
+                unsafe { libc::malloc_trim(0) };
+            });
+            cx.global_mut::<Shell>().trim = Some(trim);
+        }
         cx.refresh_windows();
     }
 }
@@ -843,6 +859,7 @@ fn main() -> anyhow::Result<()> {
         std::env::var("WAYLAND_SOCKET").as_deref() == Ok("0"),
         "Start mundane-shell through mundane-session"
     );
+    renderer::configure();
     // Own a CLOEXEC duplicate. Keep logging and descendants away from the shell command channel.
     let fd = std::io::stdout().as_fd().try_clone_to_owned()?;
     let socket = Arc::new(UnixDatagram::from(fd));
@@ -944,6 +961,8 @@ fn main() -> anyhow::Result<()> {
             text_scale: 1.,
             bars: HashMap::new(),
             menu: None,
+            #[cfg(all(target_os = "linux", target_env = "gnu"))]
+            trim: None,
             rows: vec![],
             switcher: vec![],
             selected: 0,

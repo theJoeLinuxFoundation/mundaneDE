@@ -11,7 +11,7 @@ use std::{
     fs,
     io::{BufRead, BufReader},
     path::Path,
-    process::{Child, Command, Stdio},
+    process::{Child, Stdio},
 };
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -60,7 +60,7 @@ pub enum Request {
     Apply(Action),
 }
 fn run(bin: &str, args: &[&str]) -> Result<String> {
-    let out = Command::new(bin)
+    let out = crate::renderer::command(bin)
         .args(args)
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
@@ -328,7 +328,7 @@ fn media_key(
 }
 fn audio_monitor(tx: Sender<Request>) -> Option<Child> {
     use std::os::unix::process::CommandExt;
-    let mut cmd = Command::new("pactl");
+    let mut cmd = crate::renderer::command("pactl");
     let parent = std::process::id();
     // The subscription must end even if the compositor kills this shell while the menu is open.
     unsafe {

@@ -3,7 +3,7 @@ use crate::{Event, Service};
 use async_channel::Sender;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf, process::Command, time::Duration};
+use std::{fs, path::PathBuf, time::Duration};
 
 #[derive(Deserialize)]
 struct Status {
@@ -142,7 +142,7 @@ pub fn start(tx: Sender<Event>, service: Sender<Service>) {
             ..Default::default()
         };
         loop {
-            let status = Command::new("dave")
+            let status = crate::renderer::command("dave")
                 .args(["status", "--json"])
                 .output()
                 .ok()
