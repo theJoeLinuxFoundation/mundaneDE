@@ -1,5 +1,6 @@
 """Query the distribution's service clients as the session user."""
 
+from pathlib import Path
 import os
 import re
 import subprocess
@@ -41,12 +42,17 @@ def bluetooth_devices():
             None,
         ).unpack()[0]
     except GLib.Error:
-        return [], False
+        return [], False, False
     devices = [
         i["org.bluez.Device1"] for i in objects.values() if "org.bluez.Device1" in i
     ]
-    return [(d["Address"], d.get("Alias") or d["Address"]) for d in devices], any(
-        "org.bluez.Adapter1" in i for i in objects.values()
+    adapters = [
+        i["org.bluez.Adapter1"] for i in objects.values() if "org.bluez.Adapter1" in i
+    ]
+    return (
+        [(d["Address"], d.get("Alias") or d["Address"]) for d in devices],
+        bool(adapters),
+        any(a.get("Powered") for a in adapters),
     )
 
 
@@ -64,7 +70,7 @@ def devices():
             if match:
                 sinks.append((match[2], match[3], bool(match[1])))
     battery = battery_status()
-    bluetooth, adapter = bluetooth_devices()
+    bluetooth, adapter, powered = bluetooth_devices()
     return dict(
         wifi=optional("nmcli", "radio", "wifi"),
         networks=optional(
@@ -74,8 +80,22 @@ def devices():
         volume=optional("wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"),
         bluetooth=bluetooth,
         adapter=adapter,
+        powered=powered,
+        backlight=backlight(),
         battery=battery,
     )
+
+
+def backlight(root=Path("/sys/class/backlight")):
+    for device in sorted(root.glob("*")):
+        try:
+            maximum = int((device / "max_brightness").read_text())
+            value = int((device / "brightness").read_text())
+            if maximum > 0:
+                return device.name, maximum, round(100 * value / maximum)
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def battery_status():

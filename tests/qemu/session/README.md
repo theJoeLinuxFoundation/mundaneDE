@@ -70,8 +70,7 @@ enforcing boot headlessly. It then opens the QEMU window. The guest has eight
 KVM vCPUs, 6 GiB RAM and a 1920×1080 primary display. The test account and
 password are both `joe`. Open Start with Super+Space, move between workspaces
 with Super+1 through Super+4, focus the desktop icons with Super+D and lock
-with Super+L. The clock opens the system
-menu. Choose Power off and confirm to end the run cleanly.
+with Super+L. The clock and Super+S open Quick Settings. Choose Shut Down and confirm to end the run cleanly.
 
 The default base is `~/Projects/joe-linux/build/images/joe-desktop-beta1.img`.
 Both base nodes and the staging share are read-only. Guest writes and EFI
@@ -126,6 +125,16 @@ env -i HOME="$runtime" PATH=/usr/bin:/bin XDG_RUNTIME_DIR="$runtime" \
   dbus-run-session -- python3 tests/qemu/session/device_checks.py
 ```
 
+
+### Headless menu retest
+
+On a freshly booted, dedicated 1920×1080 headless guest, run
+`python3 tests/qemu/session/qualify_menus.py "$MUNDANE_TRY_DIR"`. The test
+drives the virtual pointer and keyboard, counts actual clicks and keystrokes
+in a GTK client, activates a tray menu action and checks Wi-Fi, notifications
+and PipeWire volume against the guest services. A GTK fixture supplies laptop
+battery, backlight and Bluetooth states. QMP samples the workspace transition
+with animations enabled and with reduced motion. [Comparison screenshots](../../../docs/screenshots/shell/README.md)
 
 ### Headless portal qualification
 

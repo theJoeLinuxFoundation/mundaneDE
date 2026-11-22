@@ -332,6 +332,12 @@ impl State {
                                         state.begin_lock();
                                         return FilterResult::Intercept(());
                                     }
+                                    keysyms::KEY_s if state.desktop.panel.is_some() => {
+                                        let output = state.space.output_under(state.cursor_location)
+                                            .next().map(|o| o.name());
+                                        state.shell_message(&serde_json::json!({"open": "system", "output": output}));
+                                        return FilterResult::Intercept(());
+                                    }
                                     keysyms::KEY_space if state.desktop.panel.is_some() => {
                                         state.shell_message(&serde_json::json!({"open":"start"}));
                                         return FilterResult::Intercept(());
@@ -425,6 +431,22 @@ impl State {
                 let pointer = self.seat.get_pointer().unwrap();
                 let mods = self.seat.get_keyboard().unwrap().modifier_state();
 
+                if button_state == ButtonState::Released
+                    && self.desktop.dismissed_buttons.remove(&button)
+                {
+                    return;
+                }
+                if !self.desktop.lock.active && button_state == ButtonState::Pressed {
+                    if let Some(menu) = &self.desktop.menu_surface {
+                        let inside = self.hit_layer(self.cursor_location, true)
+                            .is_some_and(|(_, _, layer)| layer.wl_surface() == menu);
+                        if !inside {
+                            self.desktop.dismissed_buttons.insert(button);
+                            self.shell_message(&serde_json::json!({"dismiss_menu": true}));
+                            return;
+                        }
+                    }
+                }
                 if button_state == ButtonState::Pressed && self.window_menu.is_some() {
                     let row = self
                         .window_menu

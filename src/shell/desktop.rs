@@ -38,6 +38,11 @@ pub struct Task {
     position: Point<i32, Logical>,
     stack_index: usize,
 }
+pub struct WorkspaceTransition {
+    pub spring: crate::animation::SpringId,
+    pub previous: Vec<(Window, Rectangle<i32, Logical>)>,
+}
+
 pub struct Desktop {
     layers: WlrLayerShellState,
     list: ForeignToplevelListState,
@@ -45,11 +50,15 @@ pub struct Desktop {
     inhibitors: Vec<WlSurface>,
     pub presented: HashMap<Output, smithay::backend::renderer::element::RenderElementStates>,
     pub lock: Lock,
+    pub menu_surface: Option<WlSurface>,
+    previous_menu_focus: Option<crate::focus::KeyboardFocus>,
+    pub dismissed_buttons: std::collections::HashSet<u32>,
     pub monitor: super::keyboard_monitor::KeyboardMonitor,
     pub pending_keys: std::collections::VecDeque<super::keyboard_monitor::PendingKey>,
     pub reduce_motion: bool,
     pub tasks: HashMap<Window, Task>,
     pub workspace: u8,
+    pub transition: Option<WorkspaceTransition>,
     pub showing_desktop: bool,
     pub channel: Option<UnixDatagram>,
     pub panel: Option<std::process::Child>,
@@ -63,7 +72,7 @@ impl Desktop {
         });
         IdleInhibitManagerState::new::<State>(dh);
         Self {
-            pending_keys:Default::default(),
+            pending_keys: Default::default(),
             monitor: Default::default(),
             reduce_motion: false,
             layers: WlrLayerShellState::new_with_filter::<State, _>(dh, |c| {
@@ -74,7 +83,11 @@ impl Desktop {
             inhibitors: vec![],
             presented: HashMap::new(),
             lock: Lock::new(dh),
+            menu_surface: None,
+            previous_menu_focus: None,
+            dismissed_buttons: Default::default(),
             tasks: HashMap::new(),
+            transition: None,
             workspace: 1,
             showing_desktop: false,
             channel: None,
@@ -86,11 +99,13 @@ impl Desktop {
 impl Drop for Desktop {
     fn drop(&mut self) {
         if let Some(mut child) = self.panel.take() {
-            if let Some(channel)=&self.channel {
-                let _=channel.send(br#"{"logout":true}"#);
-                let until=std::time::Instant::now()+std::time::Duration::from_millis(750);
-                while std::time::Instant::now()<until {
-                    if matches!(child.try_wait(),Ok(Some(_))){return}
+            if let Some(channel) = &self.channel {
+                let _ = channel.send(br#"{"logout":true}"#);
+                let until = std::time::Instant::now() + std::time::Duration::from_millis(750);
+                while std::time::Instant::now() < until {
+                    if matches!(child.try_wait(), Ok(Some(_))) {
+                        return;
+                    }
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
             }
@@ -150,7 +165,9 @@ impl State {
     }
     pub fn forget_task(&mut self, w: &Window) {
         if let Some(task) = self.desktop.tasks.remove(w) {
-            self.revoke_capture(Some(&crate::capture::Source::Window(task.handle.identifier())));
+            self.revoke_capture(Some(&crate::capture::Source::Window(
+                task.handle.identifier(),
+            )));
             self.desktop.list.remove_toplevel(&task.handle);
         }
     }
@@ -216,8 +233,35 @@ impl State {
     pub fn switch_workspace(&mut self, n: u8) {
         if (1..=4).contains(&n) && self.desktop.workspace != n {
             self.desktop.showing_desktop = false;
+            if let Some(old) = self.desktop.transition.take() {
+                self.animation.remove_spring(old.spring);
+            }
+            if !self.config.reduced_motion && !self.desktop.reduce_motion {
+                let previous = self
+                    .space
+                    .elements()
+                    .rev()
+                    .filter_map(|w| Some((w.clone(), self.space.element_geometry(w)?)))
+                    .collect();
+                let spring = self.animation.create_spring_kind(
+                    0,
+                    0,
+                    crate::animation::SpringParams {
+                        stiffness: 1250.,
+                        damping: 69.,
+                        mass: 1.,
+                    },
+                    crate::animation::SpringKind::Fade,
+                );
+                self.animation
+                    .spring_mut(spring)
+                    .unwrap()
+                    .set_target(100, 0);
+                self.desktop.transition = Some(WorkspaceTransition { spring, previous });
+            }
             self.desktop.workspace = n;
             self.arrange_workspace();
+            self.shell_command("list");
         }
     }
     pub fn shell_message(&self, msg: &serde_json::Value) {
@@ -226,16 +270,22 @@ impl State {
         }
     }
     pub fn shell_command(&mut self, command: &str) {
-        if let Some(serial)=command.strip_prefix("keyboard-forward ").and_then(|s|s.parse::<u32>().ok()){
-            self.forward_reader_keys(serial.into());return;
-        }
-        if let Some(data)=command.strip_prefix("keyboard-monitor ") {
-            if let Ok(next)=serde_json::from_str(data) {self.desktop.monitor.configure(next);}
+        if let Some(serial) = command
+            .strip_prefix("keyboard-forward ")
+            .and_then(|s| s.parse::<u32>().ok())
+        {
+            self.forward_reader_keys(serial.into());
             return;
         }
-        if let Some(value)=command.strip_prefix("reduced-motion ") {
-            self.desktop.reduce_motion=value=="on";
-            self.generation+=1;
+        if let Some(data) = command.strip_prefix("keyboard-monitor ") {
+            if let Ok(next) = serde_json::from_str(data) {
+                self.desktop.monitor.configure(next);
+            }
+            return;
+        }
+        if let Some(value) = command.strip_prefix("reduced-motion ") {
+            self.desktop.reduce_motion = value == "on";
+            self.generation += 1;
             return;
         }
         let mut args = command.split_ascii_whitespace();
@@ -262,6 +312,8 @@ impl State {
             }
             "lock" => self.begin_lock(),
             "logout" => self.request_logout(),
+            "next-workspace" => self.switch_workspace(self.desktop.workspace % 4 + 1),
+            "previous-workspace" => self.switch_workspace((self.desktop.workspace + 2) % 4 + 1),
             "workspace" => {
                 if let Some(n) = args.next().and_then(|s| s.parse().ok()) {
                     self.switch_workspace(n);
@@ -382,6 +434,20 @@ impl State {
         if !self.desktop.lock.active
             && l.cached_state().keyboard_interactivity == KeyboardInteractivity::Exclusive
         {
+            if matches!(
+                l.namespace(),
+                "mundane-start"
+                    | "mundane-system"
+                    | "mundane-overview"
+                    | "mundane-tray"
+                    | "mundane-power"
+            ) {
+                if self.desktop.menu_surface.is_none() {
+                    self.desktop.previous_menu_focus =
+                        self.seat.get_keyboard().and_then(|k| k.current_focus());
+                }
+                self.desktop.menu_surface = Some(s.clone());
+            }
             self.layer_focus(l.wl_surface());
         }
         if resized {
@@ -488,7 +554,22 @@ impl WlrLayerShellHandler for State {
         }
         self.generation += 1;
         self.resize_expanded_windows();
-        if focused {
+        if self.desktop.menu_surface.as_ref() == Some(s.wl_surface()) {
+            use smithay::utils::IsAlive;
+            self.desktop.menu_surface = None;
+            let old = self.desktop.previous_menu_focus.take();
+            if focused && !self.desktop.lock.active {
+                if old.as_ref().is_none_or(IsAlive::alive) {
+                    self.seat.get_keyboard().unwrap().set_focus(
+                        self,
+                        old,
+                        SERIAL_COUNTER.next_serial(),
+                    );
+                } else {
+                    crate::focus::refocus(self);
+                }
+            }
+        } else if focused && !self.desktop.lock.active {
             crate::focus::refocus(self);
         }
     }

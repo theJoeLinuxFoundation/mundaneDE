@@ -28,13 +28,53 @@ for node in walk(Atspi.get_desktop(0)):
     if verb == "list":
         if name:
             print(role, name)
-    elif name == " ".join(names) and verb == "focus":
-        if node.grab_focus():
-            sys.exit(0)
-    elif name == " ".join(names) and verb == "state":
+    elif (
+        name == " ".join(names)
+        and verb == "bar-point"
+        and "Component" in node.get_interfaces()
+    ):
+        rect = node.get_extents(Atspi.CoordType.WINDOW)
+        top = node
+        while (
+            top.get_parent() and top.get_parent().get_role() != Atspi.Role.APPLICATION
+        ):
+            top = top.get_parent()
+        frame = top.get_extents(Atspi.CoordType.WINDOW)
+        print(rect.x + rect.width // 2, frame.height - rect.y - rect.height // 2)
+        sys.exit(0)
+    elif name == " ".join(names) and verb == "bounds" and role == "button":
+        rect = node.get_extents(Atspi.CoordType.WINDOW)
+        print(rect.x, rect.y, rect.width, rect.height)
+        sys.exit(0)
+    elif name == " ".join(names) and verb == "size" and role == "frame":
+        rect = node.get_extents(Atspi.CoordType.WINDOW)
+        print(rect.width, rect.height)
+        sys.exit(0)
+    elif (
+        name == " ".join(names)
+        and verb == "focus"
+        and node.get_state_set().contains(Atspi.StateType.FOCUSABLE)
+    ):
+        try:
+            if node.grab_focus():
+                sys.exit(0)
+        except GLib.Error:
+            continue
+    elif name == " ".join(names) and verb == "state" and role != "label":
         print(" ".join(v.value_nick for v in node.get_state_set().get_states()))
         sys.exit(0)
-    elif name == " ".join(names) and role in ("push button", "button", "toggle button"):
+    elif (
+        verb == "click"
+        and name == " ".join(names)
+        and role
+        in (
+            "push button",
+            "button",
+            "toggle button",
+            "toggle",
+            "check box",
+        )
+    ):
         for i in range(node.get_n_actions()):
             if node.get_action_name(i) in ("click", "activate", "press"):
                 if node.do_action(i):

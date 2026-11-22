@@ -487,9 +487,13 @@ backends. Settings takes an initial `ReadAll` snapshot and listens for
 `SettingChanged`. It uses mundane-ui’s shared roles, focus rings, dark and
 high-contrast palettes at revision `612f5c5a8d774c81f9baac38c6909f0037805ede`.
 The suite's Terminal at that revision selects its palette on startup.
-Its live appearance gate remains open until mundane-ui and its callers subscribe
-to portal updates and repaint already-open controls. The acceptance run must
-include an installed suite application as well as Settings.
+The suite is adding live support for all four standard appearance keys. Settings
+writes the corresponding GNOME interface and accessibility GSettings so the
+session portal publishes each change. The shell, Settings and suite must read
+the same portal keys at startup and on `SettingChanged`. To close this gate,
+change a preference once in Settings with a GTK app and an installed suite app
+already visible. Verify both repaint without restarting, and repeat for scheme,
+accent, contrast and reduced motion. Record the suite revision used.
 
 Settings lists connector modes through `mundane-de output list`. Test, Keep
 and Revert use the compositor's 15-second layout trial. The socket requires

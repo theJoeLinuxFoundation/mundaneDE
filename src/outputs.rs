@@ -433,6 +433,15 @@ impl State {
         } else {
             self.animation.tick(dt);
         }
+        if self.desktop.transition.as_ref().is_some_and(|t| {
+            self.animation
+                .spring(t.spring)
+                .is_none_or(|s| s.is_settled())
+        }) {
+            if let Some(done) = self.desktop.transition.take() {
+                self.animation.remove_spring(done.spring);
+            }
+        }
         crate::render::sync_spring_positions(self);
         self.wallpaper.cleanup(&mut self.animation);
     }

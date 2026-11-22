@@ -166,10 +166,11 @@ pub fn collect_elements(
         elements.push(MundaneRenderElement::from(ghost));
     }
 
-    if state
-        .space
-        .elements()
-        .any(crate::shell::decorations::decorated)
+    if state.desktop.transition.is_some()
+        || state
+            .space
+            .elements()
+            .any(crate::shell::decorations::decorated)
     {
         use smithay::backend::renderer::element::AsRenderElements;
         use smithay::wayland::shell::wlr_layer::Layer;
@@ -179,16 +180,26 @@ pub fn collect_elements(
             [Layer::Overlay, Layer::Top],
             &mut elements,
         );
-        for w in state.space.elements().rev() {
-            let Some(g) = state.space.element_geometry(w) else {
-                continue;
-            };
+        let transition = state.desktop.transition.as_ref();
+        let progress = transition
+            .and_then(|t| state.animation.spring(t.spring))
+            .map_or(1., |s| (s.x.position / 100.).clamp(0., 1.) as f32);
+        let incoming = state
+            .space
+            .elements()
+            .rev()
+            .filter_map(|w| Some((w, state.space.element_geometry(w)?, progress)));
+        let outgoing = transition
+            .into_iter()
+            .flat_map(|t| t.previous.iter())
+            .map(|(w, rect)| (w, *rect, 1. - progress));
+        for (w, g, alpha) in incoming.chain(outgoing) {
             let origin = g.loc - bounds.loc;
             let surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = w.render_elements(
                 renderer,
                 (origin - w.geometry().loc).to_physical_precise_round(scale),
                 scale.into(),
-                1.0,
+                alpha,
             );
             elements.extend(surfaces.into_iter().map(MundaneRenderElement::from));
             if crate::shell::decorations::decorated(w) {
@@ -205,7 +216,7 @@ pub fn collect_elements(
                         renderer,
                         loc.to_f64().to_physical(scale),
                         &buffer,
-                        None,
+                        Some(alpha),
                         None,
                         None,
                         Kind::Unspecified,

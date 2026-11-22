@@ -130,7 +130,10 @@ class Services:
         )
         while len(self.notes) > 64:
             self.close(next(iter(self.notes)), 1)
-        self.panel.toast(replace, title, body, timeout)
+        if self.panel.notifications.get_boolean("show-banners"):
+            self.panel.toast(replace, title, body, timeout)
+        elif self.panel.page == "system":
+            self.panel.draw_system()
         return replace
 
     def action(self, n, key):

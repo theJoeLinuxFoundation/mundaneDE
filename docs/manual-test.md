@@ -14,7 +14,7 @@ Developers can opt into those changes with `--from-working-tree`.
 The visible guest keeps its disk in `~/.cache/mundane-try/desktop`. Headless
 qualification defaults to `~/.cache/mundane-try/qualification`. The guest
 opens at 1920×1080. Log in or unlock as `joe` with password `joe`. Quit with
-**System menu → Power off**.
+**Quick Settings → Shut Down**.
 [Guest setup and controls](../tests/qemu/session/README.md#try-the-desktop)
 
 Record the date, tester, candidate image ID, compositor and suite revisions,
@@ -51,6 +51,19 @@ automated qualification results. For each row, record **pass**, **fail** or
 | Upgrade ready | With Packages closed, check for an available upgrade, then prepare it. Dismiss the notification, restart the shell and prepare the same packages again. Try a different upgrade with the same counts, inspect the system menu and complete a successful restart. | A preview alone shows no restart prompt. “Upgrade ready, restart to apply” appears once for each distinct prepared upgrade. Opening Restart offers a confirmation that can be cancelled. The system menu retains the status and it clears after a successful boot. | |
 | Upgrade recovery | On the recoverable image, run joe’s failed-upgrade boot fixture and log in to the restored system. Dismiss the alert, reopen the system menu and restart the shell. Separately exercise an explicit rollback. | The desktop identifies the failed target and the previous system now running. Details remain available without duplicate alerts. An explicit rollback produces no failed-upgrade alert. | |
 | Session fallback | Select GNOME at the greeter, open the saved file, then log back in to mundaneDE. | Both sessions start, the same file is accessible and the new session has working input and app launch. | |
+
+## Retest the first hand-test findings
+
+The maintainer found these three issues on `5332dbc`. Repeat the checks in
+the same app you used for the first trial. Record your observed result and
+candidate commit in the last column. The automated retest passed on a headless
+joe beta1 guest for all three rows. [Before and after at 1920×1080](screenshots/shell/README.md)
+
+| Finding on `5332dbc` | What to try on the candidate | Automated coverage | Maintainer retest |
+| --- | --- | --- | --- |
+| An open menu stayed open on a second click. | Focus an editor. For Start, the clock, Workspaces and a tray item with a menu, open it and click its button again. Repeat with Escape and then with a click on an editor control. Type after each dismissal. | The guest checks that each menu closes, the outside click leaves the control untouched and typing reaches the editor again. | Pending |
+| The system menu made device controls and power actions hard to pick out. | Open Quick Settings with the clock and with Super+S. Read and toggle Wi-Fi, Bluetooth and Do Not Disturb. Adjust volume and laptop brightness with the keyboard. Compare battery state with the machine. Hover or focus each power icon, then open and cancel Restart and Shut Down. Repeat in high contrast and on a smaller display. | The guest exercises radio state, notification history, the volume slider and both confirmations. All power buttons fit at 960×540 logical pixels in high contrast. A hardware fixture checks optional battery, backlight and Bluetooth controls. | Pending |
+| The workspace selector needed clearer state, feedback and navigation. | Put a window on Desk 2 and leave Desk 3 empty. Hover the workspace markers, open the selector, switch with the mouse, wheel and keyboard, then repeat with reduced motion. | The guest checks current and occupied states, input paths and intermediate scanout frames. Reduced motion switches directly to the destination. | Pending |
 
 Record fixes and repeat affected checks on the candidate to be signed off.
 A failed or blocked row keeps the gate open. The distribution may change the

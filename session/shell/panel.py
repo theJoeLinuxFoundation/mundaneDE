@@ -18,7 +18,9 @@ from bus import Services, Shares
 from portals import CapturePortals
 from reader import Reader
 from appearance import Appearance
+import tray_menu
 from bluetooth import Bluetooth
+from quick_settings import QuickSettings, label as styled_label
 from devices import command, devices
 from upgrades import UpgradeNotices
 
@@ -112,6 +114,14 @@ class Panel:
         self.reading_devices = False
         self.reading_status = False
         self.page = None
+        self.notifications = Gio.Settings.new("org.gnome.desktop.notifications")
+        self.notifications.connect(
+            "changed::show-banners",
+            lambda *_: self.draw_system() if self.page == "system" else None,
+        )
+        self.tray_item = None
+        self.tray_subscription = None
+        self.menu_monitor = None
         self.bus = Services(self)
         self.bluetooth = Bluetooth(self)
         self.shares = Shares(self.bus.bus, self.refresh_trays)
@@ -190,9 +200,15 @@ class Panel:
             row.append(start)
             tasks = Gtk.Box(spacing=3, hexpand=True)
             tray = Gtk.Box(spacing=2)
-            work = button(
-                str(self.workspace), lambda m=m: self.overview(m), "view-grid-symbolic"
-            )
+            work = Gtk.Button()
+            markers = Gtk.Box(spacing=3)
+            for n in range(1, 5):
+                marker = Gtk.Label(label=str(n), css_classes=["desk-marker"])
+                marker.set_tooltip_text(f"Workspace {n}")
+                markers.append(marker)
+            work.set_child(markers)
+            work.connect("clicked", lambda _, m=m: self.overview(m))
+            self.workspace_scroll(work)
             row.append(tasks)
             row.append(work)
             row.append(tray)
@@ -273,6 +289,12 @@ class Panel:
         if data.get("open") == "start":
             if self.outputs:
                 self.start(next(iter(self.outputs)))
+        elif data.get("open") == "system" and self.outputs:
+            monitor = next(
+                (m for m in self.outputs if m.get_connector() == data.get("output")),
+                next(iter(self.outputs)),
+            )
+            self.system(monitor)
         elif "desktop_icons" in data:
             self.dismiss()
             for monitor, (_, _, _, _, _, _, icons) in self.outputs.items():
@@ -280,6 +302,14 @@ class Panel:
                     first = icons.get_first_child()
                     if first:
                         first.grab_focus()
+        elif data.get("dismiss_menu") and self.page in (
+            "start",
+            "system",
+            "overview",
+            "tray",
+            "power",
+        ):
+            self.dismiss()
         elif "subscription" in data:
             self.reader.event(data)
         elif data.get("logout"):
@@ -334,7 +364,21 @@ class Panel:
         for _, _, box, _, _, work, _ in self.outputs.values():
             clear(box)
             work.set_tooltip_text(f"Workspace {self.workspace} · Overview")
-            work.set_label(str(self.workspace))
+            work.update_property(
+                [Gtk.AccessibleProperty.LABEL],
+                [f"Workspaces, current {self.workspace}"],
+            )
+            for n, marker in enumerate(work.get_child(), 1):
+                count = sum(t["workspace"] == n for t in self.tasks)
+                marker.set_css_classes(
+                    ["desk-marker"]
+                    + (["occupied"] if count else [])
+                    + (["current"] if n == self.workspace else [])
+                )
+                marker.set_tooltip_text(
+                    f"Workspace {n} · {count} windows"
+                    + (" · Current" if n == self.workspace else "")
+                )
             for t in self.tasks:
                 if t["workspace"] != self.workspace:
                     continue
@@ -358,7 +402,7 @@ class Panel:
     def refresh_trays(self, *_):
         if not hasattr(self, "bus"):
             return False
-        for _, _, _, tray, _, _, _ in self.outputs.values():
+        for monitor, (_, _, _, tray, _, _, _) in self.outputs.items():
             clear(tray)
             if hasattr(self, "shares"):
                 for path, source in self.shares.active.items():
@@ -376,12 +420,28 @@ class Panel:
                     continue
                 if props.get("Status") == "Passive":
                     continue
-                b = button(
-                    "",
-                    lambda d=dest, o=obj: self.bus.activate_tray(d, o),
-                    props.get("IconName") or "application-x-executable-symbolic",
-                )
                 title = props.get("Title") or props.get("Id") or dest
+                path = props.get("Menu")
+                b = Gtk.Button(
+                    child=Gtk.Image.new_from_icon_name(
+                        props.get("IconName") or "application-x-executable-symbolic"
+                    )
+                )
+                has_menu = bool(path and path != "/NO_DBUSMENU")
+                if has_menu:
+
+                    def open_tray(*_, btn=b, m=monitor, d=dest, p=path, t=title):
+                        tray_menu.show(self, m, d, p, btn, t)
+
+                    context = Gtk.GestureClick(button=3)
+                    context.connect("released", open_tray)
+                    b.add_controller(context)
+                if has_menu and props.get("ItemIsMenu", False):
+                    b.connect("clicked", open_tray)
+                else:
+                    b.connect(
+                        "clicked", lambda _, d=dest, o=obj: self.bus.activate_tray(d, o)
+                    )
                 b.set_tooltip_text(title)
                 b.update_property([Gtk.AccessibleProperty.LABEL], [title])
                 tray.append(b)
@@ -408,13 +468,22 @@ class Panel:
                 return
             if self.page == "pairing":
                 self.bluetooth.answer(False)
+            if self.tray_subscription:
+                self.bus.bus.signal_unsubscribe(self.tray_subscription)
+                self.tray_subscription = None
             old, self.menu = self.menu, None
             self.page = None
             old.destroy()
             if hasattr(self, "portals") and self.portals.choosing:
                 self.portals.finish(self.portals.choosing, 1)
 
-    def open(self, m, title, right=False):
+    def toggled(self, m, page):
+        if self.menu_monitor == m and self.page == page:
+            self.dismiss()
+            return True
+        return False
+
+    def open(self, m, title, right=False, anchor=None):
         self.dismiss()
         w = self.window(
             m,
@@ -427,8 +496,29 @@ class Panel:
         Layer.set_margin(w, Layer.Edge.RIGHT if right else Layer.Edge.LEFT, 8)
         outer = vbox()
         outer.add_css_class("menu")
-        outer.set_size_request(370, -1)
         w.set_child(outer)
+        self.menu_monitor = m
+        width = min(404, max(1, m.get_geometry().width - 16))
+        outer.set_size_request(width, -1)
+        outer.set_spacing(12)
+        if anchor and right:
+            ok, bounds = anchor.compute_bounds(self.outputs[m][0])
+            if ok:
+                Layer.set_margin(
+                    w,
+                    Layer.Edge.RIGHT,
+                    max(
+                        8,
+                        min(
+                            m.get_geometry().width - width - 8,
+                            round(
+                                m.get_geometry().width
+                                - bounds.get_x()
+                                - bounds.get_width()
+                            ),
+                        ),
+                    ),
+                )
         self.menu = w
         self.page = title
         keys = Gtk.EventControllerKey()
@@ -452,6 +542,8 @@ class Panel:
             self.bus.notify("Could not launch application", err.message)
 
     def start(self, m):
+        if self.toggled(m, "start"):
+            return
         box = self.open(m, "start")
         search = Gtk.SearchEntry(placeholder_text="Search applications")
         search.update_property([Gtk.AccessibleProperty.LABEL], ["Search applications"])
@@ -497,18 +589,68 @@ class Panel:
         self.dismiss()
         self.send(line)
 
+    def workspace_scroll(self, widget):
+        flags = Gtk.EventControllerScrollFlags
+        scroll = Gtk.EventControllerScroll.new(flags.BOTH_AXES | flags.DISCRETE)
+
+        def switch(_ctrl, dx, dy):
+            delta = dy or dx
+            if delta:
+                self.task_action(
+                    "next-workspace" if delta > 0 else "previous-workspace"
+                )
+            return True
+
+        scroll.connect("scroll", switch)
+        widget.add_controller(scroll)
+
     def overview(self, m):
-        box = self.open(m, "overview")
-        tabs = Gtk.Box(spacing=5)
+        if self.toggled(m, "overview"):
+            return
+        box = self.open(m, "overview", True, self.outputs[m][5])
+        self.menu.set_title("Workspaces")
+        box.append(styled_label("Workspaces", "menu-heading"))
+        tabs = Gtk.Box(spacing=6, homogeneous=True)
         for n in range(1, 5):
-            tabs.append(
-                button(f"Desk {n}", lambda n=n: self.task_action(f"workspace {n}"))
+            count = sum(t["workspace"] == n for t in self.tasks)
+            occupancy = (
+                f"{count} window" + ("" if count == 1 else "s") if count else "Empty"
             )
+            status = (
+                ("Current" if not count else f"Current · {count}")
+                if n == self.workspace
+                else occupancy
+            )
+            tile = Gtk.ToggleButton(
+                active=n == self.workspace, css_classes=["desk-tile"]
+            )
+            inside = vbox(3)
+            inside.append(styled_label(str(n), "desk-number"))
+            inside.append(styled_label(status, "tile-state"))
+            tile.set_child(inside)
+            tile.set_tooltip_text(
+                f"Workspace {n} · {occupancy}"
+                + (" · Current" if n == self.workspace else "")
+            )
+            tile.update_property(
+                [Gtk.AccessibleProperty.LABEL, Gtk.AccessibleProperty.DESCRIPTION],
+                [f"Desk {n}", tile.get_tooltip_text()],
+            )
+            tile.connect("clicked", lambda _, n=n: self.task_action(f"workspace {n}"))
+            tabs.append(tile)
+        self.workspace_scroll(tabs)
         box.append(tabs)
         search = Gtk.SearchEntry(placeholder_text="Find a window")
         box.append(search)
         rows = vbox()
-        box.append(scrolled(rows, 230))
+        scroll = Gtk.ScrolledWindow(
+            min_content_height=40,
+            max_content_height=min(230, max(50, m.get_geometry().height - 250)),
+            propagate_natural_height=True,
+        )
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_child(rows)
+        box.append(scroll)
 
         def populate(*_):
             clear(rows)
@@ -535,13 +677,22 @@ class Panel:
                 )
                 r.append(button("×", lambda t=t: self.task_action("close " + t["id"])))
                 rows.append(r)
+            if not rows.get_first_child():
+                rows.append(
+                    styled_label(
+                        "No matching windows"
+                        if search.get_text()
+                        else "No open windows",
+                        "menu-caption",
+                    )
+                )
 
         populate()
         search.connect("search-changed", populate)
         search.connect(
             "activate",
             lambda *_: (
-                rows.get_first_child()
+                isinstance(rows.get_first_child(), Gtk.Box)
                 and rows.get_first_child().get_first_child().emit("clicked")
             ),
         )
@@ -584,16 +735,15 @@ class Panel:
         return True
 
     def system(self, m):
-        box = self.open(m, "system", True)
-        self.system_rows = vbox()
-        box.append(
-            scrolled(
-                self.system_rows, min(490, max(190, m.get_geometry().height - 115))
-            )
-        )
+        if self.toggled(m, "system"):
+            return
+        outer = self.open(m, "system", True, self.outputs[m][4])
+        self.menu.set_title("Quick Settings")
         self.system_monitor = m
-        self.draw_system()
+        height = m.get_geometry().height - self.outputs[m][0].get_height() - 132
+        self.quick = QuickSettings(self, outer, max(80, height))
         self.menu.present()
+        self.quick.wifi.button.grab_focus()
         self.refresh_devices()
 
     def device_timer(self):
@@ -640,10 +790,15 @@ class Panel:
 
     def power(self, op):
         box = self.open(self.system_monitor, "power", True)
-        box.append(Gtk.Label(label=f"{op.capitalize()} this machine?"))
-        box.append(button(op.capitalize(), lambda: self.run_action("systemctl", op)))
-        box.append(button("Cancel", self.dismiss))
+        title = {"suspend": "Suspend", "reboot": "Restart", "poweroff": "Shut Down"}[op]
+        box.append(styled_label(title + " this computer?", "menu-heading"))
+        box.append(
+            button(title, lambda: (self.dismiss(), self.run_action("systemctl", op)))
+        )
+        cancel = button("Cancel", self.dismiss)
+        box.append(cancel)
         self.menu.present()
+        cancel.grab_focus()
 
     def pairing(self, method, values, answer):
         box = self.open(self.system_monitor, "pairing", True)
@@ -676,70 +831,8 @@ class Panel:
         self.menu.present()
 
     def draw_system(self):
-        b = self.system_rows
-        clear(b)
-
-        def label(text):
-            b.append(Gtk.Label(label=text, wrap=True, xalign=0))
-
-        def action(name, fn):
-            b.append(button(name, fn))
-
-        for text in self.upgrades.details:
-            label(text)
-        d = self.devices
-        label(d.get("battery", "Reading devices…"))
-        label(d.get("volume") or "No audio output")
-        row = Gtk.Box(spacing=4)
-        row.append(button("Volume −", lambda: self.volume("5%-")))
-        row.append(button("Volume +", lambda: self.volume("5%+")))
-        b.append(row)
-        for ident, name, current in d.get("sinks", []):
-            action(
-                ("✓ " if current else "") + name,
-                lambda i=ident: self.run_action("wpctl", "set-default", i),
-            )
-        wifi = d.get("wifi")
-        if wifi in ("enabled", "disabled"):
-            action(
-                "Wi-Fi " + wifi,
-                lambda: self.run_action(
-                    "nmcli", "radio", "wifi", "off" if wifi == "enabled" else "on"
-                ),
-            )
-        for name in d.get("networks", []):
-            action(
-                name,
-                lambda n=name: self.run_action("nmcli", "connection", "up", "id", n),
-            )
-        if d.get("adapter"):
-            action(
-                "Discover Bluetooth devices",
-                lambda: self.run_action("bluetoothctl", "--timeout", "5", "scan", "on"),
-            )
-        elif d:
-            label("No Bluetooth adapter")
-        for addr, name in d.get("bluetooth", []):
-            action("Pair " + name, lambda addr=addr: self.bluetooth.pair(addr))
-            action(
-                "Connect " + name,
-                lambda addr=addr: self.run_action("bluetoothctl", "connect", addr),
-            )
-        for n, (title, body, sender, actions) in reversed(list(self.bus.notes.items())):
-            label(title)
-            if body:
-                label(body)
-            for key, name in actions.items():
-                action(name, lambda i=n, k=key: self.bus.action(i, k))
-            action("Dismiss", lambda i=n: self.bus.close(i, 2))
-        for name, fn in [
-            ("Lock", lambda: self.task_action("lock")),
-            ("Suspend", lambda: self.power("suspend")),
-            ("Restart", lambda: self.power("reboot")),
-            ("Power off", lambda: self.power("poweroff")),
-            ("Log out", lambda: self.task_action("logout")),
-        ]:
-            action(name, fn)
+        if self.page == "system" and hasattr(self, "quick"):
+            self.quick.refresh()
 
     def hide_toast(self, n):
         if self.popup and self.toast_id == n:

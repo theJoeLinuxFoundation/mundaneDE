@@ -300,13 +300,25 @@ modules = [
 try:
     click("System menu")
     radio = joe("nmcli radio wifi")
-    click("Wi-Fi " + radio)
+    wait(
+        "Wi-Fi tile ready",
+        lambda: (
+            "toggle button Wi-Fi, " + ("On" if radio == "enabled" else "Off")
+            in widget("list").splitlines()
+        ),
+    )
+    widget("click", "Wi-Fi, " + ("On" if radio == "enabled" else "Off"))
     wait("NetworkManager radio toggled", lambda: joe("nmcli radio wifi") != radio)
     changed = joe("nmcli radio wifi")
-    click("Wi-Fi " + changed)
+    wait(
+        "Wi-Fi state reflected",
+        lambda: "Wi-Fi, " + ("On" if changed == "enabled" else "Off") in widget("list"),
+    )
+    widget("click", "Wi-Fi, " + ("On" if changed == "enabled" else "Off"))
     wait("NetworkManager radio restored", lambda: joe("nmcli radio wifi") == radio)
     active_sink = joe("wpctl inspect @DEFAULT_AUDIO_SINK@")
     other = "mundane_first" if "mundane_second" in active_sink else "mundane_second"
+    widget("click", "Devices and connections")
     click(other)
     wait(
         "WirePlumber changed sink",

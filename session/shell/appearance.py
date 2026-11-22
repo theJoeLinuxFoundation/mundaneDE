@@ -78,12 +78,44 @@ class Appearance:
         if contrast:
             fg, bg = ("#ffffff", "#000000")
         edge = fg if contrast else "#748094"
+        surface = ("#ffffff" if light else "#2a3342") if not contrast else bg
+        hover = ("#e6efec" if light else "#374452") if not contrast else bg
+        selected = ("#d6ebe6" if light else "#24483f") if not contrast else "#ffffff"
+        ink = ("#194a3c" if light else "#beeed7") if not contrast else "#000000"
+        muted = ("#4d6060" if light else "#c2cbd0") if not contrast else fg
+        transition = (
+            "none"
+            if reduce
+            else "background-color 140ms ease, color 140ms ease, border-color 140ms ease"
+        )
         self.css.load_from_data(
             (
                 self.base
                 + f"""
 .bar,.menu,.toast {{background:{bg};color:{fg};border-color:{edge};}}
 .bar button.start,.menu button:hover,.bar button:hover {{background:{bg};color:{fg};outline:1px solid {edge};}}
+ .menu {{border-radius:16px;padding:16px;}}
+ .menu-heading {{font-size:1.45em;font-weight:700;letter-spacing:-0.5px;}}
+ .menu-caption,.tile-state,.level-value {{color:{muted};font-size:0.92em;}}
+ .menu button.quick-tile,.menu button.desk-tile,.menu button.icon-command,.level-card {{background:{surface};border:1px solid {edge if contrast else ("#d2ded9" if light else "#465360")};border-radius:10px;}}
+ .menu button.quick-tile,.menu button.desk-tile {{padding:10px;transition:{transition};}}
+ .menu button.quick-tile:hover,.menu button.desk-tile:hover,.menu button.icon-command:hover {{background:{hover};outline:1px solid {edge};}}
+ .menu button.quick-tile:checked,.menu button.desk-tile:checked {{background:{selected};color:{ink};border-color:{ink if contrast else ("#83b4a3" if light else "#609982")};}}
+ .menu button.quick-tile:checked label,.menu button.desk-tile:checked label {{color:{ink};}}
+ .menu button.quick-tile:active,.menu button.desk-tile:active,.menu button.icon-command:active,.bar button:active {{background:{ink};color:{selected};}}
+ .menu button.quick-tile:active label,.menu button.desk-tile:active label {{color:{selected};}}
+ .menu button.quick-tile:disabled {{opacity:0.72;}}
+ .tile-name,.battery {{font-weight:600;}}
+ .level-card {{padding:10px 12px;}}
+ .level-card scale {{padding:5px 3px;min-height:14px;}}
+ .level-card scale trough {{border-radius:6px;min-height:5px;background:{edge};}}
+ .level-card scale highlight {{background:{"#ffff00" if contrast else "#" + accent};border-radius:6px;}}
+ .menu button.icon-command {{padding:8px 5px;}}
+ .menu .details {{padding:4px 0;}}
+ .bar .desk-marker {{background:{surface};color:{muted};border:1px solid {edge};border-radius:6px;min-width:18px;padding:1px 2px;transition:{transition};}}
+ .bar .desk-marker.occupied {{border-bottom:3px solid {fg};}}
+ .bar .desk-marker.current {{background:{selected};color:{ink};border:2px solid {ink};font-weight:700;}}
+ .desk-number {{font-size:1.4em;font-weight:700;}}
 button:focus-visible,entry:focus-visible {{outline:3px solid {"#ffff00" if contrast else "#" + accent};outline-offset:-3px;}}
 """
             ).encode()
