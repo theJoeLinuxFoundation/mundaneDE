@@ -43,6 +43,8 @@ pub struct WorkspaceTransition {
     pub previous: Vec<(Window, Rectangle<i32, Logical>)>,
 }
 
+struct AuthenticationSurface;
+
 pub struct Desktop {
     layers: WlrLayerShellState,
     list: ForeignToplevelListState,
@@ -123,6 +125,17 @@ impl Drop for Desktop {
     }
 }
 impl State {
+    pub(crate) fn authentication_focused(&self) -> bool {
+        self.seat
+            .get_keyboard()
+            .and_then(|key| key.current_focus())
+            .is_some_and(|focus| {
+                with_states(&focus.surface, |state| {
+                    state.data_map.get::<AuthenticationSurface>().is_some()
+                })
+            })
+    }
+
     pub fn register_task(&mut self, w: &Window) {
         if self.desktop.tasks.contains_key(w)
             || w.x11_surface().is_some_and(|x| x.is_override_redirect())
@@ -512,6 +525,7 @@ impl State {
                     | "mundane-power"
                     | "mundane-capture"
                     | "mundane-history"
+                    | "mundane-authentication"
             ) {
                 if self.desktop.menu_surface.is_none() {
                     self.desktop.previous_menu_focus =
@@ -590,6 +604,10 @@ impl WlrLayerShellHandler for State {
     }
     fn new_layer_surface(&mut self, s: ProtocolLayer, o: Option<WlOutput>, _: Layer, name: String) {
         with_states(s.wl_surface(), |a| {
+            if name == "mundane-authentication" {
+                a.data_map
+                    .insert_if_missing_threadsafe(|| AuthenticationSurface);
+            }
             a.data_map
                 .insert_if_missing_threadsafe(RetiredLayer::default);
             a.data_map

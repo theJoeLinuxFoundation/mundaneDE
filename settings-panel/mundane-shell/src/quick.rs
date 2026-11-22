@@ -1,4 +1,5 @@
 //! The Quick Settings view owns focus and dialog lifetimes, never device state.
+use crate::view::text_button;
 use crate::{
     devices::{Action, Request},
     Event, Page, Service, Shell,
@@ -97,16 +98,6 @@ fn reveal(child: impl IntoElement, focus: FocusHandle, scroll: &ScrollHandle) ->
             }
         })
         .child(child)
-}
-
-fn text_button(
-    label: &'static str,
-    focus: &FocusHandle,
-    theme: Theme,
-    action: impl Fn(&mut Window, &mut App) + Clone + 'static,
-) -> Stateful<Div> {
-    mundane_ui::button(label, focus, theme, action.clone())
-        .on_a11y_action(AccessibleAction::Click, move |_, w, cx| action(w, cx))
 }
 
 fn icon(name: &str, fallback: &str, ink: u32) -> AnyElement {

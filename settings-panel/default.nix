@@ -1,5 +1,6 @@
 { lib
 , rustPlatform
+, polkit
 , pkg-config
 , vulkan-loader
 , libxkbcommon
@@ -46,6 +47,7 @@ rustPlatform.buildRustPackage {
   nativeBuildInputs = [ pkg-config makeWrapper ];
 
   buildInputs = [
+    polkit
     vulkan-loader
     libxkbcommon
     libGL

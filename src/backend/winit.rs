@@ -298,7 +298,7 @@ impl State {
                             state.shell_message(&serde_json::json!({"screen_reader":"toggle"}));
                             return FilterResult::Intercept(());
                         }
-                        if !state.desktop.monitor.subscription.is_empty() {
+                        if !state.desktop.monitor.subscription.is_empty() && !state.authentication_focused() {
                             let mask=mods.serialized.depressed|mods.serialized.latched|mods.serialized.locked;
                             let code=event.key_code().raw();
                             let grab=state.desktop.monitor.filter(press,code,sym,mask);

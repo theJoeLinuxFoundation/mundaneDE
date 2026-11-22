@@ -32,6 +32,7 @@ pkgs.mkShell {
     libxkbcommon
     libGL
     wayland
+    polkit
     wayland-protocols
     glib
     fontconfig

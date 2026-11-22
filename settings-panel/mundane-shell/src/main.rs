@@ -1,5 +1,7 @@
 //! Candidate GPUI shell. The compositor supplies both the Wayland connection and control socket.
 mod appearance;
+mod auth;
+mod auth_dialog;
 mod bluetooth;
 mod cast;
 mod catalog;
@@ -10,6 +12,7 @@ mod launcher;
 mod notifications;
 mod portals;
 mod quick;
+mod reader;
 mod tray;
 mod upgrades;
 mod view;
@@ -41,6 +44,7 @@ struct Task {
 struct Message {
     open: Option<String>,
     osd: Option<String>,
+    screen_reader: Option<String>,
     outputs: Option<Vec<String>>,
     #[serde(default)]
     dismiss_menu: bool,
@@ -63,6 +67,12 @@ struct Message {
 }
 #[derive(Clone)]
 enum Service {
+    Identity(u64, u32),
+    Answer(u64, u64, zeroize::Zeroizing<String>),
+    CancelAuth(u64),
+    ReaderToggle,
+    ReaderKey(reader::Key),
+    Logout,
     NoteAction(u32, Option<String>),
     LocalNotice(String, String),
     Accept(u64, String, String, String),
@@ -80,6 +90,8 @@ enum Service {
 }
 #[derive(Clone)]
 enum Event {
+    Auth(auth::Prompt),
+    AuthClosed(u64),
     Banner(notifications::Note, i32),
     History(Vec<notifications::Note>),
     HideBanner(Option<u32>),
@@ -110,6 +122,8 @@ enum Event {
     Quit,
 }
 struct Shell {
+    auth: Option<auth::Prompt>,
+    retired_auth: u64,
     locked: bool,
     outputs: Vec<String>,
     picker: Option<portals::Picker>,
@@ -174,6 +188,10 @@ fn services(
         // Catalogue discovery overlaps GPUI platform startup. Start services that
         // launch clients only after GPUI has consumed the private Wayland fd.
         let device_tx = ready.recv_blocking()?;
+        let reader = reader::Reader::new(socket.clone())?;
+        let auth = auth::Agent::new(reader.clone(), tx.clone())
+            .map_err(|e| eprintln!("Polkit agent: {e:#}"))
+            .ok();
         let notes = notifications::Server::new(tx.clone())?;
         let portal = portals::Portals::new(tx.clone(), socket)?;
         let recovery = portal.clone();
@@ -211,7 +229,36 @@ fn services(
                     Service::Accept(seq, kind, id, label) => portal.accept(seq, &kind, &id, label),
                     Service::Cancel(seq) => portal.cancel(seq),
                     Service::Stop(path) => portal.close(&path),
-                    Service::Locked(v) => portal.locked(v),
+                    Service::Locked(v) => {
+                        portal.locked(v);
+                        if let Some(a) = &auth {
+                            a.lock(v)
+                        }
+                    }
+                    Service::Identity(id, uid) => {
+                        if let Some(a) = &auth {
+                            a.select(id, uid)
+                        }
+                    }
+                    Service::Answer(id, seq, value) => {
+                        if let Some(a) = &auth {
+                            a.respond(id, seq, &value)
+                        }
+                    }
+                    Service::CancelAuth(id) => {
+                        if let Some(a) = &auth {
+                            a.cancel(id)
+                        }
+                    }
+                    Service::ReaderToggle => reader.toggle(),
+                    Service::ReaderKey(key) => reader.key(key),
+                    Service::Logout => {
+                        if let Some(a) = &auth {
+                            a.shutdown()
+                        }
+                        let _ = tx.try_send(Event::Quit);
+                        break;
+                    }
                     Service::Pair(path, name) => {
                         let result = agent
                             .as_ref()
@@ -263,6 +310,13 @@ fn services(
 
 fn close_menu(cx: &mut App) {
     if let Some((_, page, window)) = cx.global_mut::<Shell>().menu.take() {
+        if let Page::Auth(id) = page {
+            let s = cx.global_mut::<Shell>();
+            s.retired_auth = id;
+            if s.auth.take().is_some() {
+                let _ = s.service.try_send(Service::CancelAuth(id));
+            }
+        }
         if let Page::Capture(id) = page {
             let s = cx.global_mut::<Shell>();
             if s.picker.as_ref().is_some_and(|p| p.serial == id) {
@@ -354,6 +408,49 @@ fn target(m: &Message, cx: &App) -> Option<DisplayId> {
 }
 fn handle(event: Event, cx: &mut App) {
     match event {
+        Event::Auth(p) => {
+            let id = p.id;
+            if id <= cx.global::<Shell>().retired_auth {
+                return;
+            }
+            if cx.global::<Shell>().locked || home_display(cx).is_none() {
+                let _ = cx
+                    .global::<Shell>()
+                    .service
+                    .try_send(Service::CancelAuth(id));
+                return;
+            }
+            let already = cx
+                .global::<Shell>()
+                .menu
+                .as_ref()
+                .is_some_and(|m| m.1 == Page::Auth(id));
+            if !already {
+                close_menu(cx)
+            }
+            cx.global_mut::<Shell>().auth = Some(p);
+            if !already {
+                open_menu(home_display(cx).unwrap().id(), Page::Auth(id), None, cx);
+                if cx.global::<Shell>().menu.is_none() {
+                    let _ = cx
+                        .global::<Shell>()
+                        .service
+                        .try_send(Service::CancelAuth(id));
+                }
+            }
+        }
+        Event::AuthClosed(id) => {
+            if cx
+                .global::<Shell>()
+                .auth
+                .as_ref()
+                .is_some_and(|a| a.id == id)
+            {
+                cx.global_mut::<Shell>().auth = None;
+                close_menu(cx)
+            }
+            return;
+        }
         Event::History(v) => cx.global_mut::<Shell>().notes = v,
         Event::Banner(n, ms) => {
             feedback::show(feedback::Feedback::Banner(n), ms, cx);
@@ -422,7 +519,7 @@ fn handle(event: Event, cx: &mut App) {
         Event::DeviceMessage(m) => cx.global_mut::<Shell>().device_message = m,
         Event::Message(mut m) => {
             if m.logout {
-                cx.quit();
+                let _ = cx.global::<Shell>().service.try_send(Service::Logout);
                 return;
             }
             if let Some(locked) = m.locked {
@@ -435,6 +532,9 @@ fn handle(event: Event, cx: &mut App) {
                     feedback::hide_banner(None, cx);
                     feedback::hide_level(cx);
                 }
+            }
+            if m.screen_reader.as_deref() == Some("toggle") {
+                let _ = cx.global::<Shell>().service.try_send(Service::ReaderToggle);
             }
             if let Some(delta) = m.osd.take() {
                 let _ = cx
@@ -627,12 +727,19 @@ fn main() -> anyhow::Result<()> {
     mundane_ui::run(move |cx| {
         let input = socket.clone();
         let messages = tx.clone();
+        let keys = service.clone();
         std::thread::spawn(move || {
             let mut buf = vec![0; 262144];
             while let Ok(n) = input.recv(&mut buf) {
                 let Ok(json) = serde_json::from_slice::<serde_json::Value>(&buf[..n]) else {
                     continue;
                 };
+                if json.get("subscription").is_some() {
+                    if let Ok(key) = serde_json::from_value(json) {
+                        let _ = keys.try_send(Service::ReaderKey(key));
+                    }
+                    continue;
+                }
                 let Ok(m) = serde_json::from_value::<Message>(json.clone()) else {
                     continue;
                 };
@@ -671,6 +778,8 @@ fn main() -> anyhow::Result<()> {
         upgrades::start(tx.clone(), service.clone());
         let _ = socket.send(b"watch-tasks");
         cx.set_global(Shell {
+            auth: None,
+            retired_auth: 0,
             locked: true,
             outputs: vec![],
             picker: None,

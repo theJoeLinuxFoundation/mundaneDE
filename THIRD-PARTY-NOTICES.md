@@ -28,7 +28,7 @@ uses the repository’s BSD-3-Clause licence. It shares the Settings lockfile an
 the suite’s `mundane-ui` (BSD-3-Clause AND Apache-2.0). Its GIO Rust bindings
 and freedesktop-icons are MIT-licensed. The capture backend uses nix (MIT)
 and tempfile (MIT OR Apache-2.0). For self_cell use its Apache-2.0 option.
-The compositor has its own lockfile.
+The authentication agent uses zeroize (Apache-2.0 OR MIT) and dynamically links the system’s libpolkit-agent-1 and libpolkit-gobject-1 (LGPL-2.0-or-later). The session launches the separately installed Orca executable. The compositor has its own lockfile.
 
 To list the packages, versions and declared licences in both locked dependency
 graphs, run the following from the repository root with Cargo and jq installed.

@@ -17,6 +17,7 @@ pub enum Page {
     Tray(String, Vec<i32>),
     Switcher,
     History,
+    Auth(u64),
     Capture(u64),
 }
 impl Page {
@@ -29,6 +30,7 @@ impl Page {
             Self::Group(_) => "mundane-app-windows",
             Self::Tray(..) => "mundane-tray",
             Self::History => "mundane-history",
+            Self::Auth(_) => "mundane-authentication",
             Self::Capture(_) => "mundane-capture",
             Self::Switcher => "mundane-switcher",
         }
@@ -52,6 +54,7 @@ impl Page {
                 .map(|i| i.title.as_str())
                 .unwrap_or("Tray menu"),
             Self::History => "Notifications",
+            Self::Auth(_) => "Authentication required",
             Self::Capture(_) => "Screen capture",
             Self::Switcher => "Switch windows",
         }
@@ -63,6 +66,7 @@ pub struct Surface {
     pub(super) hold: Option<Task<()>>,
     page: Page,
     quick: Option<Entity<crate::quick::Quick>>,
+    auth: Option<Entity<crate::auth_dialog::Dialog>>,
     history: Option<mundane_ui::NotificationHistory>,
     display: DisplayId,
     pub(super) field: Option<Entity<TextField>>,
@@ -176,7 +180,7 @@ pub fn open(
                 },
                 anchor: if bar {
                     Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT
-                } else if preview {
+                } else if preview || matches!(page, Page::Auth(_)) {
                     Anchor::empty()
                 } else {
                     Anchor::BOTTOM
@@ -187,7 +191,7 @@ pub fn open(
                         }
                 },
                 exclusive_zone: Some(px(if bar { height } else { 0. })),
-                margin: if bar || preview {
+                margin: if bar || preview || matches!(page, Page::Auth(_)) {
                     None
                 } else {
                     Some((px(0.), px(8.), px(6.), px(left.unwrap_or(8.))))
@@ -261,7 +265,14 @@ pub fn open(
                         }
                         menu
                     });
+                let auth = if matches!(page, Page::Auth(_)) {
+                    let prompt = cx.global::<Shell>().auth.clone().unwrap();
+                    Some(cx.new(|cx| crate::auth_dialog::Dialog::new(&prompt, w, cx)))
+                } else {
+                    None
+                };
                 Surface {
+                    auth,
                     history: (page == Page::History)
                         .then(|| mundane_ui::NotificationHistory::new(cx)),
                     quick: (page == Page::System)
@@ -310,6 +321,16 @@ pub(super) fn reveal_focus(
         scroll.set_offset(point(old.x, y));
         w.on_next_frame(|w, _| w.refresh());
     }
+}
+
+pub(super) fn text_button(
+    label: &'static str,
+    focus: &FocusHandle,
+    theme: Theme,
+    action: impl Fn(&mut Window, &mut App) + Clone + 'static,
+) -> Stateful<Div> {
+    mundane_ui::button(label, focus, theme, action.clone())
+        .on_a11y_action(AccessibleAction::Click, move |_, w, cx| action(w, cx))
 }
 
 pub(super) fn shell_button(
@@ -783,6 +804,9 @@ impl Render for Surface {
                         list = list.child(
                             mundane_ui::text_label("selection", caption.clone()).child(caption),
                         );
+                    }
+                    Page::Auth(_) => {
+                        list = list.child(self.auth.as_ref().unwrap().clone());
                     }
                     Page::History => {
                         let history = self.history.as_mut().unwrap();
