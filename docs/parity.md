@@ -3,8 +3,42 @@
 The reference is joe’s GNOME 51 x86 desktop with Dash to Panel 74, ArcMenu
 70, AppIndicator and Desktop Icons NG 51.4. The taskbar runs along the bottom.
 joe pins Firefox, Files, Terminal, Text Editor and Calculator in that order.
-The clock and system menu are separate buttons. The table starts from
-mundaneDE `2a0c8d0`, before the changes below. [joe’s desktop defaults](https://github.com/theJoeLinuxFoundation/joe-linux/blob/5dc2ac8/packages/joe-desktop/build.sh) · [Desktop packages](https://github.com/theJoeLinuxFoundation/joe-linux/blob/5dc2ac8/packages/joe-desktop/package.zon)
+The clock and system menu are separate buttons. The beta1 guest’s GNOME switch-applications binding includes both Alt+Tab and
+Super+Tab. The table starts from mundaneDE `2a0c8d0`, before the changes below. [joe’s desktop defaults](https://github.com/theJoeLinuxFoundation/joe-linux/blob/5dc2ac8/packages/joe-desktop/build.sh) · [Desktop packages](https://github.com/theJoeLinuxFoundation/joe-linux/blob/5dc2ac8/packages/joe-desktop/package.zon)
+
+## Changes since the baseline
+
+| Workflow | Before · `2a0c8d0` | After |
+| --- | --- | --- |
+| Alt+Tab with Calculator behind Text Editor | [Editor keeps focus; no switcher](screenshots/parity/before-switcher.png) | [Calculator selected while Alt is held](screenshots/parity/after-switcher.png) |
+| Taskbar at login, before opening an app | [Empty task area](screenshots/parity/before-taskbar.png) | [Five launchable favourites beside Start](screenshots/parity/after-taskbar.png) |
+| Start immediately after opening it | [Alphabetical app list](screenshots/parity/before-start.png) | [Favourites, category browser and pin controls](screenshots/parity/after-start.png) |
+
+**Window switching.** Hold Alt and tap Tab to walk the current desk’s windows
+in stacking order. Shift reverses direction, releasing Alt activates the
+selection and Escape cancels. A quick Alt+Tab returns to the previous window.
+Minimized windows follow the visible ones. The chooser lists individual
+window titles. The existing Super+Tab restore shortcut still works.
+
+**Favourites.** The first login inherits the GNOME favourite order where
+available, with joe’s five defaults on a standalone install. Only installed,
+visible desktop entries appear. Click a pin to launch, focus or restore its
+window. When it has several windows, choose by title and desk. A line under
+the icon marks an open app. The stars in Start pin and unpin apps; edits are
+saved in mundaneDE’s own preference. Unpinned windows retain individual
+taskbar buttons. Hover thumbnails remain open work.
+
+**Finding an app.** Start opens with the search field focused. Browse favourites,
+all apps or desktop-entry categories. Typing searches across categories and
+matches words in names, desktop IDs, generic names and keywords. For example,
+typing “arithmetic” finds Calculator on joe. Enter launches the first match.
+
+The revised screens show `edad935`. All six images are 1920×1080 QMP captures
+from headless joe beta1 guests using
+the same wallpaper, workspace and applications. The test sends seat input and
+checks the applications’ active frames through AT-SPI. [Guest test](../tests/qemu/session/qualify_parity.py)
+
+## Frequency ranking
 
 The rank estimates how often someone who browses, edits files and moves among
 several windows would encounter the difference. It is a workflow estimate,

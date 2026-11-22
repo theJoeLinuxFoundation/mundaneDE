@@ -139,6 +139,20 @@ and PipeWire volume against the guest services. A GTK fixture supplies laptop
 battery, backlight and Bluetooth states. QMP samples the workspace transition
 with animations enabled and with reduced motion. [Comparison screenshots](../../../docs/screenshots/shell/README.md)
 
+### Daily desktop parity
+
+On a fresh headless 1920×1080 login, run the following from the repository
+root. Use a dedicated overlay. The test opens applications, changes the test
+account’s favourites, restarts the panel and resets the favourites preference.
+Install Netpbm on the host for lossless QMP-to-PNG conversion.
+
+```sh
+python3 tests/qemu/session/qualify_parity.py "$MUNDANE_TRY_DIR" target/parity-screenshots
+```
+
+To capture the baseline, install commit `2a0c8d0` in a second overlay and run
+the same test driver with `--baseline`. [Comparison and images](../../../docs/parity.md)
+
 ### Headless portal qualification
 
 Boot a dedicated overlay from the frozen beta1 image. Run from the repository
