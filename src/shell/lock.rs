@@ -172,6 +172,7 @@ impl SessionLockHandler for State {
         self.report_lock(b"U");
         self.shell_message(&serde_json::json!({"locked":false}));
         self.desktop.lock.active = false;
+        self.publish_tasks();
         self.desktop.lock.surfaces.clear();
         self.desktop.lock.last_input = Instant::now();
         self.generation += 1;

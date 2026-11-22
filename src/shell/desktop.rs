@@ -63,6 +63,7 @@ pub struct Desktop {
     pub transition: Option<WorkspaceTransition>,
     pub showing_desktop: bool,
     pub channel: Option<UnixDatagram>,
+    pub watch_tasks: bool,
     pub panel: Option<std::process::Child>,
     pub panel_source: Option<calloop::RegistrationToken>,
 }
@@ -96,6 +97,7 @@ impl Desktop {
             showing_desktop: false,
             channel: None,
             panel: None,
+            watch_tasks: false,
             panel_source: None,
         }
     }
@@ -135,6 +137,12 @@ impl State {
                 stack_index: self.space.elements().count(),
             },
         );
+        self.publish_tasks();
+    }
+    pub fn publish_tasks(&mut self) {
+        if self.desktop.watch_tasks {
+            self.shell_command("list");
+        }
     }
     fn task_labels(w: &Window) -> (String, String) {
         if let Some(x) = w.x11_surface() {
@@ -164,6 +172,7 @@ impl State {
                 task.handle.send_title(&title);
                 task.handle.send_app_id(&app);
                 task.handle.send_done();
+                self.publish_tasks();
             }
         }
     }
@@ -174,6 +183,7 @@ impl State {
                 task.handle.identifier(),
             )));
             self.desktop.list.remove_toplevel(&task.handle);
+            self.publish_tasks();
         }
     }
     fn arrange_workspace(&mut self) {
@@ -296,20 +306,29 @@ impl State {
         }
         let mut args = command.split_ascii_whitespace();
         let op = args.next().unwrap_or("");
+        // A replacement panel may subscribe during lock. Publish its snapshot on unlock.
+        if op == "watch-tasks" {
+            self.desktop.watch_tasks = true;
+        }
         if self.desktop.lock.active {
             return;
         }
         match op {
-            "list" => {
+            "watch-tasks" | "list" => {
                 let tasks: Vec<_> = self
                     .desktop
                     .tasks
                     .iter()
                     .map(|(w, t)| {
-                        serde_json::json!({
+                        let mut task = serde_json::json!({
                             "id":t.handle.identifier(),
                             "workspace":t.workspace,"minimized":self.minimized.contains(w)
-                        })
+                        });
+                        if self.desktop.watch_tasks {
+                            task["title"] = t.handle.title().chars().take(512).collect::<String>().into();
+                            task["app"] = t.handle.app_id().into();
+                        }
+                        task
                     })
                     .collect();
                 self.shell_message(
@@ -345,6 +364,7 @@ impl State {
                         {
                             self.desktop.tasks.get_mut(&w).unwrap().workspace = n;
                             self.arrange_workspace();
+                            self.publish_tasks();
                         }
                     }
                     "close" => {
@@ -425,7 +445,10 @@ impl State {
         let mut map = layer_map_for_output(&o);
         let old = map.non_exclusive_zone();
         map.arrange();
-        let resized = map.non_exclusive_zone() != old;
+        let area = map.non_exclusive_zone();
+        let resized = area != old;
+        tracing::debug!(target: "mundane_shell_frames", output = o.name(), role = l.namespace(),
+            width = area.size.w, height = area.size.h, "layer commit");
         drop(map);
         if !with_states(s, |s| {
             s.data_map

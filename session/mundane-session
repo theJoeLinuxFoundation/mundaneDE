@@ -186,7 +186,10 @@ def session():
                 env["MUNDANE_IBUS_PANEL"] = path
                 break
     bindir = Path(__file__).resolve().parent
-    env["MUNDANE_PANEL"] = str(bindir / "mundane-panel")
+    candidate = sys.argv[1:] == ["--gpui"]
+    if sys.argv[1:] and not candidate:
+        raise SystemExit("usage: mundane-session [--gpui]")
+    env["MUNDANE_PANEL"] = str(bindir / ("mundane-shell" if candidate else "mundane-panel"))
     compositor = channel = None
     published = False
     with tempfile.TemporaryDirectory(
@@ -228,7 +231,7 @@ def session():
                         "wait",
                         "--session",
                         "--timeout=15",
-                        "org.freedesktop.impl.portal.desktop.mundane",
+                        "org.kde.StatusNotifierWatcher" if candidate else "org.freedesktop.impl.portal.desktop.mundane",
                     ],
                     check=True,
                 )

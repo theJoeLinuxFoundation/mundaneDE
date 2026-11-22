@@ -171,6 +171,9 @@ logged-in user. [systemd session targets](https://www.freedesktop.org/software/s
 
 ### joe packaging handoff
 
+The [GPUI shell migration](shell-gpui.md) has a separate preview entry. To package step 1 for testing, pass the release `mundane-shell` binary as the second argument to `session/install.sh`. Build it from the archive with `cargo build --release --locked --offline --manifest-path settings-panel/Cargo.toml -p mundane-shell`. It installs `$prefix/bin/mundane-shell` and `/usr/share/wayland-sessions/mundane-gpui.desktop`. The existing mundaneDE entry selects the Python reference. The preview uses GIO, the desktop and favourite schemas, dconf, the icon theme, fonts and the same Mesa Vulkan loader/ICD as Settings. Both Rust GUIs share the Settings workspace lockfile. [Build and qualification](../tests/qemu/session/README.md#gpui-shell-step-1)
+
+
 **Vendored source archive.** Run `tools/dist.sh` in a Git checkout. It exports
 the committed HEAD, reads the compositor version and writes
 `target/dist/mundaneDE-VERSION.tar.xz` and prints its SHA-256. One `vendor/`
@@ -544,7 +547,7 @@ in `org.gnome.desktop.interface` and `high-contrast` in
 snapshot and change signals. Settings and suite apps use the same mundane-ui
 portal subscription, semantic colours and GPUI motion preference. Settings also
 reads font, text scale and the accent name from the desktop interface namespace.
-[Shared implementation at the pinned suite revision](https://github.com/theJoeLinuxFoundation/mundane-apps/blob/78540788819e4c899fa4a15df0f1d5ec1cefa938/crates/mundane-ui/src/appearance.rs)
+[Shared implementation at the pinned suite revision](https://github.com/theJoeLinuxFoundation/mundane-apps/blob/4c254b465f0f5955c4db9a151cc409c8bf0a56eb/crates/mundane-ui/src/appearance.rs)
 
 The headless joe beta1 gate changes the preferences in Settings while libadwaita
 and the suite’s Terminal stay open. It observes native style properties, Terminal

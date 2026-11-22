@@ -18,10 +18,30 @@ def prop(b, s, p, i, k):
 
 def call(b, s, p, i, method, args, response):
     if method == "GetLayout":
-        child = GLib.Variant(
-            "(ia{sv}av)", (1, {"label": GLib.Variant("s", "Open folder")}, [])
+
+        def item(number, label, **properties):
+            return GLib.Variant(
+                "(ia{sv}av)",
+                (number, {"label": GLib.Variant("s", label), **properties}, []),
+            )
+
+        parent = args.unpack()[0]
+        children = (
+            [item(3, "Week.txt")]
+            if parent == 2
+            else [
+                item(1, "Open folder"),
+                item(
+                    2,
+                    "Recent documents",
+                    **{"children-display": GLib.Variant("s", "submenu")},
+                ),
+                item(4, "Keep offline", enabled=GLib.Variant("b", False)),
+            ]
         )
-        response.return_value(GLib.Variant("(u(ia{sv}av))", (1, (0, {}, [child]))))
+        response.return_value(
+            GLib.Variant("(u(ia{sv}av))", (1, (parent, {}, children)))
+        )
     elif method == "Event":
         if args.unpack()[:2] == (1, "clicked"):
             Path(GLib.get_user_runtime_dir(), "tray-menu-action").touch()

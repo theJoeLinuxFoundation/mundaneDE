@@ -154,5 +154,6 @@ impl State {
             self.map_new_window(window.clone());
         }
         crate::focus::set_keyboard_focus(self, Some(window));
+        self.publish_tasks();
     }
 }

@@ -56,6 +56,15 @@ automated qualification results. For each row, record **pass**, **fail** or
 | Upgrade recovery | On the recoverable image, run joe’s failed-upgrade boot fixture and log in to the restored system. Dismiss the alert, reopen the system menu and restart the shell. Separately exercise an explicit rollback. | The desktop identifies the failed target and the previous system now running. Details remain available without duplicate alerts. An explicit rollback produces no failed-upgrade alert. | |
 | Session fallback | Select GNOME at the greeter, open the saved file, then log back in to mundaneDE. | Both sessions start, the same file is accessible and the new session has working input and app launch. | |
 
+## Optional GPUI preview
+
+When the packager has installed **mundaneDE (GPUI preview)**, select that GDM entry to try migration step 1. Record the tested revision with the result.
+
+| Try | What to look for | Maintainer result |
+| --- | --- | --- |
+| Open Start, type a desktop-entry keyword, browse a category, then pin and unpin an app. Open two documents in one pinned app. | Results follow typing. The pin order survives login. The running pin offers both documents by name. Alt+Tab previews the windows and releasing Alt activates the selected one. | |
+| Open a tray item with the mouse and from Super+S using the keyboard. Try the workspace finder on a second display, then disconnect and reconnect it. | Tray actions reach their owner. Escape, the invoking button and an outside click dismiss a menu. Typing resumes in the previous app. Each connected display has one bottom bar, and a maximized window leaves it visible. | |
+
 ## Retest the first hand-test findings
 
 The maintainer found these three issues on `5332dbc`. Repeat the checks in

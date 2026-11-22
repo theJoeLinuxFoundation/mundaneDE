@@ -164,6 +164,7 @@ impl State {
         let mut cmd = Command::new(path);
         cmd.stdout(Stdio::from(OwnedFd::from(client)))
             .env("GDK_BACKEND", "wayland");
+        tracing::debug!(target: "mundane_shell_frames", "launch shell");
         let child = self.trusted_child(Role::Shell, cmd)?;
         let source = server.try_clone()?;
         let pid = child.id();
@@ -191,6 +192,7 @@ impl State {
             .map_err(|e| anyhow::anyhow!("shell control: {e}"))?;
         self.desktop.panel_source = Some(token);
         self.desktop.channel = Some(server);
+        self.desktop.watch_tasks = false;
         self.desktop.panel = Some(child);
         self.desktop.monitor=Default::default();
         if self.desktop.lock.active {

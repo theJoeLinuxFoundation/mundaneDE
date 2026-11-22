@@ -30,7 +30,7 @@ rustPlatform.buildRustPackage {
     outputHashes = {
       # One entry per unique git source — the hash is shared across every
       # crate vendored from this Zed rev (gpui, collections, util, …).
-      "mundane-ui-0.1.0" = "sha256-NSuXAeCUgTOTVEFevROEXTcCkD11rvjx2W/N9S4/yx4=";
+      "mundane-ui-0.1.0" = "sha256-qlCNY+lP9/M2lBI9TG4qrmZUSj9Y6yGWcJPojUpsh8k=";
       "collections-0.1.0" = "sha256-1oqvlyK/jrihesfPKCPuj9UFzwbfJlFcA6bi1ewFxqg=";
       "naga-30.0.0" = "sha256-OqPeK1cr3OSZgIl+F3GMuXWz31PxFoOO0u4INN9GmgM=";
       "oo7-0.6.0" = "sha256-QXblWsnq+graWOSW0iA8pUzpwizDLi/kOSWDdSQVZ/0=";

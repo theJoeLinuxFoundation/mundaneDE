@@ -2,7 +2,7 @@
 
 ## Settings panel
 
-The application and library in `settings-panel/` are derived from the
+The `mundane-settings` and `mundane-settings-core` crates are derived from the
 argentumOS settings panel and retain the MIT licence. The original workspace
 credits the argentumOS contributors. See the [MIT licence](settings-panel/LICENSE).
 
@@ -23,8 +23,11 @@ by the repository's BSD 3-Clause licence. [Original photograph](https://www.pexe
 ## Dependencies
 
 Cargo fetches dependencies under their respective upstream licences. These
-include Smithay (MIT) and GPUI (Apache-2.0). The compositor and settings panel
-have separate lockfiles.
+include Smithay (MIT) and GPUI (Apache-2.0). The new `mundane-shell` crate
+uses the repository’s BSD-3-Clause licence. It shares the Settings lockfile and
+the suite’s `mundane-ui` (BSD-3-Clause AND Apache-2.0). Its GIO Rust bindings
+and freedesktop-icons are MIT-licensed. For self_cell use its Apache-2.0 option.
+The compositor has its own lockfile.
 
 To list the packages, versions and declared licences in both locked dependency
 graphs, run the following from the repository root with Cargo and jq installed.

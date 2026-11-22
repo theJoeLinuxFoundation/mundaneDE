@@ -111,7 +111,7 @@ impl State {
             .next()
             .map(|o| o.name());
         self.shell_message(&serde_json::json!({
-            "switcher": titles, "selected": selected, "start": start, "count": count, "output": output
+            "switcher": titles, "selected": selected, "start": start, "count": count, "output": output, "pointer":[self.cursor_location.x,self.cursor_location.y]
         }));
         true
     }

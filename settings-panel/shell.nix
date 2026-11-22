@@ -33,6 +33,7 @@ pkgs.mkShell {
     libGL
     wayland
     wayland-protocols
+    glib
     fontconfig
     freetype
     expat

@@ -311,6 +311,11 @@ impl State {
                             state.desktop.switcher_keys.insert(event.key_code().raw());
                             return FilterResult::Intercept(());
                         }
+                        if press && state.desktop.watch_tasks && state.desktop.menu_surface.is_some() && sym == keysyms::KEY_Escape {
+                            state.shell_message(&serde_json::json!({"dismiss_menu": true}));
+                            state.desktop.switcher_keys.insert(event.key_code().raw());
+                            return FilterResult::Intercept(());
+                        }
                         if state.window_menu.is_some() {
                             if press {
                                 state.menu_key(sym);
@@ -342,11 +347,11 @@ impl State {
                                     keysyms::KEY_s if state.desktop.panel.is_some() => {
                                         let output = state.space.output_under(state.cursor_location)
                                             .next().map(|o| o.name());
-                                        state.shell_message(&serde_json::json!({"open": "system", "output": output}));
+                                        state.shell_message(&serde_json::json!({"open": "system", "output": output,"pointer":[state.cursor_location.x,state.cursor_location.y]}));
                                         return FilterResult::Intercept(());
                                     }
                                     keysyms::KEY_space if state.desktop.panel.is_some() => {
-                                        state.shell_message(&serde_json::json!({"open":"start"}));
+                                        state.shell_message(&serde_json::json!({"open":"start","pointer":[state.cursor_location.x,state.cursor_location.y]}));
                                         return FilterResult::Intercept(());
                                     }
                                     n if (keysyms::KEY_1..=keysyms::KEY_4).contains(&n) => {
@@ -550,12 +555,21 @@ impl State {
 
             InputEvent::PointerAxis { event } => {
                 let pointer = self.seat.get_pointer().unwrap();
-                let mut frame = AxisFrame::new(event.time_msec());
-                if let Some(v) = event.amount(Axis::Vertical) {
-                    frame = frame.value(Axis::Vertical, v);
-                }
-                if let Some(h) = event.amount(Axis::Horizontal) {
-                    frame = frame.value(Axis::Horizontal, h);
+                let source = event.source();
+                let mut frame = AxisFrame::new(event.time_msec()).source(source);
+                for axis in [Axis::Vertical, Axis::Horizontal] {
+                    let steps = event.amount_v120(axis);
+                    let amount = event.amount(axis).or_else(|| steps.map(|v| v * 15.0 / 120.0));
+                    if let Some(delta) = amount {
+                        if delta != 0.0 {
+                            frame = frame.value(axis, delta).relative_direction(axis, event.relative_direction(axis));
+                        } else if source == smithay::backend::input::AxisSource::Finger {
+                            frame = frame.stop(axis);
+                        }
+                    }
+                    if let Some(steps) = steps {
+                        frame = frame.v120(axis, steps.round() as i32);
+                    }
                 }
                 pointer.axis(self, frame);
                 pointer.frame(self);

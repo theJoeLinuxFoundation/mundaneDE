@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import shlex
 import shutil
+import subprocess
 import time
 from guest import Guest
 
@@ -18,10 +19,13 @@ def wait(name, check, seconds=15):
     raise AssertionError(name)
 
 
-def qualify(run):
+def qualify(run, gpui_screenshots=None):
     g = Guest(run)
     assert g.qmp("query-display-options")["type"] == "none"
-    assert g.screen("menu-scanout").startswith(b"P6\n1920 1080\n")
+    wait(
+        "1920×1080 scanout",
+        lambda: g.screen("menu-scanout").startswith(b"P6\n1920 1080\n"),
+    )
     assert all(
         n["ro"]
         for n in g.qmp("query-named-block-nodes")
@@ -53,6 +57,10 @@ def qualify(run):
         return widget("list").splitlines()
 
     def point(name):
+        if gpui_screenshots:
+            # AccessKit supplies control bounds but no layer-window frame extents.
+            x, y, w, h = map(int, widget("bounds", name).splitlines()[-1].split())
+            return (x + w / 2) / 1920, (1080 - 44 + y + h / 2) / 1080
         x, bottom = map(int, widget("bar-point", name).split())
         return x / 1920, 1 - bottom / 1080
 
@@ -63,9 +71,48 @@ def qualify(run):
         g.key(*keys)
         time.sleep(0.15)
 
-    print(joe("python3 /tmp/menu-test/quick_settings_fixture.py"), flush=True)
-    g.shell("modprobe mac80211_hwsim")
-    module = joe("pactl load-module module-null-sink sink_name=mundane_menu_check")
+    def transitions():
+        # The coloured probe covers the centre of workspace 1. Workspace 4 is
+        # empty. Sample actual scanout through the switch and compare both modes.
+        def pixel():
+            pixels = g.screen("workspace-transition").split(b"\n", 3)[3]
+            i = (540 * 1920 + 960) * 3
+            return pixels[i : i + 3]
+
+        for animate in (True, False):
+            joe(
+                "gsettings set org.gnome.desktop.interface enable-animations "
+                + str(animate).lower()
+            )
+            time.sleep(0.25)
+            first = pixel()
+            g.key("meta_l", "4")
+            values = [pixel() for _ in range(16)]
+            time.sleep(0.35)
+            last = pixel()
+            assert first != last
+            intermediate = set(values) - {first, last}
+            assert bool(intermediate) == animate, (animate, intermediate)
+            key("meta_l", "1")
+            time.sleep(0.4)
+        joe("gsettings set org.gnome.desktop.interface enable-animations true")
+        print(
+            "Workspace tiles, scrolling, keyboard switching, intermediate scanout frames and reduced motion passed",
+            flush=True,
+        )
+
+    if gpui_screenshots:
+        wait(
+            "GPUI preview login", lambda: g.shell("pgrep -x -u joe mundane-shell || :")
+        )
+        joe(
+            "busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true"
+        )
+        gpui_screenshots.mkdir(parents=True, exist_ok=True)
+    else:
+        print(joe("python3 /tmp/menu-test/quick_settings_fixture.py"), flush=True)
+        g.shell("modprobe mac80211_hwsim")
+        module = joe("pactl load-module module-null-sink sink_name=mundane_menu_check")
     proc = int(
         joe(
             "python3 /tmp/menu-test/menu_fixture.py </dev/null >/tmp/tray-menu.log 2>&1 & echo $!"
@@ -87,17 +134,33 @@ def qualify(run):
         log = lambda: g.shell("cat /run/user/1000/mundane-login-test.log")
         # This point must really be over the client, so its failure to receive
         # the dismissal click establishes that the compositor consumed it.
+        wait(
+            "current probe mapped and focused",
+            lambda: (
+                "frame mundane session probe" in rows()
+                and "active" in widget("frame-state", "mundane session probe").split()
+            ),
+        )
         clicks = log().splitlines().count("click")
+        g.move(
+            0.37, 0.38
+        )  # Deliver fresh absolute axes after GDM reopens the virtual seat.
         g.click(0.5, 0.5)
         wait(
             "underlying app receives ordinary clicks",
             lambda: log().splitlines().count("click") == clicks + 1,
         )
+        tray_action = (
+            "menu item Open folder" if gpui_screenshots else "button Open folder"
+        )
         for anchor, content in [
             ("Start", "frame Start menu"),
-            ("System menu", "frame Quick Settings"),
+            (
+                "System menu",
+                "frame System menu" if gpui_screenshots else "frame Quick Settings",
+            ),
             ("Workspaces, current 1", "frame Workspaces"),
-            ("Review tray", "button Open folder"),
+            ("Review tray", tray_action),
         ]:
 
             def open_menu():
@@ -136,12 +199,79 @@ def qualify(run):
             )
         joe("rm -f /run/user/1000/tray-menu-action")
         button("Review tray")
-        wait("tray action", lambda: "button Open folder" in rows())
+        wait("tray action", lambda: tray_action in rows())
         widget("click", "Open folder")
         wait(
             "tray owner received action",
             lambda: joe("test -f /run/user/1000/tray-menu-action && echo yes || :"),
         )
+        if gpui_screenshots:
+            key("meta_l", "s")
+            wait("keyboard route to tray", lambda: "menu item Review tray" in rows())
+            key("home")
+            key("ret")
+            wait("tray menu from keyboard", lambda: tray_action in rows())
+            key("esc")
+            button("Workspaces, current 1")
+            widget("click", "Desk 2")
+            wait("desk selected", lambda: "button Workspaces, current 2" in rows())
+            g.move(*point("Workspaces, current 2"))
+            for down in (True, False):
+                g.qmp(
+                    "input-send-event",
+                    events=[
+                        dict(type="btn", data=dict(button="wheel-down", down=down))
+                    ],
+                )
+            wait("wheel switched", lambda: "button Workspaces, current 3" in rows())
+            key("meta_l", "1")
+            wait("first desk again", lambda: "button Workspaces, current 1" in rows())
+            button("Workspaces, current 1")
+            for letter in "probe":
+                key(letter)
+            key("ret")
+            wait(
+                "finder selected the probe",
+                lambda: "active" in widget("frame-state", "mundane session probe"),
+            )
+            transitions()
+            button("Workspaces, current 1")
+            widget("click", "Move →")
+            button("Workspaces, current 1")
+            for letter in "probe":
+                key(letter)
+            key("ret")
+            wait(
+                "finder restores the window on its destination desk",
+                lambda: (
+                    "button Workspaces, current 2" in rows()
+                    and "active" in widget("frame-state", "mundane session probe")
+                ),
+            )
+            key("meta_l", "q")
+            key("meta_l", "1")
+            widget("click", "Calculator")
+            wait(
+                "running application for captures", lambda: "frame Calculator" in rows()
+            )
+            for anchor, content, name in [
+                ("Review tray", tray_action, "tray"),
+                ("Workspaces, current 1", "frame Workspaces", "workspaces"),
+            ]:
+                button(anchor)
+                wait(name, lambda: content in rows())
+                time.sleep(0.2)
+                with (gpui_screenshots / (name + ".png")).open("wb") as out:
+                    subprocess.run(
+                        ["pnmtopng"], input=g.screen(name), stdout=out, check=True
+                    )
+                if name == "tray":
+                    widget("click", "Recent documents ›")
+                    wait("tray submenu", lambda: "menu item Week.txt" in rows())
+                    widget("click", "Back")
+                    wait("parent tray menu", lambda: tray_action in rows())
+                key("esc")
+            return
         button("System menu")
         wait(
             "wifi ready",
@@ -228,34 +358,7 @@ def qualify(run):
         key("meta_l", "1")
         wait("keyboard switched", lambda: "button Workspaces, current 1" in rows())
 
-        # The coloured probe covers the centre of workspace 1. Workspace 4 is
-        # empty. Sample actual scanout through the switch and compare both modes.
-        def pixel():
-            pixels = g.screen("workspace-transition").split(b"\n", 3)[3]
-            i = (540 * 1920 + 960) * 3
-            return pixels[i : i + 3]
-
-        for animate in (True, False):
-            joe(
-                "gsettings set org.gnome.desktop.interface enable-animations "
-                + str(animate).lower()
-            )
-            time.sleep(0.25)
-            first = pixel()
-            g.key("meta_l", "4")
-            values = [pixel() for _ in range(16)]
-            time.sleep(0.35)
-            last = pixel()
-            assert first != last
-            intermediate = set(values) - {first, last}
-            assert bool(intermediate) == animate, (animate, intermediate)
-            key("meta_l", "1")
-            time.sleep(0.4)
-        joe("gsettings set org.gnome.desktop.interface enable-animations true")
-        print(
-            "Workspace tiles, scrolling, keyboard switching, intermediate scanout frames and reduced motion passed",
-            flush=True,
-        )
+        transitions()
         output = json.loads(joe("/usr/local/bin/mundane-de output list"))[0]
         mode = output["current"]
         command = shlex.join(
@@ -310,10 +413,15 @@ def qualify(run):
         )
     finally:
         g.shell(f"kill {proc} 2>/dev/null || :")
-        joe("pactl unload-module " + module)
+        if not gpui_screenshots:
+            joe("pactl unload-module " + module)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", type=Path)
-    qualify(parser.parse_args().run)
+    parser.add_argument(
+        "--gpui-screenshots", type=Path, help="test the GPUI step 1 menus"
+    )
+    args = parser.parse_args()
+    qualify(args.run, args.gpui_screenshots)

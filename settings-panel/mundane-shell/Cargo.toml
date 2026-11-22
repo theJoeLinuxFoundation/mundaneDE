@@ -1,0 +1,18 @@
+[package]
+name = "mundane-shell"
+version.workspace = true
+edition.workspace = true
+license = "BSD-3-Clause"
+description = "GPUI shell for the mundaneDE Wayland session"
+
+[dependencies]
+gpui = { workspace = true, features = ["wayland"] }
+mundane-ui.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json = "1"
+gio = "0.22"
+async-channel = "2"
+libc = "0.2"
+gio-unix = "0.22"
+freedesktop-icons = "0.4"

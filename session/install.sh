@@ -10,6 +10,10 @@ install -Dm644 "$here/50-mundane.gschema.override" "$dest/usr/share/glib-2.0/sch
 install -Dm644 "$here/org.joelinux.mundane.shell.gschema.xml" "$dest/usr/share/glib-2.0/schemas/org.joelinux.mundane.shell.gschema.xml"
 install -d "$dest/usr/share/wayland-sessions"
 sed "s|@bindir@|$prefix/bin|g" "$here/mundane.desktop.in" > "$dest/usr/share/wayland-sessions/mundane.desktop"
+if [ -n "${2:-}" ]; then
+    install -Dm755 "$2" "$dest$prefix/bin/mundane-shell"
+    sed "s|@bindir@|$prefix/bin|g" "$here/mundane-gpui.desktop.in" > "$dest/usr/share/wayland-sessions/mundane-gpui.desktop"
+fi
 for unit in mundane-session.target mundane-ibus.service; do
     install -Dm644 "$here/$unit" "$dest$prefix/lib/systemd/user/$unit"
 done

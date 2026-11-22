@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=mundaneDE (GPUI preview)
+Comment=joe Linux Wayland desktop
+Exec=@bindir@/mundane-session --gpui
+TryExec=@bindir@/mundane-shell
+Type=Application
+DesktopNames=mundane

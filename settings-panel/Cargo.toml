@@ -1,8 +1,10 @@
 [workspace]
 resolver = "2"
+default-members = ["mundane-settings", "mundane-settings-core"]
 members = [
     "mundane-settings",
     "mundane-settings-core",
+    "mundane-shell",
 ]
 
 [workspace.package]
@@ -23,6 +25,8 @@ toml_edit = "0.22"
 # Keep both Zed dependencies in sync with mundane-apps and gpui-shades.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "f4fe0be1f8c7974db07e01c5cd05bee0cf4eb8d9" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "f4fe0be1f8c7974db07e01c5cd05bee0cf4eb8d9", features = ["font-kit", "wayland", "x11"] }
+
+mundane-ui = { git = "https://github.com/theJoeLinuxFoundation/mundane-apps", rev = "4c254b465f0f5955c4db9a151cc409c8bf0a56eb" }
 
 mundane-settings-core = { path = "mundane-settings-core" }
 

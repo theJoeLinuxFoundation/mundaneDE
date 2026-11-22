@@ -71,6 +71,8 @@ for node in walk(Atspi.get_desktop(0)):
         and name == " ".join(names)
         and role
         in (
+            "menu item",
+            "list item",
             "push button",
             "button",
             "toggle button",

@@ -20,5 +20,5 @@ gpui_platform.workspace = true
 mundane-settings-core.workspace = true
 zbus.workspace = true
 async-channel = "2"
-mundane-ui = { git = "https://github.com/theJoeLinuxFoundation/mundane-apps", rev = "78540788819e4c899fa4a15df0f1d5ec1cefa938" }
+mundane-ui.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

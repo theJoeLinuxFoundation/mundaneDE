@@ -24,7 +24,17 @@ parser.add_argument(
 parser.add_argument(
     "--refresh", action="store_true", help="update an already prepared overlay"
 )
+parser.add_argument(
+    "--gpui-shell", type=Path, help="install and select the GPUI preview"
+)
+parser.add_argument(
+    "--trace-frames",
+    action="store_true",
+    help="log GPUI qualification timestamps in the guest journal",
+)
 args = parser.parse_args()
+if args.trace_frames and not args.gpui_shell:
+    parser.error("--trace-frames requires --gpui-shell")
 guest = Guest(args.run)
 share = guest.run / "share"
 nodes = {n["node-name"]: n for n in guest.qmp("query-named-block-nodes")}
@@ -33,16 +43,29 @@ for source, name in (
     (args.binary, "mundane-de"),
     (args.libseat, "libseat.so.1"),
     (args.settings, "mundane-settings"),
+    (args.gpui_shell, "mundane-shell"),
 ):
     if source and source.resolve() != (share / name).resolve():
         shutil.copyfile(source, share / name)
 # Build the installation tree on the host. The guest receives only package data.
 with tempfile.TemporaryDirectory(dir=guest.run) as stage:
     subprocess.run(
-        [ROOT / "session/install.sh", share / "mundane-de"],
+        [
+            ROOT / "session/install.sh",
+            share / "mundane-de",
+            *([share / "mundane-shell"] if args.gpui_shell else []),
+        ],
         env={**os.environ, "DESTDIR": stage, "PREFIX": "/usr/local"},
         check=True,
     )
+    if args.trace_frames:
+        entry = Path(stage) / "usr/share/wayland-sessions/mundane-gpui.desktop"
+        entry.write_text(
+            entry.read_text().replace(
+                "Exec=/usr/local/bin/mundane-session",
+                "Exec=/usr/bin/env RUST_LOG=info,mundane_shell_frames=debug /usr/local/bin/mundane-session",
+            )
+        )
     with tarfile.open(share / "session.tar", "w") as archive:
         archive.add(Path(stage) / "usr", arcname="usr")
 for name in ("probe.py", "shell_widgets.py", "org.joelinux.MundaneSessionTest.service"):
@@ -92,7 +115,11 @@ install -Dm644 /mnt/shell_widgets.py /usr/local/libexec/mundane-test-widgets
 install -Dm755 /mnt/probe.py /usr/local/libexec/mundane-login-probe
 install -Dm644 /mnt/org.joelinux.MundaneSessionTest.service /usr/local/share/dbus-1/services/org.joelinux.MundaneSessionTest.service
 test -x /usr/local/bin/mundane-de
-for method in SetSession:mundane SetSessionType:wayland; do
+"""
+        + "session="
+        + ("mundane-gpui" if args.gpui_shell else "mundane")
+        + """
+for method in SetSession:$session SetSessionType:wayland; do
     gdbus call --system --dest org.freedesktop.Accounts --object-path /org/freedesktop/Accounts/User1000 --method "org.freedesktop.Accounts.User.${method%:*}" "${method#*:}"
 done
 umount /mnt

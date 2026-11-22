@@ -680,6 +680,7 @@ impl DrmBackend {
             let o = &h.head.output;
             let (elements, clear) =
                 crate::render::collect_elements(&mut self.renderer, state, o, true);
+            tracing::debug!(target: "mundane_shell_frames", output = o.name(), "DRM redraw");
             match h.compositor.render_frame(
                 &mut self.renderer,
                 &elements,

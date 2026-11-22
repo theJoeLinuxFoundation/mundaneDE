@@ -198,3 +198,37 @@ live libadwaita preferences, the suite Terminal’s rendered surface and cursor,
 the suite’s reduced-motion preview, display rollback and a PAM-protected
 timezone change. The two-identity fixture uses a separate runtime directory
 and authority bus inside the guest.
+
+### GPUI shell step 1
+
+Build the preview from the repository root. Create a fresh 1920×1080 headless
+guest with three available virtual connectors and the frozen beta1 image.
+The optional installer argument adds the GPUI preview entry alongside the
+reference entry. The trace flag enables layer-commit and DRM redraw timestamps
+only in the guest’s preview session.
+
+```sh
+cargo build --release --locked --bin mundane-de --example nested-capabilities
+cargo build --release --locked --workspace --manifest-path settings-panel/Cargo.toml
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/mundane-login"
+mkdir -p "$cache"
+run=$(mktemp -d "$cache/gpui-step1.XXXXXX")
+PYTHONPATH=tests/qemu/session python3 -c 'import sys; from machine import boot; boot(sys.argv[1], sys.argv[2], large=True)' \
+  "$HOME/Projects/joe-linux/build/images/joe-desktop-beta1.img" "$run"
+driver=tests/qemu/session
+python3 "$driver/prepare.py" "$run" --libseat /usr/lib/libseat.so.1 \
+  --settings settings-panel/target/release/mundane-settings \
+  --gpui-shell settings-panel/target/release/mundane-shell --trace-frames
+python3 "$driver/qualify_parity.py" "$run" "$run/screenshots" --gpui
+python3 "$driver/guest.py" "$run" shell 'systemctl restart gdm'
+python3 "$driver/qualify_menus.py" "$run" --gpui-screenshots "$run/screenshots"
+python3 "$driver/qualify_gpui_outputs.py" "$run"
+python3 "$driver/qualify_gpui_budget.py" "$run"
+python3 "$driver/guest.py" "$run" shell 'sync && systemd-run --on-active=1s systemctl poweroff'
+```
+
+Use a fresh login for the menu input probe. Its real seat clicks, focus and
+scanout checks assume an otherwise empty first workspace. The output test
+reads both physical QMP scanouts at independent scales. The budget test
+starts GDM repeatedly in this overlay, measures a cold user cache separately
+and records 20 warm logins, idle CPU, PSS, clock updates and redraws.

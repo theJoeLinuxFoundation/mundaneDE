@@ -139,6 +139,7 @@ impl State {
             } else {
                 self.space.unmap_elem(&w);
                 self.minimized.push(w);
+                self.publish_tasks();
                 crate::focus::refocus(self);
             }
         } else if let Some(loc) = self.space.element_location(&w) {
