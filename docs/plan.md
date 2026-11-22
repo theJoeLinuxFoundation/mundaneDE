@@ -164,19 +164,70 @@ The launcher starts the compositor there and selects libseat’s logind backend.
 After the Wayland socket, DRM outputs and input sources are ready, a private
 socket connects the compositor and launcher. The launcher publishes the
 display and desktop to D-Bus activation and the systemd user manager, starts
-the session target, then starts the polkit agent in the seat scope. Settings
-and applications run with the logged-in UID. [systemd session targets](https://www.freedesktop.org/software/systemd/man/latest/systemd.special.html) · [joe security model](https://github.com/theJoeLinuxFoundation/joe-linux/blob/d3e355b888ebeb5d9fa2c46eace844aafdf9380b/README.md#L174-L215)
+the session target, waits for the shell’s portal backend, then restarts the
+portal frontend. The compositor starts the panel in the same seat scope. The
+panel registers its polkit agent there. Settings and applications run as the
+logged-in user. [systemd session targets](https://www.freedesktop.org/software/systemd/man/latest/systemd.special.html) · [joe security model](https://github.com/theJoeLinuxFoundation/joe-linux/blob/d3e355b888ebeb5d9fa2c46eace844aafdf9380b/README.md#L174-L215)
 
-**joe packaging handoff**
+### joe packaging handoff
 
-| Component | Files and contract |
+**Vendored source archive.** Run `tools/dist.sh` in a Git checkout. It exports
+the committed HEAD, reads the compositor version and writes
+`target/dist/mundaneDE-VERSION.tar.xz` and prints its SHA-256. One `vendor/`
+and one archive-relative `.cargo/config.toml` serve both original lockfiles,
+including Git dependencies. Making the archive needs Bash, Git, Python 3.11+
+with tomllib, Cargo, GNU tar, coreutils and xz. Cargo can fetch on the packaging
+host or use a populated cache with `CARGO_NET_OFFLINE=true`. Rebuild with the
+same commit, tool versions and epoch to reproduce the bytes. The default epoch
+is the commit time, with an override through `SOURCE_DATE_EPOCH`.
+[Desktop archive script](../tools/dist.sh) · [Suite archive convention](https://github.com/theJoeLinuxFoundation/mundane-apps/blob/7854078/docs/plan.md#vendored-source-archive)
+
+From the extracted archive root, with an absolute staging directory in
+`pkgdir`, build both workspaces against their own lockfile and stage the payload:
+
+```sh
+cargo build --release --locked --offline
+(cd settings-panel && cargo build --release --locked --offline)
+PREFIX=/usr DESTDIR="$pkgdir" session/install.sh target/release/mundane-de
+install -Dm755 settings-panel/target/release/mundane-settings "$pkgdir/usr/bin/mundane-settings"
+for f in LICENSE THIRD-PARTY-NOTICES.md licenses/Smithay-MIT.txt settings-panel/LICENSE; do
+    install -Dm644 "$f" "$pkgdir/usr/share/licenses/mundaneDE/$f"
+done
+```
+
+Supply stable Rust/Cargo, a C/C++ build toolchain, pkg-config and clang/libclang
+in the joe build root. Provide native development files for the runtime
+libraries below, including Wayland protocols/scanner, EGL/GLES/GBM, libdrm,
+libinput, libudev, libseat, Cairo, xkbcommon, Fontconfig/FreeType, X11/XCB,
+ALSA, D-Bus and OpenSSL. The archive supplies the Rust sources. The native
+development environments are listed in the [compositor shell](../shell.nix)
+and [Settings shell](../settings-panel/shell.nix).
+
+| Package-owned directory | Files to install |
 | --- | --- |
-| GDM and PAM | Install `mundane.desktop` under `/usr/share/wayland-sessions/`, alongside GNOME. Set `Exec` and `TryExec` to the installed launcher. GDM registers the session. Use joe’s existing `gdm-password` and `gdm-autologin` PAM stacks, pam_systemd, logind and the per-user D-Bus instance. Keep the GNOME entry and the distribution default. AccountsService’s per-user `Session=mundane` and `SessionType=wayland` opt into this session. |
-| Executables and libraries | Ship `mundane-de`, `mundane-session`, `mundane-settings`, a libseat built with logind, Python 3 with PyGObject/Gio/GLib, dbus-update-activation-environment and systemd user units. The [installer](../session/install.sh) accepts `DESTDIR` and `PREFIX` (use `/usr` for packages). Install Settings separately in the same bin directory. |
-| User units and activation | Install `mundane-session.target` and `mundane-ibus.service` under `lib/systemd/user/`. The launcher starts the target after exporting `WAYLAND_DISPLAY`, `XDG_CURRENT_DESKTOP=mundane`, `XDG_SESSION_DESKTOP=mundane`, `XDG_SESSION_TYPE=wayland` and `XDG_SESSION_ID`. Future shell units should use `PartOf=mundane-session.target`. GDM owns the seat process. A user service outside the session scope cannot take its place. Start X11 applications with the display returned by `mundane-de --x11-display`. |
-| Polkit and power | Install the shell with the Polkit and PolkitAgent 1.0 GI typelibs. The panel registers the graphical agent with the authority for its logind session. Keep polkitd, its PAM helper, `polkit-1` PAM configuration and joe’s administrator policy. The existing Settings timezone action uses `pkexec timedatectl`. The compositor introduces no privileged executable or PAM stack. The launcher requests logind’s delay inhibitor for sleep (`org.freedesktop.login1.inhibit-delay-sleep`), drops it when scanout has stopped and rearms it on wake. |
-| Portals | Install the frontend and its interface XML, GTK backend, keyring Secret backend, PipeWire and WirePlumber. Install the two mundaneDE routing files and the capture helpers listed in milestone 6. The session publishes its Wayland environment, waits for the shell backend’s bus name and restarts the frontend so it discovers all backends on the new display. Logout stops both session targets. |
-| IBus | Build the GTK Wayland input-method frontend described in milestone 2. Install it in the libexec or lib/ibus location or set `MUNDANE_IBUS_PANEL`. Its presence enables the session-bound daemon with `--panel=disable`. The compositor starts the candidate panel with its private Wayland connection after readiness. Beta1 supplies GNOME’s IBus build and skips this unit under mundaneDE. |
+| `/usr/bin/` | `mundane-de`, `mundane-settings`, `mundane-session`, `mundane-panel`. The first two are native executables. |
+| `/usr/share/wayland-sessions/` | `mundane.desktop`, generated with both `Exec` and `TryExec` pointing to `/usr/bin/mundane-session`. |
+| `/usr/lib/systemd/user/` | `mundane-session.target`, `mundane-ibus.service`. The launcher starts the target after publishing the session environment. |
+| `/usr/share/mundane/shell/` | `appearance.py`, `authentication.py`, `bluetooth.py`, `bus.py`, `cast.py`, `devices.py`, `panel.py`, `portals.py`, `quick_settings.py`, `reader.py`, `tray_menu.py`, `upgrades.py`. |
+| `/usr/share/glib-2.0/schemas/` | `50-mundane.gschema.override`. Run joe’s `glib-compile-schemas` trigger before sealing the image. |
+| `/usr/share/xdg-desktop-portal/` | `mundane-portals.conf`, `portals/mundane.portal`. |
+| `/usr/share/licenses/mundaneDE/` | `LICENSE`, `THIRD-PARTY-NOTICES.md`, `licenses/Smithay-MIT.txt`, `settings-panel/LICENSE`. Upstream crate licences accompany their sources in the archive. |
+
+The compositor embeds the Afterlight wallpaper. User configuration is created
+under XDG paths. [Session installer](../session/install.sh)
+
+| Runtime on the joe desktop image | What uses it |
+| --- | --- |
+| GDM, AccountsService, PAM (`gdm-password`, `gdm-autologin`, pam_systemd), systemd-logind and user manager, system and user D-Bus, GLib | Keep GNOME selectable. Opt in per user with AccountsService `Session=mundane` and `SessionType=wayland`. Supply `systemctl`, `busctl`, `dbus-update-activation-environment` and `gdbus`. The launcher publishes `WAYLAND_DISPLAY`, desktop/session type and session ID. Logout stops both session targets and clears activation state. |
+| Wayland, libseat with logind support (joe’s seatd package), libinput, udev, libdrm, Mesa GBM/EGL/GLES and the device driver, Cairo, libxkbcommon, xkeyboard-config, Xcursor theme, Xwayland | Compositor, VT switch and DRM resume. The launcher holds logind’s sleep delay inhibitor until scanout stops. Use the display from `mundane-de --x11-display` for X11 clients. GPUI Settings also needs a Vulkan loader and working ICD, Fontconfig/FreeType and the X11/XCB/xkbcommon-x11 libraries for its compiled backends. |
+| Python 3, PyGObject, GLib/Gio and GTK4/Gdk typelibs, gtk4-layer-shell (both `libgtk4-layer-shell.so.0` and `Gtk4LayerShell-1.0` typelib), gsettings-desktop-schemas, dconf, fonts and desktop icon theme | The panel, launcher, Quick Settings and live themes. Include Fontconfig’s `fc-list`, XDG user directories, MIME data, desktop entries and registered browser/file handlers. Provide a terminal (set `MUNDANE_TERMINAL=mundane-terminal` to select the suite’s Terminal). |
+| polkit (`polkitd`, Polkit and PolkitAgent 1.0 typelibs, `polkit-agent-helper-1`, `polkit-1` PAM service, `pkexec`), joe administrator policy, swaylock with its PAM service | The panel is the graphical authentication agent for its logind session. Drop polkit-gnome from the mundaneDE dependency list. Lock uses swaylock and joe’s system authentication stack. |
+| xdg-desktop-portal with implementation XML, xdg-desktop-portal-gtk, gnome-keyring with its Secret backend, xdg-desktop-portal-wlr 0.9.0, grim 1.5.0, `dbus-run-session`, PipeWire and WirePlumber | The shell handles capture consent, revocation and appearance. The wlr helper runs on a private bus. GTK provides chooser and notification interfaces, and keyring handles secrets. See milestone 6 for helper lookup and routing. |
+| IBus with its GTK3 Wayland panel and an installed conversion engine | Supply `ibus-daemon` and `ibus-ui-gtk3 --enable-wayland-im` in `/usr/libexec` or `/usr/lib/ibus` (override the executable with `MUNDANE_IBUS_PANEL`). The session unit runs the daemon with `--panel=disable`. The compositor connects its own frontend for preedit and candidate selection in GTK and Firefox. |
+| AT-SPI2 2.62.1 or compatible, Orca (qualified with 51.1), Speech Dispatcher and a voice such as eSpeak NG | The shell starts `/usr/bin/orca` and grants its session-bus connection the keyboard monitor needed for typing echo. |
+| NetworkManager and `nmcli`, BlueZ and `bluetoothctl`, UPower, WirePlumber’s `wpctl`, PipeWire Pulse service and `pactl` client | Network, Bluetooth, battery and audio controls in the shell and Settings. Brightness uses sysfs and logind on machines with a backlight. |
+| timedated / `timedatectl`, shadow’s `chpasswd`, Zenity, Flatpak for the remotes page, the suite’s `mundane-packages` | Settings’ time, accounts, dialogs, software and System pages. Protected actions use joe’s polkit/PAM policy. |
+| dave with `dave status --json`, `dave.status/1` and `prepared_upgrade.id`, plus `dave-status.service` | Root publishes at boot and after deployment changes. The ordinary user’s panel reads the snapshot and remembers the delivered ID or fallback event. See milestone 5 for expected notices. |
 
 Ctrl+Alt+Fn asks libseat to change VTs. On VT loss, suspend libinput and DRM.
 On return, reacquire devices and refresh outputs. Before system sleep, stop scanout
@@ -319,8 +370,8 @@ as an ordinary user. [Deployment VM scenarios](https://github.com/theJoeLinuxFou
 The GDM session sets `XDG_CURRENT_DESKTOP=mundane`. Install
 `share/xdg-desktop-portal/mundane-portals.conf` and
 `share/xdg-desktop-portal/portals/mundane.portal`. The frontend routes
-ScreenCast and Screenshot to the shell, FileChooser, AppChooser, Settings
-and Notification to GTK, and Secret to GNOME Keyring. OpenURI uses the
+ScreenCast and Screenshot to the shell, Settings to both the shell and GTK,
+FileChooser, AppChooser and Notification to GTK, and Secret to GNOME Keyring. OpenURI uses the
 preferred desktop handler. The shell owns its implementation bus name for the
 life of the session. [Portal routing](https://flatpak.github.io/xdg-desktop-portal/docs/portals.conf.html)
 
@@ -508,29 +559,26 @@ kernel-supplied credentials for the session user. On joe, System opens
 
 ## 8. Qualify the default session
 
-Provide a distribution handoff with pinned sources, locked offline build
-inputs, native dependencies, session entry and user units, portal routing,
-desktop IDs, helper operations, release build flags and expected test results.
-Record the compositor, suite, package image, Mesa, kernel, GPU/driver and
-display modes for every release candidate. Provide a documented GNOME session
-fallback during rollout. Hand joe's maintainer the scenarios and expected
-artifacts for neomake. Its image build, recipe changes and default switch are
-distribution work. [joe Linux test infrastructure](https://github.com/theJoeLinuxFoundation/joe-linux/blob/d3e355b888ebeb5d9fa2c46eace844aafdf9380b/README.md#building-and-testing)
+Begin once joe has packaged the [vendored desktop and session payload](#joe-packaging-handoff).
+The maintainer owns the recipe, image and default selection. Keep GNOME as the
+image default during qualification. Boot disposable copy-on-write copies of
+the candidate disks with headless KVM. Run the installed `/usr` session as an
+ordinary user with the image’s policy, services and suite packages. Exclude
+`/usr/local` overlay installs, host-built binaries and fixture portal or dave
+services from this gate.
 
-**Acceptance.** Boot clean and upgraded x86 images. Create the first account,
-log in through GDM, open a file from a removable drive in its preferred app,
-edit and save it, use Firefox with sound and screen sharing, run an X11 app,
-lock, suspend, resume and log out. Repeat the protected operation checks under
-joe's enforcing security module. Run joe’s existing `make test-desktop` application matrix on the candidate session
-in both logging and enforcing modes. In disposable images, stage an upgrade,
-see the pending notice, reboot successfully and see it clear. Exercise joe’s
-failed-boot recovery fixture and confirm the next login names the restored
-system without opening Packages. Check an explicit rollback separately.
-Test one multi-output hardware configuration
-and a VM. Confirm selecting GNOME at the greeter restores a working session
-with the same files and preferences. Publish pass/fail results and unresolved
-limitations. Retire individual GNOME apps only after the suite's corresponding
-workflow passes on the image.
+| joe image test | Pass condition and evidence |
+| --- | --- |
+| Build and install | From the pinned archive and SHA-256, build both crates offline in joe. Compare the sealed image’s package manifest with the handoff above. Check executable/shared-library resolution, compiled schemas, GI imports, session units, portal XML/routing and PAM services before first login. Record desktop/suite/dave revisions, image deployment ID, kernel, Mesa, driver and display modes. |
+| Clean and upgraded x86 | Extend `tests/vm/release.tomlx` / `make test-release` for first-account creation, GDM session selection and a second boot. Separately start with a supported previous joe desktop, prepare the real upgrade with dave and reboot into the packaged candidate. Verify the existing account, files, MIME associations and explicit appearance preferences survive. |
+| Session and apps | Add a mundaneDE scenario alongside the GNOME rows of `tests/vm/desktop.tomlx` / `make test-desktop` in both logging and enforcing modes. Discover the user’s published Wayland display. Verify the bottom taskbar, Start, tray, desktop icons and window buttons, then the application matrix with GTK, suite apps, X11 clipboard in both directions and IBus conversion in Firefox and GTK. Open, edit and save a removable file through its handler. Play Firefox audio. |
+| Displays, sharing and privacy | With two virtual outputs, test scale, mode rollback, snap and reduced motion. In Firefox start a PipeWire share, verify its pixels and indicator, exercise the stop paths in milestone 6 and confirm the lock screen stays private. Accept and cancel a screenshot. Keep QMP screendumps and portal/PipeWire journal evidence. |
+| Seat, accessibility and authorization | Switch VTs, suspend and wake, unlock, log out twice and check fresh input on each login. Change appearance with GTK and a suite app running. Hear Orca read Start and a Settings toggle, echo a typed character and stay quiet for a programmatic edit. Authenticate a Settings change, cancel another and lock during a prompt. Check expected policy decisions against `make test-security` and review the beta1 helper and virtio-gpu observations in milestone 4. Select GNOME at GDM and verify the same user files and preferences. |
+| Real deployments and notices | Extend `tests/vm/deployments.tomlx` / `make test-deployments` with a desktop login. Observe “Upgrade ready, restart to apply” once per prepared ID. On successful boot check that pending status clears. Exhaust boot attempts and check that the shell names the attempted and restored systems once per fallback event. Log in again to check deduplication, then choose an explicit rollback and verify it stays quiet. Retain the corresponding unprivileged JSON snapshots and screenshots. |
+
+Attach pass/fail results, relevant journals and unresolved limitations to each
+candidate. Retire individual GNOME apps only when the suite’s corresponding
+workflow passes on the packaged image. [joe VM scenarios](https://github.com/theJoeLinuxFoundation/joe-linux/tree/5dc2ac8/tests/vm)
 
 **Final gate.** Once automated qualification passes, the maintainer logs in to
 the candidate session on a real x86 machine and completes the [manual test](manual-test.md).
