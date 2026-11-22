@@ -37,15 +37,6 @@ let
     fi
     exec /mundane/target/debug/mundane-de "$@"
   '';
-
-  # Default config: turn the wallpaper on automatically so the demo looks finished, and so
-  # the full-screen wallpaper render damages every frame's cursor-trail area cleanly even if
-  # we ever regress the damage-tracking path for tiny moving elements like the pointer.
-  mundaneConfig = pkgs.writeText "mundane-config.toml" ''
-    [wallpaper]
-    path = "/mundane/pexels-jplenio-2080960.jpg"
-    mode = "fill"
-  '';
 in
 {
   # In current nixpkgs, `nix-build '<nixpkgs/nixos>' -A vm` exposes `config.system.build.vm`
@@ -75,15 +66,6 @@ in
     target = "/mundane";
   };
 
-  # Drop the default config into root's home so the wallpaper is on out of the box. `L+`
-  # forces the symlink to be (re)created on each boot — the user can still override by
-  # `rm /root/.config/mundane/config.toml` and writing their own.
-  systemd.tmpfiles.rules = [
-    "d /root/.config 0755 root root - -"
-    "d /root/.config/mundane 0755 root root - -"
-    "L+ /root/.config/mundane/config.toml - - - - ${mundaneConfig}"
-  ];
-
   # Resources + reliable evdev input devices for libinput.
   virtualisation.memorySize = 2048;
   virtualisation.cores = 4;
@@ -104,8 +86,7 @@ in
   Keys (Super = left Meta): Super+Return terminal · Super+W reload wallpaper
                             Super+Q close window · Super+Shift+Q or Esc quit
 
-  The bundled wallpaper is on by default (config at ~/.config/mundane/config.toml).
-  Delete that file to fall back to the dark clear colour. See tests/qemu/README.md.
+  The compositor includes the Afterlight wallpaper. See tests/qemu/README.md.
 
 EOF
   '';

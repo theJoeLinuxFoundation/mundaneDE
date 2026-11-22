@@ -17,17 +17,7 @@
 
 # mundane-settings — the native mundaneDE system settings panel.
 #
-# This package depends on GPUI, which is pulled from a pinned commit of
-# zed-industries/zed (see settings-panel/Cargo.toml). The `cargoLock`
-# `outputHashes` entry below MUST be populated with the real hash returned by
-# the first `nix build .#mundane-settings` failure — Nix will print the
-# expected hash on mismatch, and you paste it in here.
-#
-# Bumping GPUI:
-#   1. Edit `settings-panel/Cargo.toml` and change the `rev = "..."` for gpui.
-#   2. `cargo update -p gpui` to refresh `Cargo.lock`.
-#   3. Set the `outputHashes` value below to `lib.fakeHash`.
-#   4. Run `nix build .#mundane-settings` — copy the new hash from the error.
+# Keep the git dependency hashes in sync with Cargo.lock when updating GPUI.
 
 rustPlatform.buildRustPackage {
   pname = "mundane-settings";
@@ -84,7 +74,7 @@ rustPlatform.buildRustPackage {
 
   meta = {
     description = "Native mundaneDE system settings panel (Rust + GPUI)";
-    homepage = "https://github.com/";
+    homepage = "https://github.com/theJoeLinuxFoundation/mundaneDE";
     license = lib.licenses.mit;
     mainProgram = "mundane-settings";
     platforms = lib.platforms.linux;

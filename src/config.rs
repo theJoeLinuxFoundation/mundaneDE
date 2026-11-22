@@ -66,7 +66,7 @@ pub enum ScalingMode {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct WallpaperSection {
-    /// Path to a PNG or JPEG image. When `None`, only the solid clear colour shows.
+    /// Path to a PNG or JPEG image. When `None`, use the built-in wallpaper.
     pub path: Option<String>,
     /// How the image is fitted to the output.
     pub mode: ScalingMode,
@@ -207,7 +207,7 @@ mod tests {
         let toml = include_str!("../config.example.toml");
         let cfg: MundaneConfig = toml::from_str(toml).expect("example config should parse");
         assert_eq!(cfg.wallpaper.mode, ScalingMode::Fill);
-        assert!(cfg.wallpaper.path.is_some());
+        assert!(cfg.wallpaper.path.is_none());
         assert_eq!(cfg.output.refresh, 60_000);
     }
 

@@ -66,35 +66,25 @@ pub struct WallpaperManager {
 }
 
 impl WallpaperManager {
-    /// Build the manager from config, decoding the configured image (if any) and starting its
-    /// fade-in.
+    /// Load the configured image or the built-in wallpaper and start its fade-in.
     pub fn new(config: &WallpaperSection, animation: &mut AnimationEngine) -> Self {
-        let fade_params = config.to_fade_params();
-        let current = config
-            .path
-            .as_ref()
-            .and_then(|path| match decode(path) {
-                Ok((pixels, size)) => Some(new_layer(pixels, size, fade_params, animation)),
-                Err(e) => {
-                    tracing::warn!("failed to load wallpaper '{path}': {e}");
-                    None
-                }
-            });
-        Self {
+        let mut manager = Self {
             mode: config.mode,
-            fade_params,
-            current,
+            fade_params: config.to_fade_params(),
+            current: None,
             previous: None,
-        }
+        };
+        manager.set_wallpaper(config.path.as_deref(), animation);
+        manager
     }
 
     /// Swap to a new wallpaper, crossfading from the current one. Decoding happens here (CPU
     /// only); the GPU upload is deferred to the next render.
-    pub fn set_wallpaper(&mut self, path: &str, animation: &mut AnimationEngine) {
+    pub fn set_wallpaper(&mut self, path: Option<&str>, animation: &mut AnimationEngine) {
         let (pixels, size) = match decode(path) {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!("failed to load wallpaper '{path}': {e}");
+                tracing::warn!("failed to load wallpaper '{}': {e}", path.unwrap_or("Afterlight"));
                 return;
             }
         };
@@ -178,11 +168,14 @@ impl WallpaperManager {
     }
 }
 
-/// Decode a PNG/JPEG file to packed RGBA8 + dimensions.
-fn decode(path: &str) -> anyhow::Result<(Vec<u8>, (i32, i32))> {
-    let image = image::ImageReader::open(path)?
-        .with_guessed_format()?
-        .decode()?;
+/// Decode a user-supplied PNG/JPEG or the original artwork embedded in the binary.
+fn decode(path: Option<&str>) -> anyhow::Result<(Vec<u8>, (i32, i32))> {
+    let image = match path {
+        Some(path) => image::ImageReader::open(path)?
+            .with_guessed_format()?
+            .decode()?,
+        None => image::load_from_memory(include_bytes!("../assets/afterlight.jpg"))?,
+    };
     let rgba = image.to_rgba8();
     let (w, h) = rgba.dimensions();
     Ok((rgba.into_raw(), (w as i32, h as i32)))

@@ -53,22 +53,10 @@ To quit the compositor: `Super+Shift+Q` or `Esc`. To shut the VM down: `poweroff
 
 ## Seeing a wallpaper
 
-A wallpaper only appears if you point the config at an image. The repo ships a test image
-(`pexels-jplenio-2080960.jpg`), shared into the VM at `/mundane`. Create the config inside
-the guest:
-
-```bash
-mkdir -p ~/.config/mundane
-cat > ~/.config/mundane/config.toml <<'EOF'
-[wallpaper]
-path = "/mundane/pexels-jplenio-2080960.jpg"
-mode = "fill"   # fill | fit | stretch | center | tile
-EOF
-mundane
-```
-
-You should see the image **spring-fade in** behind the windows. `Super+W` re-runs the fade
-as a crossfade. Without a `path`, you get the dark clear colour instead.
+The compositor displays the built-in Afterlight wallpaper on startup. Press
+`Super+W` to replay the crossfade. To try another image, set `[wallpaper].path`
+in the guest's `~/.config/mundane/config.toml`. Use an absolute path visible to the
+guest. The host checkout is available at `/mundane`.
 
 ## Troubleshooting
 

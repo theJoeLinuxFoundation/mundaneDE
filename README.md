@@ -1,0 +1,60 @@
+# mundaneDE
+
+mundaneDE is an early Wayland desktop for the x86 edition of joe Linux. Its Rust
+compositor uses Smithay. Drag a window near a screen edge or another window and
+release it to see a damped spring move it into place.
+
+The compositor runs in a host window or directly on a single DRM/KMS output.
+It can display Wayland applications, manage keyboard and pointer focus, and
+crossfade between wallpapers. The GPUI settings panel is a separate application.
+A desktop shell, session lock and multi-monitor support are still missing.
+
+## Build and run in a window
+
+Start from the repository root in a graphical Linux session with Wayland or X11
+and EGL support. Use stable Rust, a C toolchain, pkg-config and the development
+libraries for Wayland, EGL/GLES, DRM, GBM, libinput, libudev, libseat and
+libxkbcommon. If you use Nix with a nixpkgs channel, `nix-shell` supplies the
+native dependencies and rustup.
+
+```sh
+cargo build --locked
+cargo test --locked
+cargo run --locked -- --winit
+```
+
+The nested compositor opens a window and logs its Wayland socket name. With the
+window focused, press `Super+Return` to open a terminal. To try a specific client
+from a second terminal, substitute the socket name from the log and run, for
+example, `WAYLAND_DISPLAY=wayland-2 foot` with `foot` installed.
+
+| Action | Input in the nested window |
+| --- | --- |
+| Move a window and snap it on release | Super or Alt + left drag |
+| Close the focused window | Super+Q |
+| Reload the wallpaper | Super+W |
+| Quit the compositor | Esc |
+
+For direct rendering on a free seat, omit `--winit`. The repository includes
+a [manual DRM/KMS test in QEMU](tests/qemu/README.md).
+
+## Configuration
+
+The compositor reads `$XDG_CONFIG_HOME/mundane/config.toml`, falling back to
+`~/.config/mundane/config.toml` when `XDG_CONFIG_HOME` is unset. The built-in
+Afterlight wallpaper works without configuration. To use another PNG or JPEG,
+set `path` in the `[wallpaper]` section. Spring parameters, snap distances and
+wallpaper settings can be changed while the compositor runs. See the
+[example configuration](config.example.toml).
+
+The optional settings panel builds from its own Cargo workspace. Once its binary
+is on your path, `Super+,` opens it. You can also point `MUNDANE_SETTINGS` at
+the binary before starting the compositor. See the [settings panel guide](settings-panel/README.md).
+
+## Licence
+
+The compositor and its original Afterlight wallpaper use the
+[BSD 3-Clause licence](LICENSE). The settings panel retains its MIT licence.
+Earlier Git history contains `pexels-jplenio-2080960.jpg`, a photograph by
+Johannes Plenio distributed under the Pexels Licence. For credits and dependency
+licences, see [third-party notices](THIRD-PARTY-NOTICES.md).

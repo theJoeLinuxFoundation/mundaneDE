@@ -95,7 +95,7 @@ pub fn collect_elements(
         .elements(renderer, &state.animation, (output.w, output.h));
     elements.extend(wallpaper.into_iter().map(MundaneRenderElement::from));
 
-    // Background clear colour, visible before the wallpaper fades in or when none is set.
+    // Background clear colour, visible before the wallpaper fades in or if a custom image fails to load.
     let clear_color = Color32F::new(0.08, 0.08, 0.10, 1.0);
     (elements, clear_color)
 }

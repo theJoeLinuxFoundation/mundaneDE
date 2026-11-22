@@ -105,9 +105,7 @@ fn apply_reload(state: &mut State, path: &PathBuf) {
 
     // Wallpaper path: if it changed, crossfade.
     if new.wallpaper.path != state.config.wallpaper.path {
-        if let Some(p) = new.wallpaper.path.clone() {
-            state.wallpaper.set_wallpaper(&p, &mut state.animation);
-        }
+        state.wallpaper.set_wallpaper(new.wallpaper.path.as_deref(), &mut state.animation);
     }
     // Mode update is a swap; no GPU churn.
     if new.wallpaper.mode != state.config.wallpaper.mode {

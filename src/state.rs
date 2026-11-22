@@ -194,9 +194,8 @@ impl State {
 
     /// Reload the configured wallpaper, crossfading from the current one (Super+W).
     pub fn reload_wallpaper(&mut self) {
-        if let Some(path) = self.config.wallpaper.path.clone() {
-            self.wallpaper.set_wallpaper(&path, &mut self.animation);
-        }
+        self.wallpaper
+            .set_wallpaper(self.config.wallpaper.path.as_deref(), &mut self.animation);
     }
 }
 

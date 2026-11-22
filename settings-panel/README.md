@@ -93,7 +93,8 @@ These are **not** derived from the GTK theme at runtime — mundane-settings kee
 
 ```bash
 cd settings-panel
-cargo run -p mundane-settings -- --page compositor
+# Optional with Nix: enter nix-shell here for native dependencies.
+cargo run --locked -p mundane-settings -- --page compositor
 ```
 
 `--page <name>` deep-links to a specific page on launch. Valid values: `compositor`, `appearance`, `display`, `sound`, `network`, `users`, `software`, `date-time`, `system`. The panel is also launched by mundaneDE on `Super+,` (override the binary with `$MUNDANE_SETTINGS`).
@@ -103,10 +104,8 @@ cargo run -p mundane-settings -- --page compositor
 From the repository root:
 
 ```bash
-nix build .#mundane-settings
+nix-build -E 'with import <nixpkgs> {}; callPackage ./settings-panel {}'
 ```
-
-**First build will fail** with a hash mismatch on the GPUI git dependency. Copy the expected hash from the error into `settings-panel/default.nix`'s `cargoLock.outputHashes` and re-run.
 
 ## Bumping the GPUI pin
 
@@ -115,7 +114,7 @@ GPUI is currently pinned to **Zed `v1.2.7`** (commit `deb48ceb47125223df73902d1c
 1. Edit `settings-panel/Cargo.toml` — change `rev = "..."` on the `gpui` workspace dep.
 2. `cargo update -p gpui` to refresh `Cargo.lock`.
 3. Set `cargoLock.outputHashes` entry to `lib.fakeHash`.
-4. Run `nix build .#mundane-settings` — copy the new hash from the error message.
+4. Repeat the Nix build above — copy the new hash from the error message.
 5. Expect API breakage in `mundane-settings/src/{app,sidebar,pages}.rs`.
 
 ## How to add a new settings page
